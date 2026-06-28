@@ -8,8 +8,10 @@
 //! These tokens are consumed by the tree construction stage to build
 //! the DOM tree.
 
-mod types;
+mod impls;
 mod trait_def;
+mod types;
 
-pub use types::{DoctypeToken, State, TagKind, TagToken, Token};
+pub use impls::HtmlTokenizer;
 pub use trait_def::Tokenizer;
+pub use types::{DoctypeToken, State, TagKind, TagToken, Token};
