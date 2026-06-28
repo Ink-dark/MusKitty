@@ -43,4 +43,15 @@ pub trait Tokenizer {
 
     /// Return the current tokenizer state.
     fn state(&self) -> State;
+
+    /// Reset the tokenizer to its initial state.
+    ///
+    /// Clears any partially-built token, current input character tracking,
+    /// and resets the state machine to the [`State::Data`] state.
+    ///
+    /// Used for fragment parsing (§13.2.5): when the tree construction stage
+    /// inserts a new input stream (e.g., via `document.write()`), the
+    /// tokenizer must be reset to process the new fragment from a known
+    /// starting state without artifacts from the previous stream.
+    fn reset(&mut self);
 }

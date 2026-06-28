@@ -11,5 +11,5 @@
 mod types;
 mod trait_def;
 
-pub use types::{DoctypeToken, State, TagToken, Token};
+pub use types::{DoctypeToken, State, TagKind, TagToken, Token};
 pub use trait_def::Tokenizer;
