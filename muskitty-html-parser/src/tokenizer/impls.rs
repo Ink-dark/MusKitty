@@ -4,7 +4,7 @@
 //! following the state machine defined in WHATWG §13.2.5.
 
 use super::trait_def::Tokenizer;
-use super::types::{State, Token};
+use super::types::{State, TagKind, TagToken, Token};
 
 /// A concrete HTML tokenizer.
 ///
@@ -30,6 +30,15 @@ pub struct HtmlTokenizer {
     state: State,
     /// Whether `Token::EOF` has been emitted.
     eof_emitted: bool,
+    /// When true, the next call to `next_char()` returns the current character
+    /// without advancing `pos`. Used by states that "reconsume" the character
+    /// in a different state (§13.2.5 convention).
+    reconsume: bool,
+    /// The tag token currently being built, if any.
+    /// Set when entering TagName state, emitted when tag is complete.
+    current_tag: Option<TagToken>,
+    /// The comment data currently being accumulated.
+    current_comment: String,
 }
 
 impl HtmlTokenizer {
@@ -42,6 +51,9 @@ impl HtmlTokenizer {
             pos: 0,
             state: State::Data,
             eof_emitted: false,
+            reconsume: false,
+            current_tag: None,
+            current_comment: String::new(),
         }
     }
 
@@ -54,13 +66,35 @@ impl HtmlTokenizer {
         }
     }
 
-    /// Consume and return the current input character.
+    /// Consume and return the current input character, advancing `pos`.
     fn consume(&mut self) -> Option<char> {
         let c = self.current_char();
         if c.is_some() {
             self.pos += 1;
         }
         c
+    }
+
+    /// Return the next input character, respecting the reconsume flag.
+    ///
+    /// If [`reconsume`](Self::reconsume) is true, returns the previously
+    /// consumed character (at `pos - 1`) and clears the flag without
+    /// advancing. Otherwise, consumes and advances as usual.
+    ///
+    /// This implements the "reconsume the current input character" convention
+    /// used throughout §13.2.5.
+    fn next_char(&mut self) -> Option<char> {
+        if self.reconsume {
+            self.reconsume = false;
+            // The character to reconsume was already consumed — it's at pos-1.
+            if self.pos > 0 && self.pos <= self.input.len() {
+                Some(self.input[self.pos - 1])
+            } else {
+                None
+            }
+        } else {
+            self.consume()
+        }
     }
 }
 
@@ -73,6 +107,7 @@ impl Tokenizer for HtmlTokenizer {
 
         match self.state {
             State::Data => self.handle_data_state(),
+            State::TagOpen => self.handle_tag_open_state(),
             _ => panic!(
                 "State::{:?} is not yet implemented (TODO in types.rs)",
                 self.state
@@ -92,6 +127,9 @@ impl Tokenizer for HtmlTokenizer {
         self.pos = 0;
         self.state = State::Data;
         self.eof_emitted = false;
+        self.reconsume = false;
+        self.current_tag = None;
+        self.current_comment.clear();
     }
 }
 
@@ -108,7 +146,7 @@ impl HtmlTokenizer {
     /// - EOF → emit an end-of-file token
     /// - Anything else → emit the current input character as a character token
     fn handle_data_state(&mut self) -> Option<Token> {
-        match self.consume() {
+        match self.next_char() {
             Some('&') => {
                 // TODO: set return state to Data, then switch to CharacterReference
                 self.state = State::CharacterReference;
@@ -132,6 +170,68 @@ impl HtmlTokenizer {
                 // EOF: emit end-of-file token.
                 self.eof_emitted = true;
                 Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.6 Tag open state
+    ///
+    /// Consume the next input character:
+    /// - `!` → switch to markup declaration open state
+    /// - `/` → switch to end tag open state
+    /// - ASCII alpha → create a new start tag token with the current
+    ///   character as its tag name, switch to tag name state
+    /// - `?` → parse error; create a comment token (data = "?"), switch
+    ///   to bogus comment state
+    /// - EOF → parse error; emit `<` character token + EOF
+    /// - Anything else → parse error; emit `<` character token, reconsume
+    ///   the current character in the data state
+    fn handle_tag_open_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('!') => {
+                self.state = State::MarkupDeclarationOpen;
+                None
+            }
+            Some('/') => {
+                self.state = State::EndTagOpen;
+                None
+            }
+            Some(c) if c.is_ascii_alphabetic() => {
+                // Create a new start tag token.
+                // The current character is the first character of the tag name.
+                let mut name = String::new();
+                name.push(c.to_ascii_lowercase());
+                self.current_tag = Some(TagToken {
+                    kind: TagKind::Start,
+                    name,
+                    attrs: Vec::new(),
+                    self_closing: false,
+                });
+                self.state = State::TagName;
+                None
+            }
+            Some('?') => {
+                // TODO: record parse error (unexpected-question-mark-instead-of-tag-name)
+                // Create a comment token with the `?` as initial data.
+                self.current_comment.clear();
+                self.current_comment.push('?');
+                self.state = State::BogusComment;
+                None
+            }
+            Some(_c) => {
+                // TODO: record parse error (invalid-first-character-of-tag-name)
+                // Emit the `<` as a character token, then reconsume the
+                // current character in the data state.
+                self.state = State::Data;
+                self.reconsume = true;
+                Some(Token::Character('<'))
+            }
+            None => {
+                // TODO: record parse error (eof-before-tag-name)
+                // Emit `<` character token. The next call will be in Data
+                // state and will encounter EOF, emitting Token::EOF.
+                self.state = State::Data;
+                Some(Token::Character('<'))
             }
         }
     }
@@ -206,5 +306,82 @@ mod tests {
         assert_eq!(t.next_token(), Some(Token::Character('c')));
         assert_eq!(t.next_token(), Some(Token::EOF));
         assert_eq!(t.next_token(), None); // stream done
+    }
+
+    // ── TagOpen state tests (§13.2.5.6) ─────────────────────────
+
+    /// Helper: advance the tokenizer past the initial `<` so it's in TagOpen state.
+    fn enter_tag_open(input: &str) -> HtmlTokenizer {
+        let mut t = HtmlTokenizer::new(input);
+        // The `<` char puts us in TagOpen state (no token emitted).
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::TagOpen);
+        t
+    }
+
+    #[test]
+    fn tag_open_bang_switches_to_markup_declaration_open() {
+        let mut t = enter_tag_open("<!");
+        let token = t.next_token();
+        assert_eq!(token, None);
+        assert_eq!(t.state(), State::MarkupDeclarationOpen);
+    }
+
+    #[test]
+    fn tag_open_solidus_switches_to_end_tag_open() {
+        let mut t = enter_tag_open("</");
+        let token = t.next_token();
+        assert_eq!(token, None);
+        assert_eq!(t.state(), State::EndTagOpen);
+    }
+
+    #[test]
+    fn tag_open_ascii_alpha_creates_start_tag_and_switches_to_tag_name() {
+        let mut t = enter_tag_open("<a");
+        let token = t.next_token();
+        assert_eq!(token, None);
+        assert_eq!(t.state(), State::TagName);
+        // `a` should be lowercased and stored as the tag name start.
+        // Note: current_tag is private — we verify via state transition.
+    }
+
+    #[test]
+    fn tag_open_question_mark_switches_to_bogus_comment() {
+        let mut t = enter_tag_open("<?");
+        let token = t.next_token();
+        assert_eq!(token, None);
+        assert_eq!(t.state(), State::BogusComment);
+    }
+
+    #[test]
+    fn tag_open_invalid_first_char_emits_lt_and_reconsumes_in_data() {
+        // `<@` → `<` is emitted as text, then `@` is re-consumed in Data state
+        let mut t = enter_tag_open("<@");
+        let token = t.next_token();
+        assert_eq!(token, Some(Token::Character('<')));
+        assert_eq!(t.state(), State::Data);
+
+        // The `@` should now be re-consumed in Data state.
+        let token2 = t.next_token();
+        assert_eq!(token2, Some(Token::Character('@')));
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn tag_open_eof_emits_lt_then_eof() {
+        // Input is just `<` with nothing after it.
+        let mut t = HtmlTokenizer::new("<");
+        // Data state: `<` → TagOpen
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::TagOpen);
+        // TagOpen state: EOF → emit `<`, return to Data
+        let token = t.next_token();
+        assert_eq!(token, Some(Token::Character('<')));
+        assert_eq!(t.state(), State::Data);
+        // Data state: EOF → EOF token
+        let token2 = t.next_token();
+        assert_eq!(token2, Some(Token::EOF));
+        // Stream exhausted
+        assert_eq!(t.next_token(), None);
     }
 }
