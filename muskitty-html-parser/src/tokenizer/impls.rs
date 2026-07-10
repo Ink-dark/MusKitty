@@ -106,10 +106,8 @@ impl HtmlTokenizer {
 
 impl Tokenizer for HtmlTokenizer {
     fn next_token(&mut self) -> Option<Token> {
-        eprintln!("NEXT_TOKEN: state={:?}, pos={}, char={:?}", self.state, self.pos, self.input.get(self.pos));
         // After EOF has been emitted, the stream is exhausted.
         if self.eof_emitted {
-            eprintln!("  -> EOF already emitted, returning None");
             return None;
         }
 
@@ -412,7 +410,6 @@ impl HtmlTokenizer {
     /// §13.2.5.33 Attribute name state
     fn handle_attribute_name_state(&mut self) -> Option<Token> {
         let ch = self.next_char();
-        eprintln!("ATTR_NAME: char={:?} pos={}", ch, self.pos);
         let result = match ch {
             Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
                 self.state = State::AfterAttributeName;
@@ -456,7 +453,12 @@ impl HtmlTokenizer {
                 Some(Token::EOF)
             }
             Some(c) => {
-                self.current_attr_name.push(c);
+                // §13.2.5.33: ASCII upper-alpha → lowercase
+                if c.is_ascii_uppercase() {
+                    self.current_attr_name.push(c.to_ascii_lowercase());
+                } else {
+                    self.current_attr_name.push(c);
+                }
                 self.state = State::AttributeName;
                 None
             }
@@ -1099,12 +1101,15 @@ mod tests {
         assert_eq!(t.next_token(), None); // 'v'
         assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
         assert_eq!(t.state(), State::BeforeAttributeName);
-        assert_eq!(t.next_token(), None); // 'c' → AttributeName, name="c"
-        assert_eq!(t.next_token(), None); // 'l'
-        assert_eq!(t.next_token(), None); // 'a'
-        assert_eq!(t.next_token(), None); // 's'
-        assert_eq!(t.next_token(), None); // 's'
-        assert_eq!(t.next_token(), None); // '"' → BeforeAttributeValue → AttributeValueDoubleQuoted
+        assert_eq!(t.next_token(), None); // 'c' → BA reconsume (call 6)
+        assert_eq!(t.next_token(), None); // 'l' (call 7, reconsume 'c')
+        assert_eq!(t.next_token(), None); // 'a' (call 8)
+        assert_eq!(t.next_token(), None); // 's' (call 9)
+        assert_eq!(t.next_token(), None); // 's' (call 10, last char)
+        assert_eq!(t.next_token(), None); // 's' (call 11 — 第二个 's')
+        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue (call 12)
+        assert_eq!(t.state(), State::BeforeAttributeValue);
+        assert_eq!(t.next_token(), None); // '"' → AttributeValueDoubleQuoted (call 13)
         assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
         assert_eq!(t.next_token(), None); // 'x' → append
         assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
@@ -1131,8 +1136,9 @@ mod tests {
         // 'n', 'p', 'u', 't'
         for _ in 0..4 { assert_eq!(t.next_token(), None); }
         assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
-        // 't', 'y', 'p', 'e'
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        // 't', 'y', 'p', 'e' — 需要 5 次调用（BeforeAttributeName reconsume 占用 1 次）
+        // BeforeAttributeName → reconsume 't' → AttributeName → 'y','p','e'
+        for _ in 0..5 { assert_eq!(t.next_token(), None); }
         assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
         assert_eq!(t.state(), State::BeforeAttributeValue);
         assert_eq!(t.next_token(), None); // '\'' → AttributeValueSingleQuoted
@@ -1159,8 +1165,8 @@ mod tests {
         assert_eq!(t.next_token(), None); // TagOpen → TagName, name="a"
         assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
         assert_eq!(t.state(), State::BeforeAttributeName);
-        // 'h', 'r', 'e', 'f'
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        // 'h', 'r', 'e', 'f' — 需要 5 次（BA reconsume + 'h' reconsume + 3 剩余字符）
+        for _ in 0..5 { assert_eq!(t.next_token(), None); }
         assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
         assert_eq!(t.state(), State::BeforeAttributeValue);
         assert_eq!(t.next_token(), None); // 'x' → AttributeValueUnquoted
@@ -1189,9 +1195,10 @@ mod tests {
         // ' ' → BeforeAttributeName
         assert_eq!(t.next_token(), None);
         assert_eq!(t.state(), State::BeforeAttributeName);
-        // 'i', 'd'
-        assert_eq!(t.next_token(), None);
-        assert_eq!(t.next_token(), None);
+        // 'i', 'd' — 需要 3 次（BA reconsume + 'i' reconsume + 'd'）
+        assert_eq!(t.next_token(), None); // BA → reconsume 'i'
+        assert_eq!(t.next_token(), None); // reconsume 'i'
+        assert_eq!(t.next_token(), None); // 'd'
         // '=' → BeforeAttributeValue
         assert_eq!(t.next_token(), None);
         assert_eq!(t.state(), State::BeforeAttributeValue);
@@ -1206,8 +1213,8 @@ mod tests {
         // ' ' → BeforeAttributeName
         assert_eq!(t.next_token(), None);
         assert_eq!(t.state(), State::BeforeAttributeName);
-        // 'c', 'l', 'a', 's', 's'
-        for _ in 0..5 { assert_eq!(t.next_token(), None); }
+        // 'c', 'l', 'a', 's', 's' — 需要 6 次（BA reconsume + 'c' reconsume + 4 剩余字符）
+        for _ in 0..6 { assert_eq!(t.next_token(), None); }
         // '=' → BeforeAttributeValue
         assert_eq!(t.next_token(), None);
         assert_eq!(t.state(), State::BeforeAttributeValue);
@@ -1243,8 +1250,8 @@ mod tests {
         for _ in 0..4 { assert_eq!(t.next_token(), None); }
         // ' ' → BeforeAttributeName
         assert_eq!(t.next_token(), None);
-        // 'd', 'i', 's', 'a', 'b', 'l', 'e', 'd'
-        for _ in 0..8 { assert_eq!(t.next_token(), None); }
+        // 'd', 'i', 's', 'a', 'b', 'l', 'e', 'd' — 需要 9 次（BA reconsume + 'd' reconsume + 7 剩余字符）
+        for _ in 0..9 { assert_eq!(t.next_token(), None); }
         // '>' → AfterAttributeName → emit attr, emit tag
         let token = t.next_token();
         assert_eq!(
@@ -1259,6 +1266,66 @@ mod tests {
     }
 
     #[test]
+    fn attr_name_lowercases_ascii_upper() {
+        // §13.2.5.33: ASCII uppercase → lowercase in attribute names
+        let mut t = HtmlTokenizer::new("<div CLASS=\"x\">");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName 'd'
+        assert_eq!(t.next_token(), None); // 'i'
+        assert_eq!(t.next_token(), None); // 'v'
+        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        // 'C','L','A','S','S' — 6 calls (BA reconsume + 5 chars)
+        for _ in 0..6 {
+            assert_eq!(t.next_token(), None);
+        }
+        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
+        assert_eq!(t.next_token(), None); // '"' → AttributeValueDoubleQuoted
+        assert_eq!(t.next_token(), None); // 'x'
+        assert_eq!(t.next_token(), None); // '"' → AfterAttributeValueQuoted
+        let token = t.next_token(); // '>'
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "div".into(),
+                attrs: vec![("class".into(), "x".into())],
+                self_closing: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn attr_name_preserves_non_ascii() {
+        // Non-ASCII chars in attribute names should be preserved as-is
+        let mut t = HtmlTokenizer::new("<div café=\"oui\">");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName 'd'
+        assert_eq!(t.next_token(), None); // 'i'
+        assert_eq!(t.next_token(), None); // 'v'
+        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        // 'c','a','f','é' — 5 calls (BA reconsume + 4 chars)
+        for _ in 0..5 {
+            assert_eq!(t.next_token(), None);
+        }
+        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
+        assert_eq!(t.next_token(), None); // '"' → AttributeValueDoubleQuoted
+        assert_eq!(t.next_token(), None); // 'o'
+        assert_eq!(t.next_token(), None); // 'u'
+        assert_eq!(t.next_token(), None); // 'i'
+        assert_eq!(t.next_token(), None); // '"' → AfterAttributeValueQuoted
+        let token = t.next_token(); // '>'
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "div".into(),
+                attrs: vec![("café".into(), "oui".into())],
+                self_closing: false,
+            }))
+        );
+    }
+
+    #[test]
     fn e2e_attr_and_self_closing() {
         // `<input type='text'/>` → attribute + self-closing
         let mut t = HtmlTokenizer::new("<input type='text'/>");
@@ -1267,8 +1334,8 @@ mod tests {
         // 'n', 'p', 'u', 't'
         for _ in 0..4 { assert_eq!(t.next_token(), None); }
         assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
-        // 't', 'y', 'p', 'e'
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        // 't', 'y', 'p', 'e' — 需要 5 次（BA reconsume + 't' reconsume + 3 剩余字符）
+        for _ in 0..5 { assert_eq!(t.next_token(), None); }
         assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
         assert_eq!(t.next_token(), None); // '\'' → AttributeValueSingleQuoted
         // 't', 'e', 'x', 't'
