@@ -118,6 +118,7 @@ impl Tokenizer for HtmlTokenizer {
             State::TagName => self.handle_tag_name_state(),
             State::SelfClosingStartTag => self.handle_self_closing_start_tag_state(),
             State::MarkupDeclarationOpen => self.handle_markup_declaration_open_state(),
+            State::BogusComment => self.handle_bogus_comment_state(),
             State::BeforeAttributeName => self.handle_before_attribute_name_state(),
             State::AttributeName => self.handle_attribute_name_state(),
             State::AfterAttributeName => self.handle_after_attribute_name_state(),
@@ -420,6 +421,35 @@ impl HtmlTokenizer {
         // 注意：不消费任何字符，BogusComment 会自行消费
         self.state = State::BogusComment;
         None
+    }
+
+    /// §13.2.5.41 Bogus comment state
+    ///
+    /// 累积字符直到 `>`，作为 `Token::Comment` 发出。
+    /// 入口：TagOpen 遇到 `?`，或 MarkupDeclarationOpen 无法匹配。
+    fn handle_bogus_comment_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('>') => {
+                let comment = std::mem::take(&mut self.current_comment);
+                self.state = State::Data;
+                Some(Token::Comment(comment))
+            }
+            Some('\0') => {
+                // TODO: parse error (unexpected-null-character)
+                self.current_comment.push('\u{FFFD}');
+                None
+            }
+            None => {
+                // 发出 Comment，切换到 Data 让 Data 状态在下一次调用时发出 EOF
+                let comment = std::mem::take(&mut self.current_comment);
+                self.state = State::Data;
+                Some(Token::Comment(comment))
+            }
+            Some(c) => {
+                self.current_comment.push(c);
+                None
+            }
+        }
     }
 
     // ── Attribute state handlers (§13.2.5.32–§13.2.5.39) ────────
@@ -1169,6 +1199,57 @@ mod tests {
         assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
         assert_eq!(t.next_token(), None); // → BogusComment
         assert_eq!(t.state(), State::BogusComment);
+    }
+
+    // ── Bogus comment tests (§13.2.5.41) ──────────────────────────
+
+    #[test]
+    fn bogus_comment_emits_on_greater_than() {
+        // `<?xml>` → Token::Comment("?xml")
+        let mut t = HtmlTokenizer::new("<?xml>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → BogusComment ('?')
+        // 'x', 'm', 'l'
+        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Comment("?xml".into())));
+    }
+
+    #[test]
+    fn bogus_comment_handles_null() {
+        // `<?a\0b>` → Token::Comment("?a\u{FFFD}b")
+        let mut t = HtmlTokenizer::new("<?a\0b>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → BogusComment ('?')
+        assert_eq!(t.next_token(), None); // 'a'
+        assert_eq!(t.next_token(), None); // '\0' → U+FFFD
+        assert_eq!(t.next_token(), None); // 'b'
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Comment("?a\u{FFFD}b".into()))
+        );
+    }
+
+    #[test]
+    fn bogus_comment_eof() {
+        // `<?x` + EOF → Token::Comment("?x") + EOF
+        let mut t = HtmlTokenizer::new("<?x");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → BogusComment
+        assert_eq!(t.next_token(), None); // 'x'
+        assert_eq!(t.next_token(), Some(Token::Comment("?x".into())));
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    #[test]
+    fn bogus_comment_from_bang() {
+        // `<!foo>` → MarkupDeclarationOpen → BogusComment → Token::Comment("foo")
+        let mut t = HtmlTokenizer::new("<!foo>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → BogusComment
+        // 'f', 'o', 'o'
+        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Comment("foo".into())));
     }
 
     // ── Attribute tests (§13.2.5.32–§13.2.5.39) ──────────────────
