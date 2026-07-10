@@ -1790,6 +1790,68 @@ mod tests {
         assert_eq!(t.next_token(), Some(Token::Comment("abc".into()))); // EOF → emit
     }
 
+    // ── Comment 集成测试 ──────────────────────────────────────────
+
+    /// 辅助：跳过 None，直达下一个 Some(token)（常用于集成测试）
+    fn next_real_token(t: &mut HtmlTokenizer) -> Token {
+        loop {
+            match t.next_token() {
+                Some(token) => return token,
+                None => continue,
+            }
+        }
+    }
+
+    #[test]
+    fn comment_e2e_simple() {
+        // `<!-- hello world -->`
+        let mut t = HtmlTokenizer::new("<!-- hello world -->");
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Comment(" hello world ".into())
+        );
+    }
+
+    #[test]
+    fn comment_e2e_empty() {
+        // `<!---->` → 空注释
+        let mut t = HtmlTokenizer::new("<!---->");
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Comment("".into())
+        );
+    }
+
+    #[test]
+    fn comment_e2e_followed_by_tag() {
+        // `<!-- comment --><div>` → Comment + Tag
+        let mut t = HtmlTokenizer::new("<!-- comment --><div>");
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Comment(" comment ".into())
+        );
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "div".into(),
+                attrs: vec![],
+                self_closing: false,
+            })
+        );
+    }
+
+    #[test]
+    fn comment_e2e_nested() {
+        // `<!-- <!-- nested --> -->`
+        // 内部 `<!--` 按规范 silently consumed，内容仅为 " nested "
+        let mut t = HtmlTokenizer::new("<!-- <!-- nested --> -->");
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Comment("  nested ".into())
+        );
+    }
+
     // ── Attribute tests (§13.2.5.32–§13.2.5.39) ──────────────────
 
     #[test]
