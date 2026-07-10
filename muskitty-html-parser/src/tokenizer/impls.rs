@@ -117,6 +117,7 @@ impl Tokenizer for HtmlTokenizer {
             State::EndTagOpen => self.handle_end_tag_open_state(),
             State::TagName => self.handle_tag_name_state(),
             State::SelfClosingStartTag => self.handle_self_closing_start_tag_state(),
+            State::MarkupDeclarationOpen => self.handle_markup_declaration_open_state(),
             State::BeforeAttributeName => self.handle_before_attribute_name_state(),
             State::AttributeName => self.handle_attribute_name_state(),
             State::AfterAttributeName => self.handle_after_attribute_name_state(),
@@ -374,6 +375,51 @@ impl HtmlTokenizer {
             let value = std::mem::take(&mut self.current_attr_value);
             tag.attrs.push((name, value));
         }
+    }
+
+    // ── Markup declaration (§13.2.5.42) ──────────────────────────
+
+    /// §13.2.5.42 Markup declaration open state
+    ///
+    /// Dispatches `<!` to comment, DOCTYPE, CDATA, or bogus comment.
+    fn handle_markup_declaration_open_state(&mut self) -> Option<Token> {
+        // 检查 "--"（注释起始，2 字符）
+        if self.pos + 1 < self.input.len()
+            && self.input[self.pos] == '-'
+            && self.input[self.pos + 1] == '-'
+        {
+            self.pos += 2;
+            self.current_comment.clear();
+            self.state = State::CommentStart;
+            return None;
+        }
+
+        // 检查 "DOCTYPE"（大小写不敏感，7 字符）
+        if self.pos + 6 < self.input.len() {
+            let slice: String = self.input[self.pos..self.pos + 7].iter().collect();
+            if slice.eq_ignore_ascii_case("DOCTYPE") {
+                self.pos += 7;
+                // TODO: Step 1.4 — DOCTYPE 状态尚未实现
+                self.state = State::Doctype;
+                return None;
+            }
+        }
+
+        // 检查 "[CDATA["（7 字符）
+        if self.pos + 6 < self.input.len() {
+            let slice: String = self.input[self.pos..self.pos + 7].iter().collect();
+            if slice == "[CDATA[" {
+                self.pos += 7;
+                // TODO: Step 1.8 — CDATA 状态尚未实现
+                self.state = State::CDATASection;
+                return None;
+            }
+        }
+
+        // 都不匹配 → parse error → BogusComment
+        // 注意：不消费任何字符，BogusComment 会自行消费
+        self.state = State::BogusComment;
+        None
     }
 
     // ── Attribute state handlers (§13.2.5.32–§13.2.5.39) ────────
@@ -1087,6 +1133,42 @@ mod tests {
             }))
         );
         assert_eq!(t.state(), State::Data);
+    }
+
+    // ── Markup declaration tests (§13.2.5.42) ─────────────────────
+
+    #[test]
+    fn markup_declaration_open_dash_dash_to_comment_start() {
+        // `<!--` → MarkupDeclarationOpen → CommentStart
+        let mut t = HtmlTokenizer::new("<!--");
+        assert_eq!(t.next_token(), None); // Data → TagOpen ('<')
+        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen ('!')
+        assert_eq!(t.state(), State::MarkupDeclarationOpen);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart ("--")
+        assert_eq!(t.state(), State::CommentStart);
+    }
+
+    #[test]
+    #[should_panic] // DOCTYPE 状态尚未实现（Step 1.4）
+    fn markup_declaration_open_doctype() {
+        // `<!DOCTYPE` → MarkupDeclarationOpen → Doctype (panics)
+        let mut t = HtmlTokenizer::new("<!DOCTYPE");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.state(), State::MarkupDeclarationOpen);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → Doctype
+        // 下一次 next_token() 会 dispatch Doctype 状态 → panic
+        let _ = t.next_token();
+    }
+
+    #[test]
+    fn markup_declaration_open_bogus() {
+        // `<!foo` → MarkupDeclarationOpen → BogusComment
+        let mut t = HtmlTokenizer::new("<!foo");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.next_token(), None); // → BogusComment
+        assert_eq!(t.state(), State::BogusComment);
     }
 
     // ── Attribute tests (§13.2.5.32–§13.2.5.39) ──────────────────
