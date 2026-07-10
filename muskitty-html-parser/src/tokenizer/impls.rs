@@ -39,6 +39,10 @@ pub struct HtmlTokenizer {
     current_tag: Option<TagToken>,
     /// The comment data currently being accumulated.
     current_comment: String,
+    /// The attribute name currently being accumulated (AttributeName state).
+    current_attr_name: String,
+    /// The attribute value currently being accumulated (attribute value states).
+    current_attr_value: String,
 }
 
 impl HtmlTokenizer {
@@ -54,6 +58,8 @@ impl HtmlTokenizer {
             reconsume: false,
             current_tag: None,
             current_comment: String::new(),
+            current_attr_name: String::new(),
+            current_attr_value: String::new(),
         }
     }
 
@@ -100,22 +106,33 @@ impl HtmlTokenizer {
 
 impl Tokenizer for HtmlTokenizer {
     fn next_token(&mut self) -> Option<Token> {
+        eprintln!("NEXT_TOKEN: state={:?}, pos={}, char={:?}", self.state, self.pos, self.input.get(self.pos));
         // After EOF has been emitted, the stream is exhausted.
         if self.eof_emitted {
+            eprintln!("  -> EOF already emitted, returning None");
             return None;
         }
 
-        match self.state {
+        let result = match self.state {
             State::Data => self.handle_data_state(),
             State::TagOpen => self.handle_tag_open_state(),
             State::EndTagOpen => self.handle_end_tag_open_state(),
             State::TagName => self.handle_tag_name_state(),
             State::SelfClosingStartTag => self.handle_self_closing_start_tag_state(),
+            State::BeforeAttributeName => self.handle_before_attribute_name_state(),
+            State::AttributeName => self.handle_attribute_name_state(),
+            State::AfterAttributeName => self.handle_after_attribute_name_state(),
+            State::BeforeAttributeValue => self.handle_before_attribute_value_state(),
+            State::AttributeValueDoubleQuoted => self.handle_attribute_value_double_quoted_state(),
+            State::AttributeValueSingleQuoted => self.handle_attribute_value_single_quoted_state(),
+            State::AttributeValueUnquoted => self.handle_attribute_value_unquoted_state(),
+            State::AfterAttributeValueQuoted => self.handle_after_attribute_value_quoted_state(),
             _ => panic!(
                 "State::{:?} is not yet implemented (TODO in types.rs)",
                 self.state
             ),
-        }
+        };
+        result
     }
 
     fn set_state(&mut self, state: State) {
@@ -133,6 +150,8 @@ impl Tokenizer for HtmlTokenizer {
         self.reconsume = false;
         self.current_tag = None;
         self.current_comment.clear();
+        self.current_attr_name.clear();
+        self.current_attr_value.clear();
     }
 }
 
@@ -341,6 +360,312 @@ impl HtmlTokenizer {
             }
             Some(_c) => {
                 // unexpected-solidus-in-tag parse error
+                self.state = State::BeforeAttributeName;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    // ── Attribute state helpers ───────────────────────────────────
+
+    /// Push the currently accumulated attribute (name + value) into the tag.
+    fn emit_current_attribute(&mut self) {
+        if let Some(ref mut tag) = self.current_tag {
+            let name = std::mem::take(&mut self.current_attr_name);
+            let value = std::mem::take(&mut self.current_attr_value);
+            tag.attrs.push((name, value));
+        }
+    }
+
+    // ── Attribute state handlers (§13.2.5.32–§13.2.5.39) ────────
+
+    /// §13.2.5.32 Before attribute name state
+    fn handle_before_attribute_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.state = State::BeforeAttributeName;
+                None
+            }
+            Some('/') => {
+                self.state = State::SelfClosingStartTag;
+                None
+            }
+            Some('>') => {
+                let tag = self.current_tag.take().unwrap();
+                self.state = State::Data;
+                Some(Token::Tag(tag))
+            }
+            None => {
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(_c) => {
+                self.state = State::AttributeName;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.33 Attribute name state
+    fn handle_attribute_name_state(&mut self) -> Option<Token> {
+        let ch = self.next_char();
+        eprintln!("ATTR_NAME: char={:?} pos={}", ch, self.pos);
+        let result = match ch {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.state = State::AfterAttributeName;
+                None
+            }
+            Some('/') => {
+                self.emit_current_attribute();
+                self.state = State::SelfClosingStartTag;
+                None
+            }
+            Some('=') => {
+                self.state = State::BeforeAttributeValue;
+                None
+            }
+            Some('>') => {
+                self.emit_current_attribute();
+                let tag = self.current_tag.take().unwrap();
+                self.state = State::Data;
+                Some(Token::Tag(tag))
+            }
+            Some('"') => {
+                self.emit_current_attribute();
+                self.current_attr_value.clear();
+                self.state = State::AttributeValueDoubleQuoted;
+                None
+            }
+            Some('\'') => {
+                self.emit_current_attribute();
+                self.current_attr_value.clear();
+                self.state = State::AttributeValueSingleQuoted;
+                None
+            }
+            Some('\0') => {
+                self.current_attr_name.push('\u{FFFD}');
+                self.state = State::AttributeName;
+                None
+            }
+            None => {
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(c) => {
+                self.current_attr_name.push(c);
+                self.state = State::AttributeName;
+                None
+            }
+        };
+        result
+    }
+
+    /// §13.2.5.34 After attribute name state
+    fn handle_after_attribute_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.state = State::AfterAttributeName;
+                None
+            }
+            Some('/') => {
+                self.emit_current_attribute();
+                self.state = State::SelfClosingStartTag;
+                None
+            }
+            Some('=') => {
+                self.state = State::BeforeAttributeValue;
+                None
+            }
+            Some('>') => {
+                self.emit_current_attribute();
+                let tag = self.current_tag.take().unwrap();
+                self.state = State::Data;
+                Some(Token::Tag(tag))
+            }
+            None => {
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(_c) => {
+                // Unexpected-character-after-attribute-name parse error
+                self.state = State::AttributeName;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.35 Before attribute value state
+    fn handle_before_attribute_value_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.state = State::BeforeAttributeValue;
+                None
+            }
+            Some('"') => {
+                self.current_attr_value.clear();
+                self.state = State::AttributeValueDoubleQuoted;
+                None
+            }
+            Some('\'') => {
+                self.current_attr_value.clear();
+                self.state = State::AttributeValueSingleQuoted;
+                None
+            }
+            Some('>') => {
+                // missing-attribute-value parse error: emit attr with empty value
+                self.emit_current_attribute();
+                let tag = self.current_tag.take().unwrap();
+                self.state = State::Data;
+                Some(Token::Tag(tag))
+            }
+            None => {
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(_c) => {
+                self.current_attr_value.clear();
+                self.state = State::AttributeValueUnquoted;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.36 Attribute value (double-quoted) state
+    fn handle_attribute_value_double_quoted_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('"') => {
+                self.state = State::AfterAttributeValueQuoted;
+                None
+            }
+            Some('&') => {
+                // TODO: Switch to character reference state with return state
+                self.current_attr_value.push('&');
+                self.state = State::AttributeValueDoubleQuoted;
+                None
+            }
+            Some('\0') => {
+                // unexpected-null-character parse error
+                self.current_attr_value.push('\u{FFFD}');
+                self.state = State::AttributeValueDoubleQuoted;
+                None
+            }
+            None => {
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(c) => {
+                self.current_attr_value.push(c);
+                self.state = State::AttributeValueDoubleQuoted;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.37 Attribute value (single-quoted) state
+    fn handle_attribute_value_single_quoted_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\'') => {
+                self.state = State::AfterAttributeValueQuoted;
+                None
+            }
+            Some('&') => {
+                // TODO: Switch to character reference state with return state
+                self.current_attr_value.push('&');
+                self.state = State::AttributeValueSingleQuoted;
+                None
+            }
+            Some('\0') => {
+                self.current_attr_value.push('\u{FFFD}');
+                self.state = State::AttributeValueSingleQuoted;
+                None
+            }
+            None => {
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(c) => {
+                self.current_attr_value.push(c);
+                self.state = State::AttributeValueSingleQuoted;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.38 Attribute value (unquoted) state
+    fn handle_attribute_value_unquoted_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.emit_current_attribute();
+                self.state = State::BeforeAttributeName;
+                None
+            }
+            Some('&') => {
+                // TODO: Switch to character reference state with return state
+                self.current_attr_value.push('&');
+                self.state = State::AttributeValueUnquoted;
+                None
+            }
+            Some('>') => {
+                self.emit_current_attribute();
+                let tag = self.current_tag.take().unwrap();
+                self.state = State::Data;
+                Some(Token::Tag(tag))
+            }
+            Some('\0') => {
+                self.current_attr_value.push('\u{FFFD}');
+                self.state = State::AttributeValueUnquoted;
+                None
+            }
+            None => {
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(c) => {
+                self.current_attr_value.push(c);
+                self.state = State::AttributeValueUnquoted;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.39 After attribute value (quoted) state
+    fn handle_after_attribute_value_quoted_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.emit_current_attribute();
+                self.state = State::BeforeAttributeName;
+                None
+            }
+            Some('/') => {
+                self.emit_current_attribute();
+                self.state = State::SelfClosingStartTag;
+                None
+            }
+            Some('>') => {
+                self.emit_current_attribute();
+                let tag = self.current_tag.take().unwrap();
+                self.state = State::Data;
+                Some(Token::Tag(tag))
+            }
+            None => {
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(_c) => {
+                // Unexpected-character-after-quoted-attribute-value parse error
+                self.emit_current_attribute();
                 self.state = State::BeforeAttributeName;
                 self.reconsume = true;
                 None
@@ -760,5 +1085,205 @@ mod tests {
             }))
         );
         assert_eq!(t.state(), State::Data);
+    }
+
+    // ── Attribute tests (§13.2.5.32–§13.2.5.39) ──────────────────
+
+    #[test]
+    fn attr_single_double_quoted_value() {
+        // `<div class="x">` → start tag with one double-quoted attribute
+        let mut t = HtmlTokenizer::new("<div class=\"x\">");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.next_token(), None); // 'i'
+        assert_eq!(t.next_token(), None); // 'v'
+        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        assert_eq!(t.state(), State::BeforeAttributeName);
+        assert_eq!(t.next_token(), None); // 'c' → AttributeName, name="c"
+        assert_eq!(t.next_token(), None); // 'l'
+        assert_eq!(t.next_token(), None); // 'a'
+        assert_eq!(t.next_token(), None); // 's'
+        assert_eq!(t.next_token(), None); // 's'
+        assert_eq!(t.next_token(), None); // '"' → BeforeAttributeValue → AttributeValueDoubleQuoted
+        assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
+        assert_eq!(t.next_token(), None); // 'x' → append
+        assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
+        assert_eq!(t.next_token(), None); // '"' → AfterAttributeValueQuoted, emit attr
+        assert_eq!(t.state(), State::AfterAttributeValueQuoted);
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "div".into(),
+                attrs: vec![("class".into(), "x".into())],
+                self_closing: false,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn attr_single_quoted_value() {
+        // `<input type='text'>` → single-quoted attribute
+        let mut t = HtmlTokenizer::new("<input type='text'>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="i"
+        // 'n', 'p', 'u', 't'
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        // 't', 'y', 'p', 'e'
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
+        assert_eq!(t.state(), State::BeforeAttributeValue);
+        assert_eq!(t.next_token(), None); // '\'' → AttributeValueSingleQuoted
+        assert_eq!(t.state(), State::AttributeValueSingleQuoted);
+        // 't', 'e', 'x', 't'
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // '\'' → AfterAttributeValueQuoted, emit attr
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "input".into(),
+                attrs: vec![("type".into(), "text".into())],
+                self_closing: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn attr_unquoted_value() {
+        // `<a href=x>` → unquoted attribute value
+        let mut t = HtmlTokenizer::new("<a href=x>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="a"
+        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        assert_eq!(t.state(), State::BeforeAttributeName);
+        // 'h', 'r', 'e', 'f'
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
+        assert_eq!(t.state(), State::BeforeAttributeValue);
+        assert_eq!(t.next_token(), None); // 'x' → AttributeValueUnquoted
+        assert_eq!(t.state(), State::AttributeValueUnquoted);
+        assert_eq!(t.next_token(), None); // '>' → emit attr, emit tag
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "a".into(),
+                attrs: vec![("href".into(), "x".into())],
+                self_closing: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn attr_multiple_attributes() {
+        // `<div id="a" class="b">` → two attributes
+        let mut t = HtmlTokenizer::new("<div id=\"a\" class=\"b\">");
+        // Skip to tag name done: `<` → TagOpen, `d` → name, `i`, `v`
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.next_token(), None); // 'i'
+        assert_eq!(t.next_token(), None); // 'v'
+        // ' ' → BeforeAttributeName
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::BeforeAttributeName);
+        // 'i', 'd'
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.next_token(), None);
+        // '=' → BeforeAttributeValue
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::BeforeAttributeValue);
+        // '"' → AttributeValueDoubleQuoted
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
+        // 'a'
+        assert_eq!(t.next_token(), None);
+        // '"' → AfterAttributeValueQuoted, emit attr("id","a")
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::AfterAttributeValueQuoted);
+        // ' ' → BeforeAttributeName
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::BeforeAttributeName);
+        // 'c', 'l', 'a', 's', 's'
+        for _ in 0..5 { assert_eq!(t.next_token(), None); }
+        // '=' → BeforeAttributeValue
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::BeforeAttributeValue);
+        // '"' → AttributeValueDoubleQuoted
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
+        // 'b'
+        assert_eq!(t.next_token(), None);
+        // '"' → AfterAttributeValueQuoted, emit attr("class","b")
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::AfterAttributeValueQuoted);
+        // '>' → emit tag
+        let token = t.next_token();
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "div".into(),
+                attrs: vec![("id".into(), "a".into()), ("class".into(), "b".into())],
+                self_closing: false,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn attr_boolean_attribute() {
+        let mut t = HtmlTokenizer::new("<input disabled>");
+        // Skip to tag name done
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="i"
+        // 'n', 'p', 'u', 't'
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        // ' ' → BeforeAttributeName
+        assert_eq!(t.next_token(), None);
+        // 'd', 'i', 's', 'a', 'b', 'l', 'e', 'd'
+        for _ in 0..8 { assert_eq!(t.next_token(), None); }
+        // '>' → AfterAttributeName → emit attr, emit tag
+        let token = t.next_token();
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "input".into(),
+                attrs: vec![("disabled".into(), "".into())],
+                self_closing: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn e2e_attr_and_self_closing() {
+        // `<input type='text'/>` → attribute + self-closing
+        let mut t = HtmlTokenizer::new("<input type='text'/>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="i"
+        // 'n', 'p', 'u', 't'
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        // 't', 'y', 'p', 'e'
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
+        assert_eq!(t.next_token(), None); // '\'' → AttributeValueSingleQuoted
+        // 't', 'e', 'x', 't'
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // '\'' → AfterAttributeValueQuoted
+        assert_eq!(t.next_token(), None); // '/' → SelfClosingStartTag
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "input".into(),
+                attrs: vec![("type".into(), "text".into())],
+                self_closing: true,
+            }))
+        );
+        assert_eq!(t.next_token(), Some(Token::EOF));
     }
 }
