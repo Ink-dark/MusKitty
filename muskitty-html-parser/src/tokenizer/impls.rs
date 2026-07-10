@@ -119,6 +119,9 @@ impl Tokenizer for HtmlTokenizer {
             State::SelfClosingStartTag => self.handle_self_closing_start_tag_state(),
             State::MarkupDeclarationOpen => self.handle_markup_declaration_open_state(),
             State::BogusComment => self.handle_bogus_comment_state(),
+            State::CommentStart => self.handle_comment_start_state(),
+            State::CommentStartDash => self.handle_comment_start_dash_state(),
+            State::Comment => self.handle_comment_state(),
             State::BeforeAttributeName => self.handle_before_attribute_name_state(),
             State::AttributeName => self.handle_attribute_name_state(),
             State::AfterAttributeName => self.handle_after_attribute_name_state(),
@@ -441,6 +444,104 @@ impl HtmlTokenizer {
             }
             None => {
                 // 发出 Comment，切换到 Data 让 Data 状态在下一次调用时发出 EOF
+                let comment = std::mem::take(&mut self.current_comment);
+                self.state = State::Data;
+                Some(Token::Comment(comment))
+            }
+            Some(c) => {
+                self.current_comment.push(c);
+                None
+            }
+        }
+    }
+
+    // ── Comment state handlers (§13.2.5.43–§13.2.5.45) ───────────
+
+    /// §13.2.5.43 Comment start state
+    ///
+    /// 进入时机：`<!--` 已消费，当前字符为注释内容第一个字符。
+    fn handle_comment_start_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => {
+                self.state = State::CommentStartDash;
+                None
+            }
+            Some('>') => {
+                // 空注释
+                self.current_comment.clear();
+                self.state = State::Data;
+                Some(Token::Comment(String::new()))
+            }
+            Some('<') => {
+                self.state = State::CommentLessThanSign;
+                None
+            }
+            Some('\0') => {
+                // TODO: parse error (unexpected-null-character)
+                self.current_comment.push('\u{FFFD}');
+                self.state = State::Comment;
+                None
+            }
+            None => {
+                // TODO: parse error (eof-in-comment)
+                self.current_comment.clear();
+                self.state = State::Data;
+                Some(Token::Comment(String::new()))
+            }
+            Some(c) => {
+                self.current_comment.push(c);
+                self.state = State::Comment;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.44 Comment start dash state
+    fn handle_comment_start_dash_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => {
+                self.state = State::CommentEnd;
+                None
+            }
+            Some('>') => {
+                // TODO: parse error (abrupt-closing-of-empty-comment)
+                self.current_comment.clear();
+                self.state = State::Data;
+                Some(Token::Comment(String::new()))
+            }
+            None => {
+                // TODO: parse error (eof-in-comment)
+                self.current_comment.clear();
+                self.state = State::Data;
+                Some(Token::Comment(String::new()))
+            }
+            Some(c) => {
+                self.current_comment.push('-');
+                self.current_comment.push(c);
+                self.state = State::Comment;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.45 Comment state
+    fn handle_comment_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('<') => {
+                self.state = State::CommentLessThanSign;
+                None
+            }
+            Some('-') => {
+                self.state = State::CommentEndDash;
+                None
+            }
+            Some('\0') => {
+                // TODO: parse error (unexpected-null-character)
+                self.current_comment.push('\u{FFFD}');
+                None
+            }
+            None => {
+                // TODO: parse error (eof-in-comment)
                 let comment = std::mem::take(&mut self.current_comment);
                 self.state = State::Data;
                 Some(Token::Comment(comment))
@@ -1250,6 +1351,132 @@ mod tests {
         // 'f', 'o', 'o'
         for _ in 0..3 { assert_eq!(t.next_token(), None); }
         assert_eq!(t.next_token(), Some(Token::Comment("foo".into())));
+    }
+
+    // ── Comment state tests (§13.2.5.43–§13.2.5.45) ──────────────
+
+    /// 辅助：推进 tokenizer 到 MarkupDeclarationOpen 的 '!' 之后
+    /// 调用后 pos 在 '!' 之后，state = TagOpen 刚设置 MarkupDeclarationOpen 但还未执行
+    fn enter_markup_declaration(t: &mut HtmlTokenizer) {
+        // Data → TagOpen → MarkupDeclarationOpen (doesn't consume yet)
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen (sees '!')
+    }
+
+    #[test]
+    fn comment_start_dash_to_comment_start_dash() {
+        let mut t = HtmlTokenizer::new("<!---");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart ("--")
+        assert_eq!(t.next_token(), None); // CommentStart → CommentStartDash ('-')
+        assert_eq!(t.state(), State::CommentStartDash);
+    }
+
+    #[test]
+    fn comment_start_empty_comment_on_gt() {
+        let mut t = HtmlTokenizer::new("<!-->");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), Some(Token::Comment("".into()))); // '>' → emit empty
+    }
+
+    #[test]
+    fn comment_start_lt_to_comment_lt_sign() {
+        let mut t = HtmlTokenizer::new("<!--<");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), None); // '<' → CommentLessThanSign
+        assert_eq!(t.state(), State::CommentLessThanSign);
+    }
+
+    #[test]
+    fn comment_start_null_to_comment() {
+        let mut t = HtmlTokenizer::new("<!--\0");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), None); // '\0' → Comment (with U+FFFD)
+        assert_eq!(t.state(), State::Comment);
+    }
+
+    #[test]
+    fn comment_start_dash_gt_emits_empty() {
+        let mut t = HtmlTokenizer::new("<!--->");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), None); // '-' → CommentStartDash
+        assert_eq!(t.next_token(), Some(Token::Comment("".into()))); // '>' → emit
+    }
+
+    #[test]
+    fn comment_start_dash_other_to_comment() {
+        let mut t = HtmlTokenizer::new("<!---a");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), None); // '-' → CommentStartDash
+        assert_eq!(t.next_token(), None); // 'a' → Comment (appends "-a")
+        assert_eq!(t.state(), State::Comment);
+    }
+
+    #[test]
+    fn comment_state_appends_chars() {
+        // 测试 Comment 状态累积字符（不测试闭合，闭合在 B-6/B-7）
+        let mut t = HtmlTokenizer::new("<!--abc");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), None); // 'a' → Comment
+        assert_eq!(t.next_token(), None); // 'b'
+        assert_eq!(t.next_token(), None); // 'c'
+        assert_eq!(t.state(), State::Comment);
+        // EOF 发出 comment
+        assert_eq!(t.next_token(), Some(Token::Comment("abc".into())));
+    }
+
+    #[test]
+    fn comment_state_lt_switches() {
+        let mut t = HtmlTokenizer::new("<!--a<");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), None); // 'a' → Comment
+        assert_eq!(t.next_token(), None); // '<' → CommentLessThanSign
+        assert_eq!(t.state(), State::CommentLessThanSign);
+    }
+
+    #[test]
+    fn comment_state_dash_switches() {
+        let mut t = HtmlTokenizer::new("<!--a-");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), None); // 'a' → Comment
+        assert_eq!(t.next_token(), None); // '-' → CommentEndDash
+        assert_eq!(t.state(), State::CommentEndDash);
+    }
+
+    #[test]
+    fn comment_state_null_handles() {
+        // 测试 Comment 状态中 \0 处理（闭合在 B-6/B-7）
+        let mut t = HtmlTokenizer::new("<!--a\0b");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), None); // 'a' → Comment
+        assert_eq!(t.next_token(), None); // '\0' → U+FFFD
+        assert_eq!(t.next_token(), None); // 'b'
+        assert_eq!(t.state(), State::Comment);
+        // EOF emit
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Comment("a\u{FFFD}b".into()))
+        );
+    }
+
+    #[test]
+    fn comment_state_eof() {
+        let mut t = HtmlTokenizer::new("<!--abc");
+        enter_markup_declaration(&mut t);
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.next_token(), None); // 'a' → Comment
+        assert_eq!(t.next_token(), None); // 'b'
+        assert_eq!(t.next_token(), None); // 'c'
+        assert_eq!(t.next_token(), Some(Token::Comment("abc".into()))); // EOF → emit
     }
 
     // ── Attribute tests (§13.2.5.32–§13.2.5.39) ──────────────────
