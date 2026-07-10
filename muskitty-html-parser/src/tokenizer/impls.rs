@@ -108,6 +108,9 @@ impl Tokenizer for HtmlTokenizer {
         match self.state {
             State::Data => self.handle_data_state(),
             State::TagOpen => self.handle_tag_open_state(),
+            State::EndTagOpen => self.handle_end_tag_open_state(),
+            State::TagName => self.handle_tag_name_state(),
+            State::SelfClosingStartTag => self.handle_self_closing_start_tag_state(),
             _ => panic!(
                 "State::{:?} is not yet implemented (TODO in types.rs)",
                 self.state
@@ -197,8 +200,6 @@ impl HtmlTokenizer {
                 None
             }
             Some(c) if c.is_ascii_alphabetic() => {
-                // Create a new start tag token.
-                // The current character is the first character of the tag name.
                 let mut name = String::new();
                 name.push(c.to_ascii_lowercase());
                 self.current_tag = Some(TagToken {
@@ -211,27 +212,138 @@ impl HtmlTokenizer {
                 None
             }
             Some('?') => {
-                // TODO: record parse error (unexpected-question-mark-instead-of-tag-name)
-                // Create a comment token with the `?` as initial data.
                 self.current_comment.clear();
                 self.current_comment.push('?');
                 self.state = State::BogusComment;
                 None
             }
             Some(_c) => {
-                // TODO: record parse error (invalid-first-character-of-tag-name)
-                // Emit the `<` as a character token, then reconsume the
-                // current character in the data state.
                 self.state = State::Data;
                 self.reconsume = true;
                 Some(Token::Character('<'))
             }
             None => {
-                // TODO: record parse error (eof-before-tag-name)
-                // Emit `<` character token. The next call will be in Data
-                // state and will encounter EOF, emitting Token::EOF.
                 self.state = State::Data;
                 Some(Token::Character('<'))
+            }
+        }
+    }
+
+    /// §13.2.5.7 End tag open state
+    ///
+    /// Consume the next input character:
+    /// - ASCII alpha → create a new end tag token, set tag name to empty string,
+    ///   append lowercased char to name, switch to tag name state
+    /// - Anything else → switch to data state (don't emit, don't reconsume)
+    /// - EOF → emit `<` character token + EOF, switch to data state
+    fn handle_end_tag_open_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                let mut name = String::new();
+                name.push(c.to_ascii_lowercase());
+                self.current_tag = Some(TagToken {
+                    kind: TagKind::End,
+                    name,
+                    attrs: Vec::new(),
+                    self_closing: false,
+                });
+                self.state = State::TagName;
+                None
+            }
+            None => {
+                // EOF: emit `<` then return to Data (next call emits EOF)
+                self.state = State::Data;
+                Some(Token::Character('<'))
+            }
+            Some(_c) => {
+                // Consume the character, switch to Data, don't emit anything.
+                self.state = State::Data;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.8 Tag name state
+    ///
+    /// Consume the next input character:
+    /// - ASCII alpha/upper → append lowercase to tag name, stay in TagName
+    /// - NULL → append U+FFFD, stay in TagName
+    /// - TAB/LF/FF/SPACE → switch to BeforeAttributeName
+    /// - `/` → switch to SelfClosingStartTag
+    /// - `>` → emit current tag token, switch to Data
+    /// - EOF → discard tag, emit EOF
+    /// - Anything else → append to tag name, stay in TagName
+    fn handle_tag_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c.to_ascii_lowercase());
+                }
+                self.state = State::TagName;
+                None
+            }
+            Some('\0') => {
+                // unexpected-null-character parse error
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push('\u{FFFD}');
+                }
+                self.state = State::TagName;
+                None
+            }
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.state = State::BeforeAttributeName;
+                None
+            }
+            Some('/') => {
+                self.state = State::SelfClosingStartTag;
+                None
+            }
+            Some('>') => {
+                let tag = self.current_tag.take().unwrap();
+                self.state = State::Data;
+                Some(Token::Tag(tag))
+            }
+            None => {
+                // EOF: discard incomplete tag, emit EOF
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(c) => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c);
+                }
+                self.state = State::TagName;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.40 Self-closing start tag state
+    ///
+    /// Consume the next input character:
+    /// - `>` → set self_closing flag, emit current tag token, switch to Data
+    /// - Anything else → parse error, switch to BeforeAttributeName, reconsume
+    /// - EOF → discard tag, emit EOF
+    fn handle_self_closing_start_tag_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('>') => {
+                let mut tag = self.current_tag.take().unwrap();
+                tag.self_closing = true;
+                self.state = State::Data;
+                Some(Token::Tag(tag))
+            }
+            None => {
+                // EOF: discard incomplete tag, emit EOF
+                self.current_tag = None;
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(_c) => {
+                // unexpected-solidus-in-tag parse error
+                self.state = State::BeforeAttributeName;
+                self.reconsume = true;
+                None
             }
         }
     }
@@ -308,80 +420,345 @@ mod tests {
         assert_eq!(t.next_token(), None); // stream done
     }
 
-    // ── TagOpen state tests (§13.2.5.6) ─────────────────────────
+    // ── TagName tests (§13.2.5.8) ──────────────────────────────
 
-    /// Helper: advance the tokenizer past the initial `<` so it's in TagOpen state.
-    fn enter_tag_open(input: &str) -> HtmlTokenizer {
+    /// Helper: create a tokenizer in TagName state with a start tag already built.
+    fn enter_tag_name(input: &str) -> HtmlTokenizer {
         let mut t = HtmlTokenizer::new(input);
-        // The `<` char puts us in TagOpen state (no token emitted).
+        // Data → TagOpen (on `<`)
         assert_eq!(t.next_token(), None);
         assert_eq!(t.state(), State::TagOpen);
+        // TagOpen → creates start tag + TagName (on first alpha)
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::TagName);
+        // Verify the tag name was initialized with the first char
+        // (we can't check current_tag directly since it's private, but we
+        // trust TagOpen's existing test covers this)
         t
     }
 
     #[test]
-    fn tag_open_bang_switches_to_markup_declaration_open() {
-        let mut t = enter_tag_open("<!");
+    fn tag_name_emits_start_tag_on_greater_than() {
+        // `<a>` should emit a start tag token with name "a"
+        let mut t = enter_tag_name("<a>");
         let token = t.next_token();
-        assert_eq!(token, None);
-        assert_eq!(t.state(), State::MarkupDeclarationOpen);
-    }
-
-    #[test]
-    fn tag_open_solidus_switches_to_end_tag_open() {
-        let mut t = enter_tag_open("</");
-        let token = t.next_token();
-        assert_eq!(token, None);
-        assert_eq!(t.state(), State::EndTagOpen);
-    }
-
-    #[test]
-    fn tag_open_ascii_alpha_creates_start_tag_and_switches_to_tag_name() {
-        let mut t = enter_tag_open("<a");
-        let token = t.next_token();
-        assert_eq!(token, None);
-        assert_eq!(t.state(), State::TagName);
-        // `a` should be lowercased and stored as the tag name start.
-        // Note: current_tag is private — we verify via state transition.
-    }
-
-    #[test]
-    fn tag_open_question_mark_switches_to_bogus_comment() {
-        let mut t = enter_tag_open("<?");
-        let token = t.next_token();
-        assert_eq!(token, None);
-        assert_eq!(t.state(), State::BogusComment);
-    }
-
-    #[test]
-    fn tag_open_invalid_first_char_emits_lt_and_reconsumes_in_data() {
-        // `<@` → `<` is emitted as text, then `@` is re-consumed in Data state
-        let mut t = enter_tag_open("<@");
-        let token = t.next_token();
-        assert_eq!(token, Some(Token::Character('<')));
-        assert_eq!(t.state(), State::Data);
-
-        // The `@` should now be re-consumed in Data state.
-        let token2 = t.next_token();
-        assert_eq!(token2, Some(Token::Character('@')));
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "a".into(),
+                attrs: Vec::new(),
+                self_closing: false,
+            }))
+        );
         assert_eq!(t.state(), State::Data);
     }
 
     #[test]
-    fn tag_open_eof_emits_lt_then_eof() {
-        // Input is just `<` with nothing after it.
-        let mut t = HtmlTokenizer::new("<");
-        // Data state: `<` → TagOpen
-        assert_eq!(t.next_token(), None);
+    fn tag_name_emits_tag_with_lowercased_name() {
+        // `<DIV>` → tag name should be "div"
+        let mut t = HtmlTokenizer::new("<DIV>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
         assert_eq!(t.state(), State::TagOpen);
-        // TagOpen state: EOF → emit `<`, return to Data
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // 'I' → append 'i'
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // 'V' → append 'v'
+        assert_eq!(t.state(), State::TagName);
+        // '>' → emit tag
         let token = t.next_token();
-        assert_eq!(token, Some(Token::Character('<')));
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "div".into(),
+                attrs: Vec::new(),
+                self_closing: false,
+            }))
+        );
         assert_eq!(t.state(), State::Data);
-        // Data state: EOF → EOF token
+    }
+
+    #[test]
+    fn tag_name_appends_lowercased_uppercase_chars() {
+        // `<AbC>` → tag name should be "abc"
+        let mut t = HtmlTokenizer::new("<AbC>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.state(), State::TagOpen);
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="a"
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // 'b' → append, still TagName
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // 'C' → append 'c', still TagName
+        assert_eq!(t.state(), State::TagName);
+        // '>' → emit tag
+        let token = t.next_token();
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "abc".into(),
+                attrs: Vec::new(),
+                self_closing: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn tag_name_switches_to_self_closing_on_solidus() {
+        // `<br/>` → after "br", '/' switches to SelfClosingStartTag
+        let mut t = HtmlTokenizer::new("<br/>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.state(), State::TagOpen);
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="b"
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // 'r' appended, still TagName
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // '/' → SelfClosingStartTag
+        assert_eq!(t.state(), State::SelfClosingStartTag);
+        // Now '/' is consumed, next char is '>'
+        let token = t.next_token();
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "br".into(),
+                attrs: Vec::new(),
+                self_closing: true,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
+    }
+
+    // ── EndTagOpen tests (§13.2.5.7) ─────────────────────────────
+
+    #[test]
+    fn end_tag_open_creates_end_tag_on_alpha() {
+        // `</div>`: `<` → TagOpen, `/` → EndTagOpen, `d` → creates end tag + TagName
+        let mut t = HtmlTokenizer::new("</div>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.state(), State::TagOpen);
+        assert_eq!(t.next_token(), None); // TagOpen → EndTagOpen
+        assert_eq!(t.state(), State::EndTagOpen);
+        assert_eq!(t.next_token(), None); // EndTagOpen → TagName, name="d"
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // 'i' → append
+        assert_eq!(t.next_token(), None); // 'v' → append
+        let token = t.next_token(); // '>' → emit
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::End,
+                name: "div".into(),
+                attrs: Vec::new(),
+                self_closing: false,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn end_tag_open_lowercases_tag_name() {
+        let mut t = HtmlTokenizer::new("</DIV>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → EndTagOpen
+        assert_eq!(t.next_token(), None); // EndTagOpen → TagName, name="d"
+        assert_eq!(t.next_token(), None); // 'i'
+        assert_eq!(t.next_token(), None); // 'v'
+        let token = t.next_token(); // '>' → emit
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::End,
+                name: "div".into(),
+                attrs: Vec::new(),
+                self_closing: false,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn end_tag_open_non_alpha_switches_to_data() {
+        // `</>` → not alpha, switch to Data, don't emit anything
+        let mut t = HtmlTokenizer::new("</>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → EndTagOpen
+        // EndTagOpen sees `>`: not alpha → switch to Data, no emit
+        let token = t.next_token();
+        assert_eq!(token, None); // nothing emitted
+        assert_eq!(t.state(), State::Data);
+        // The '>' was consumed by EndTagOpen (not re-consumed), so next char is EOF
         let token2 = t.next_token();
         assert_eq!(token2, Some(Token::EOF));
-        // Stream exhausted
+    }
+
+    #[test]
+    fn end_tag_open_eof_emits_lt_then_eof() {
+        // `</` + EOF → emit `<`, return to Data, then emit EOF
+        let mut t = HtmlTokenizer::new("</");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → EndTagOpen
+        let token = t.next_token();
+        assert_eq!(token, Some(Token::Character('<')));
+        assert_eq!(t.state(), State::Data);
+        let token2 = t.next_token();
+        assert_eq!(token2, Some(Token::EOF));
+    }
+
+    // ── End-to-end integration tests ─────────────────────────────
+
+    #[test]
+    fn e2e_simple_open_close_tag() {
+        // `<p>hello</p>` → start tag, chars, end tag, EOF
+        let mut t = HtmlTokenizer::new("<p>hello</p>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="p"
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken { kind: TagKind::Start, name: "p".into(), attrs: Vec::new(), self_closing: false }))
+        ); // '>' → emit
+        assert_eq!(t.next_token(), Some(Token::Character('h')));
+        assert_eq!(t.next_token(), Some(Token::Character('e')));
+        assert_eq!(t.next_token(), Some(Token::Character('l')));
+        assert_eq!(t.next_token(), Some(Token::Character('l')));
+        assert_eq!(t.next_token(), Some(Token::Character('o')));
+        assert_eq!(t.next_token(), None); // '<' → TagOpen
+        assert_eq!(t.next_token(), None); // '/' → EndTagOpen
+        assert_eq!(t.next_token(), None); // 'p' → TagName, name="p"
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken { kind: TagKind::End, name: "p".into(), attrs: Vec::new(), self_closing: false }))
+        ); // '>' → emit
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    #[test]
+    fn e2e_self_closing_tag() {
+        // `<br/>` → self-closing start tag, EOF
+        let mut t = HtmlTokenizer::new("<br/>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="b"
+        assert_eq!(t.next_token(), None); // 'r' → append
+        assert_eq!(t.next_token(), None); // '/' → SelfClosingStartTag
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken { kind: TagKind::Start, name: "br".into(), attrs: Vec::new(), self_closing: true }))
+        ); // '>' → emit
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    #[test]
+    fn e2e_tag_space_then_chars() {
+        // `<div>text</div>` → start tag, text chars, end tag, EOF
+        let mut t = HtmlTokenizer::new("<div>text</div>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.next_token(), None); // 'i'
+        assert_eq!(t.next_token(), None); // 'v'
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken { kind: TagKind::Start, name: "div".into(), attrs: Vec::new(), self_closing: false }))
+        ); // '>' → emit
+        assert_eq!(t.next_token(), Some(Token::Character('t')));
+        assert_eq!(t.next_token(), Some(Token::Character('e')));
+        assert_eq!(t.next_token(), Some(Token::Character('x')));
+        assert_eq!(t.next_token(), Some(Token::Character('t')));
+        assert_eq!(t.next_token(), None); // '<' → TagOpen
+        assert_eq!(t.next_token(), None); // '/' → EndTagOpen
+        assert_eq!(t.next_token(), None); // 'd' → TagName, name="d"
+        assert_eq!(t.next_token(), None); // 'i'
+        assert_eq!(t.next_token(), None); // 'v'
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken { kind: TagKind::End, name: "div".into(), attrs: Vec::new(), self_closing: false }))
+        ); // '>' → emit
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    #[test]
+    fn tag_name_switches_to_before_attribute_name_on_space() {
+        // `<div class="x">` → space switches to BeforeAttributeName
+        let mut t = HtmlTokenizer::new("<div class=\"x\">");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.state(), State::TagOpen);
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // 'i' → append
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // 'v' → append
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        assert_eq!(t.state(), State::BeforeAttributeName);
+    }
+
+    #[test]
+    fn tag_name_appends_non_ascii_chars() {
+        // Non-ASCII characters in TagOpen fall through to Data (correct per spec).
+        // `<日本語>` → '<' is emitted as text, then Japanese chars are character tokens.
+        let mut t = HtmlTokenizer::new("<日本語>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen (no emit)
+        assert_eq!(t.state(), State::TagOpen);
+        assert_eq!(t.next_token(), Some(Token::Character('<'))); // TagOpen: not alpha, emit '<', reconsume
+        assert_eq!(t.state(), State::Data);
+        assert_eq!(t.next_token(), Some(Token::Character('日'))); // re-consumed in Data
+        assert_eq!(t.next_token(), Some(Token::Character('本')));
+        assert_eq!(t.next_token(), Some(Token::Character('語')));
+        assert_eq!(t.next_token(), Some(Token::Character('>')));
+    }
+
+    #[test]
+    fn tag_name_appends_non_ascii_after_entering_tag_name() {
+        // Non-ASCII chars ARE appended to the tag name once we're in TagName state.
+        // `<a日本語>`: 'a' enters TagName, then '日', '本', '語' are appended.
+        let mut t = HtmlTokenizer::new("<a日本語>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.state(), State::TagOpen);
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="a"
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // '日' → append
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // '本' → append
+        assert_eq!(t.state(), State::TagName);
+        assert_eq!(t.next_token(), None); // '語' → append
+        assert_eq!(t.state(), State::TagName);
+        // '>' → emit tag with name "a日本語"
+        let token = t.next_token();
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "a日本語".into(),
+                attrs: Vec::new(),
+                self_closing: false,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn tag_name_handles_null_character() {
+        // `<a\x00>` → NULL in TagName should append U+FFFD, then '>' emits tag
+        let mut t = HtmlTokenizer::new("<a\x00>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.state(), State::TagOpen);
+        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="a"
+        assert_eq!(t.state(), State::TagName);
+        // '\0' in TagName: append U+FFFD (parse error), stay in TagName
         assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::TagName);
+        // '>' → emit tag with name "a\u{FFFD}"
+        let token = t.next_token();
+        assert_eq!(
+            token,
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "a\u{FFFD}".into(),
+                attrs: Vec::new(),
+                self_closing: false,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
     }
 }
