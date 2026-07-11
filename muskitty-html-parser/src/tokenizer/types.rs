@@ -81,62 +81,38 @@ pub enum State {
     /// §13.2.5.1 Data state
     Data,
     /// §13.2.5.2 RCDATA state
-    ///
-    /// TODO: not yet implemented
     RCDATA,
     /// §13.2.5.3 RAWTEXT state
-    ///
-    /// TODO: not yet implemented
     RAWTEXT,
     /// §13.2.5.4 Script data state
     ///
     /// TODO: not yet implemented
     ScriptData,
     /// §13.2.5.5 PLAINTEXT state
-    ///
-    /// TODO: not yet implemented
     PLAINTEXT,
 
     // ── Tag open / close states ───────────────────────────
     /// §13.2.5.6 Tag open state
-    ///
-    /// TODO: not yet implemented
     TagOpen,
     /// §13.2.5.7 End tag open state
-    ///
-    /// TODO: not yet implemented
     EndTagOpen,
     /// §13.2.5.8 Tag name state
-    ///
-    /// TODO: not yet implemented
     TagName,
 
     // ── RCDATA states ─────────────────────────────────────
     /// §13.2.5.9 RCDATA less-than sign state
-    ///
-    /// TODO: not yet implemented
     RCDATALessThanSign,
     /// §13.2.5.10 RCDATA end tag open state
-    ///
-    /// TODO: not yet implemented
     RCDATAEndTagOpen,
     /// §13.2.5.11 RCDATA end tag name state
-    ///
-    /// TODO: not yet implemented
     RCDATAEndTagName,
 
     // ── RAWTEXT states ────────────────────────────────────
     /// §13.2.5.12 RAWTEXT less-than sign state
-    ///
-    /// TODO: not yet implemented
     RAWTEXTLessThanSign,
     /// §13.2.5.13 RAWTEXT end tag open state
-    ///
-    /// TODO: not yet implemented
     RAWTEXTEndTagOpen,
     /// §13.2.5.14 RAWTEXT end tag name state
-    ///
-    /// TODO: not yet implemented
     RAWTEXTEndTagName,
 
     // ── Script data states ────────────────────────────────
@@ -211,156 +187,82 @@ pub enum State {
 
     // ── Attribute states ──────────────────────────────────
     /// §13.2.5.32 Before attribute name state
-    ///
-    /// TODO: not yet implemented
     BeforeAttributeName,
     /// §13.2.5.33 Attribute name state
-    ///
-    /// TODO: not yet implemented
     AttributeName,
     /// §13.2.5.34 After attribute name state
-    ///
-    /// TODO: not yet implemented
     AfterAttributeName,
     /// §13.2.5.35 Before attribute value state
-    ///
-    /// TODO: not yet implemented
     BeforeAttributeValue,
     /// §13.2.5.36 Attribute value (double-quoted) state
-    ///
-    /// TODO: not yet implemented
     AttributeValueDoubleQuoted,
     /// §13.2.5.37 Attribute value (single-quoted) state
-    ///
-    /// TODO: not yet implemented
     AttributeValueSingleQuoted,
     /// §13.2.5.38 Attribute value (unquoted) state
-    ///
-    /// TODO: not yet implemented
     AttributeValueUnquoted,
     /// §13.2.5.39 After attribute value (quoted) state
-    ///
-    /// TODO: not yet implemented
     AfterAttributeValueQuoted,
     /// §13.2.5.40 Self-closing start tag state
-    ///
-    /// TODO: not yet implemented
     SelfClosingStartTag,
 
     // ── Comment states ────────────────────────────────────
     /// §13.2.5.41 Bogus comment state
-    ///
-    /// TODO: not yet implemented
     BogusComment,
     /// §13.2.5.42 Markup declaration open state
-    ///
-    /// TODO: not yet implemented
     MarkupDeclarationOpen,
     /// §13.2.5.43 Comment start state
-    ///
-    /// TODO: not yet implemented
     CommentStart,
     /// §13.2.5.44 Comment start dash state
-    ///
-    /// TODO: not yet implemented
     CommentStartDash,
     /// §13.2.5.45 Comment state
-    ///
-    /// TODO: not yet implemented
     Comment,
     /// §13.2.5.46 Comment less-than sign state
-    ///
-    /// TODO: not yet implemented
     CommentLessThanSign,
     /// §13.2.5.47 Comment less-than sign bang state
-    ///
-    /// TODO: not yet implemented
     CommentLessThanSignBang,
     /// §13.2.5.48 Comment less-than sign bang dash state
-    ///
-    /// TODO: not yet implemented
     CommentLessThanSignBangDash,
     /// §13.2.5.49 Comment less-than sign bang dash dash state
-    ///
-    /// TODO: not yet implemented
     CommentLessThanSignBangDashDash,
     /// §13.2.5.50 Comment end dash state
-    ///
-    /// TODO: not yet implemented
     CommentEndDash,
     /// §13.2.5.51 Comment end state
-    ///
-    /// TODO: not yet implemented
     CommentEnd,
     /// §13.2.5.52 Comment end bang state
-    ///
-    /// TODO: not yet implemented
     CommentEndBang,
 
     // ── DOCTYPE states ────────────────────────────────────
     /// §13.2.5.53 DOCTYPE state
-    ///
-    /// TODO: not yet implemented
     Doctype,
     /// §13.2.5.54 Before DOCTYPE name state
-    ///
-    /// TODO: not yet implemented
     BeforeDoctypeName,
     /// §13.2.5.55 DOCTYPE name state
-    ///
-    /// TODO: not yet implemented
     DoctypeName,
     /// §13.2.5.56 After DOCTYPE name state
-    ///
-    /// TODO: not yet implemented
     AfterDoctypeName,
     /// §13.2.5.57 After DOCTYPE public keyword state
-    ///
-    /// TODO: not yet implemented
     AfterDoctypePublicKeyword,
     /// §13.2.5.58 Before DOCTYPE public identifier state
-    ///
-    /// TODO: not yet implemented
     BeforeDoctypePublicId,
     /// §13.2.5.59 DOCTYPE public identifier (double-quoted) state
-    ///
-    /// TODO: not yet implemented
     DoctypePublicIdDoubleQuoted,
     /// §13.2.5.60 DOCTYPE public identifier (single-quoted) state
-    ///
-    /// TODO: not yet implemented
     DoctypePublicIdSingleQuoted,
     /// §13.2.5.61 After DOCTYPE public identifier state
-    ///
-    /// TODO: not yet implemented
     AfterDoctypePublicId,
     /// §13.2.5.62 Between DOCTYPE public and system identifiers state
-    ///
-    /// TODO: not yet implemented
     BetweenDoctypePublicAndSystemIds,
     /// §13.2.5.63 After DOCTYPE system keyword state
-    ///
-    /// TODO: not yet implemented
     AfterDoctypeSystemKeyword,
     /// §13.2.5.64 Before DOCTYPE system identifier state
-    ///
-    /// TODO: not yet implemented
     BeforeDoctypeSystemId,
     /// §13.2.5.65 DOCTYPE system identifier (double-quoted) state
-    ///
-    /// TODO: not yet implemented
     DoctypeSystemIdDoubleQuoted,
     /// §13.2.5.66 DOCTYPE system identifier (single-quoted) state
-    ///
-    /// TODO: not yet implemented
     DoctypeSystemIdSingleQuoted,
     /// §13.2.5.67 After DOCTYPE system identifier state
-    ///
-    /// TODO: not yet implemented
     AfterDoctypeSystemId,
     /// §13.2.5.68 Bogus DOCTYPE state
-    ///
-    /// TODO: not yet implemented
     BogusDoctype,
 
     // ── CDATA section states ──────────────────────────────

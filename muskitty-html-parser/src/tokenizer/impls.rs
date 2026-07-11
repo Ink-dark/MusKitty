@@ -46,6 +46,19 @@ pub struct HtmlTokenizer {
     /// The DOCTYPE token currently being built (§13.2.5.53–§13.2.5.68).
     /// Reset when entering DOCTYPE states via MarkupDeclarationOpen.
     current_doctype: DoctypeToken,
+    /// The tag name that can close the current RCDATA/RAWTEXT section.
+    /// Set by tree construction before switching to RCDATA/RAWTEXT state.
+    /// e.g. `Some("title")` when entering `<title>`, `Some("textarea")`
+    /// when entering `<textarea>`.
+    appropriate_end_tag_name: Option<String>,
+    /// Temporary buffer for RCDATA/RAWTEXT end tag name accumulation.
+    /// Stores original-case characters of the candidate end tag name.
+    /// On match failure, these chars are emitted back as character tokens.
+    temporary_buffer: String,
+    /// Queue of tokens to emit before consuming the next input character.
+    /// Used when a single state transition needs to emit multiple tokens
+    /// (e.g. "anything else" in RCDATA/RAWTEXT end tag name).
+    pending_tokens: Vec<Token>,
 }
 
 impl HtmlTokenizer {
@@ -69,6 +82,9 @@ impl HtmlTokenizer {
                 system_id: None,
                 force_quirks: false,
             },
+            appropriate_end_tag_name: None,
+            temporary_buffer: String::new(),
+            pending_tokens: Vec::new(),
         }
     }
 
@@ -111,6 +127,23 @@ impl HtmlTokenizer {
             self.consume()
         }
     }
+
+    /// Set the appropriate end tag name for RCDATA/RAWTEXT content.
+    ///
+    /// The tree construction stage calls this before switching the tokenizer
+    /// to [`State::RCDATA`] or [`State::RAWTEXT`]. In these content models,
+    /// `</` followed by the appropriate end tag name closes the section and
+    /// returns to [`State::Data`].
+    ///
+    /// Pass `None` to clear (e.g. when leaving RCDATA/RAWTEXT).
+    ///
+    /// # Examples
+    ///
+    /// - `<title>` → `set_appropriate_end_tag_name(Some("title"))`, then `set_state(State::RCDATA)`
+    /// - `<style>` → `set_appropriate_end_tag_name(Some("style"))`, then `set_state(State::RAWTEXT)`
+    pub fn set_appropriate_end_tag_name(&mut self, name: Option<&str>) {
+        self.appropriate_end_tag_name = name.map(|s| s.to_string());
+    }
 }
 
 impl Tokenizer for HtmlTokenizer {
@@ -118,6 +151,11 @@ impl Tokenizer for HtmlTokenizer {
         // After EOF has been emitted, the stream is exhausted.
         if self.eof_emitted {
             return None;
+        }
+
+        // Drain pending tokens (multi-token emission queue) first.
+        if let Some(token) = self.pending_tokens.pop() {
+            return Some(token);
         }
 
         let result = match self.state {
@@ -162,6 +200,15 @@ impl Tokenizer for HtmlTokenizer {
             State::AttributeValueSingleQuoted => self.handle_attribute_value_single_quoted_state(),
             State::AttributeValueUnquoted => self.handle_attribute_value_unquoted_state(),
             State::AfterAttributeValueQuoted => self.handle_after_attribute_value_quoted_state(),
+            State::RCDATA => self.handle_rcdata_state(),
+            State::RAWTEXT => self.handle_rawtext_state(),
+            State::PLAINTEXT => self.handle_plaintext_state(),
+            State::RCDATALessThanSign => self.handle_rcdata_less_than_sign_state(),
+            State::RCDATAEndTagOpen => self.handle_rcdata_end_tag_open_state(),
+            State::RCDATAEndTagName => self.handle_rcdata_end_tag_name_state(),
+            State::RAWTEXTLessThanSign => self.handle_rawtext_less_than_sign_state(),
+            State::RAWTEXTEndTagOpen => self.handle_rawtext_end_tag_open_state(),
+            State::RAWTEXTEndTagName => self.handle_rawtext_end_tag_name_state(),
             _ => panic!(
                 "State::{:?} is not yet implemented (TODO in types.rs)",
                 self.state
@@ -193,6 +240,9 @@ impl Tokenizer for HtmlTokenizer {
             system_id: None,
             force_quirks: false,
         };
+        self.appropriate_end_tag_name = None;
+        self.temporary_buffer.clear();
+        self.pending_tokens.clear();
     }
 }
 
@@ -235,6 +285,408 @@ impl HtmlTokenizer {
                 Some(Token::EOF)
             }
         }
+    }
+
+    // ── Content model states (§13.2.5.2–§13.2.5.5) ──────────────────
+
+    /// §13.2.5.2 RCDATA state
+    ///
+    /// Consume the next input character:
+    /// - U+0026 AMPERSAND (&) → character reference state
+    /// - U+003C LESS-THAN SIGN (<) → RCDATA less-than sign state
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → emit end-of-file token
+    /// - Anything else → emit character token
+    fn handle_rcdata_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('&') => {
+                // TODO: set return state to RCDATA, then switch to CharacterReference
+                self.state = State::CharacterReference;
+                None
+            }
+            Some('<') => {
+                self.state = State::RCDATALessThanSign;
+                None
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(c) => Some(Token::Character(c)),
+            None => {
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.3 RAWTEXT state
+    ///
+    /// Consume the next input character:
+    /// - U+003C LESS-THAN SIGN (<) → RAWTEXT less-than sign state
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → emit end-of-file token
+    /// - Anything else → emit character token
+    ///
+    /// Note: RAWTEXT does NOT handle `&` — character references are not resolved.
+    fn handle_rawtext_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('<') => {
+                self.state = State::RAWTEXTLessThanSign;
+                None
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(c) => Some(Token::Character(c)),
+            None => {
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.5 PLAINTEXT state
+    ///
+    /// Consume the next input character:
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → emit end-of-file token
+    /// - Anything else → emit character token
+    ///
+    /// Note: PLAINTEXT treats EVERYTHING as literal text — even `<` and `&`.
+    /// There is no end tag to close this state; it persists until EOF.
+    fn handle_plaintext_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(c) => Some(Token::Character(c)),
+            None => {
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    // ── RCDATA tag detection states (§13.2.5.9–§13.2.5.11) ─────────
+
+    /// §13.2.5.9 RCDATA less-than sign state
+    ///
+    /// Consume the next input character:
+    /// - U+002F SOLIDUS (/) → clear temporary buffer, switch to RCDATA end tag open
+    /// - Anything else → emit `<` character token, reconsume in RCDATA
+    fn handle_rcdata_less_than_sign_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('/') => {
+                self.temporary_buffer.clear();
+                self.state = State::RCDATAEndTagOpen;
+                None
+            }
+            Some(_c) => {
+                self.state = State::RCDATA;
+                self.reconsume = true;
+                Some(Token::Character('<'))
+            }
+            None => {
+                // EOF: emit `<` then return to RCDATA (next call emits EOF)
+                self.state = State::RCDATA;
+                Some(Token::Character('<'))
+            }
+        }
+    }
+
+    /// §13.2.5.10 RCDATA end tag open state
+    ///
+    /// Consume the next input character:
+    /// - ASCII alpha → create end tag token (empty name), append lowercase,
+    ///   append original to temporary buffer, switch to RCDATA end tag name
+    /// - Anything else → emit `<` + `/` char tokens, reconsume in RCDATA
+    fn handle_rcdata_end_tag_open_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                let mut name = String::new();
+                name.push(c.to_ascii_lowercase());
+                self.temporary_buffer.push(c);
+                self.current_tag = Some(TagToken {
+                    kind: TagKind::End,
+                    name,
+                    attrs: Vec::new(),
+                    self_closing: false,
+                });
+                self.state = State::RCDATAEndTagName;
+                None
+            }
+            Some(_c) => {
+                // Emit `<` + `/`, reconsume in RCDATA
+                // Push in reverse order so pop() yields correct sequence
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                self.state = State::RCDATA;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                // Emit `<` + `/`, reconsume EOF in RCDATA
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                self.state = State::RCDATA;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.11 RCDATA end tag name state
+    ///
+    /// Consume the next input character:
+    /// - TAB/LF/FF/SPACE → if appropriate end tag, switch to BeforeAttributeName;
+    ///   else "anything else"
+    /// - `/` → if appropriate end tag, switch to SelfClosingStartTag;
+    ///   else "anything else"
+    /// - `>` → if appropriate end tag, emit tag token, switch to Data;
+    ///   else "anything else"
+    /// - ASCII upper alpha → append lowercase to tag name, append original to
+    ///   temporary buffer
+    /// - ASCII lower alpha → append to tag name, append to temporary buffer
+    /// - Anything else → emit `<` + `/` + temporary buffer chars, reconsume in
+    ///   RCDATA
+    fn handle_rcdata_end_tag_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            // Whitespace → check if appropriate, then switch to BeforeAttributeName
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                if self.is_appropriate_end_tag() {
+                    self.state = State::BeforeAttributeName;
+                    None
+                } else {
+                    self.rcdata_end_tag_name_backout()
+                }
+            }
+            Some('/') => {
+                if self.is_appropriate_end_tag() {
+                    self.state = State::SelfClosingStartTag;
+                    None
+                } else {
+                    self.rcdata_end_tag_name_backout()
+                }
+            }
+            Some('>') => {
+                if self.is_appropriate_end_tag() {
+                    let tag = self.current_tag.take().unwrap();
+                    self.temporary_buffer.clear();
+                    self.state = State::Data;
+                    Some(Token::Tag(tag))
+                } else {
+                    self.rcdata_end_tag_name_backout()
+                }
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c.to_ascii_lowercase());
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c);
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(_c) => {
+                // Non-alpha character → "anything else" backout
+                self.rcdata_end_tag_name_backout()
+            }
+            None => {
+                // EOF → "anything else" backout to RCDATA
+                self.rcdata_end_tag_name_backout()
+            }
+        }
+    }
+
+    /// Helper: check if the current tag being built matches the appropriate end tag.
+    fn is_appropriate_end_tag(&self) -> bool {
+        match (&self.appropriate_end_tag_name, &self.current_tag) {
+            (Some(expected), Some(tag)) => *expected == tag.name,
+            _ => false,
+        }
+    }
+
+    /// Helper: "anything else" backout for RCDATA end tag name state.
+    ///
+    /// Emits `<` + `/` + each char in the temporary buffer as character tokens,
+    /// then reconsume the current character back in RCDATA state.
+    fn rcdata_end_tag_name_backout(&mut self) -> Option<Token> {
+        // Push tokens in reverse order (pop yields forward order)
+        // temp buffer chars first (they come after `<` and `/`)
+        for ch in self.temporary_buffer.chars().rev() {
+            self.pending_tokens.push(Token::Character(ch));
+        }
+        self.pending_tokens.push(Token::Character('/'));
+        self.pending_tokens.push(Token::Character('<'));
+        // Discard the partial end tag
+        self.current_tag = None;
+        self.temporary_buffer.clear();
+        self.state = State::RCDATA;
+        self.reconsume = true;
+        None
+    }
+
+    // ── RAWTEXT tag detection states (§13.2.5.12–§13.2.5.14) ──────
+
+    /// §13.2.5.12 RAWTEXT less-than sign state
+    ///
+    /// Consume the next input character:
+    /// - U+002F SOLIDUS (/) → clear temporary buffer, switch to RAWTEXT end tag open
+    /// - Anything else → emit `<` character token, reconsume in RAWTEXT
+    fn handle_rawtext_less_than_sign_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('/') => {
+                self.temporary_buffer.clear();
+                self.state = State::RAWTEXTEndTagOpen;
+                None
+            }
+            Some(_c) => {
+                self.state = State::RAWTEXT;
+                self.reconsume = true;
+                Some(Token::Character('<'))
+            }
+            None => {
+                self.state = State::RAWTEXT;
+                Some(Token::Character('<'))
+            }
+        }
+    }
+
+    /// §13.2.5.13 RAWTEXT end tag open state
+    ///
+    /// Consume the next input character:
+    /// - ASCII alpha → create end tag token (empty name), append lowercase,
+    ///   append original to temporary buffer, switch to RAWTEXT end tag name
+    /// - Anything else → emit `<` + `/` char tokens, reconsume in RAWTEXT
+    fn handle_rawtext_end_tag_open_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                let mut name = String::new();
+                name.push(c.to_ascii_lowercase());
+                self.temporary_buffer.push(c);
+                self.current_tag = Some(TagToken {
+                    kind: TagKind::End,
+                    name,
+                    attrs: Vec::new(),
+                    self_closing: false,
+                });
+                self.state = State::RAWTEXTEndTagName;
+                None
+            }
+            Some(_c) => {
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                self.state = State::RAWTEXT;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                self.state = State::RAWTEXT;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.14 RAWTEXT end tag name state
+    ///
+    /// Consume the next input character:
+    /// - TAB/LF/FF/SPACE → if appropriate end tag, switch to BeforeAttributeName;
+    ///   else "anything else"
+    /// - `/` → if appropriate end tag, switch to SelfClosingStartTag;
+    ///   else "anything else"
+    /// - `>` → if appropriate end tag, emit tag token, switch to Data;
+    ///   else "anything else"
+    /// - ASCII upper alpha → append lowercase to tag name, append original to
+    ///   temporary buffer
+    /// - ASCII lower alpha → append to tag name, append to temporary buffer
+    /// - Anything else → emit `<` + `/` + temporary buffer chars, reconsume in
+    ///   RAWTEXT
+    /// - EOF → parse error; switch to Data; emit `<` + `/`; reconsume EOF
+    fn handle_rawtext_end_tag_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                if self.is_appropriate_end_tag() {
+                    self.state = State::BeforeAttributeName;
+                    None
+                } else {
+                    self.rawtext_end_tag_name_backout()
+                }
+            }
+            Some('/') => {
+                if self.is_appropriate_end_tag() {
+                    self.state = State::SelfClosingStartTag;
+                    None
+                } else {
+                    self.rawtext_end_tag_name_backout()
+                }
+            }
+            Some('>') => {
+                if self.is_appropriate_end_tag() {
+                    let tag = self.current_tag.take().unwrap();
+                    self.temporary_buffer.clear();
+                    self.state = State::Data;
+                    Some(Token::Tag(tag))
+                } else {
+                    self.rawtext_end_tag_name_backout()
+                }
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c.to_ascii_lowercase());
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c);
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(_c) => self.rawtext_end_tag_name_backout(),
+            None => {
+                // §13.2.5.14: EOF → parse error; switch to Data; emit `<` + `/`;
+                // reconsume the EOF token. Since we're at EOF, don't set
+                // `reconsume` here — the next `next_char()` call will
+                // naturally return `None`, and Data will emit EOF.
+                // TODO: record parse error (eof-in-tag)
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                self.current_tag = None;
+                self.temporary_buffer.clear();
+                self.state = State::Data;
+                None
+            }
+        }
+    }
+
+    /// Helper: "anything else" backout for RAWTEXT end tag name state.
+    ///
+    /// Emits `<` + `/` + each char in the temporary buffer as character tokens,
+    /// then reconsume the current character back in RAWTEXT state.
+    fn rawtext_end_tag_name_backout(&mut self) -> Option<Token> {
+        for ch in self.temporary_buffer.chars().rev() {
+            self.pending_tokens.push(Token::Character(ch));
+        }
+        self.pending_tokens.push(Token::Character('/'));
+        self.pending_tokens.push(Token::Character('<'));
+        self.current_tag = None;
+        self.temporary_buffer.clear();
+        self.state = State::RAWTEXT;
+        self.reconsume = true;
+        None
     }
 
     /// §13.2.5.6 Tag open state
@@ -2953,6 +3405,252 @@ mod tests {
                 self_closing: true,
             }))
         );
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    // ── Content model tests (§13.2.5.2–§13.2.5.5) ────────────────
+
+    /// Helper: create a tokenizer in a specific content model state.
+    fn enter_content_model(input: &str, state: State, end_tag: Option<&str>) -> HtmlTokenizer {
+        let mut t = HtmlTokenizer::new(input);
+        t.set_state(state);
+        t.set_appropriate_end_tag_name(end_tag);
+        t
+    }
+
+    #[test]
+    fn rcdata_emits_characters() {
+        let mut t = enter_content_model("hello", State::RCDATA, Some("title"));
+        assert_eq!(t.next_token(), Some(Token::Character('h')));
+        assert_eq!(t.next_token(), Some(Token::Character('e')));
+        assert_eq!(t.next_token(), Some(Token::Character('l')));
+        assert_eq!(t.next_token(), Some(Token::Character('l')));
+        assert_eq!(t.next_token(), Some(Token::Character('o')));
+    }
+
+    #[test]
+    fn rcdata_lt_switches_to_less_than_sign() {
+        let mut t = enter_content_model("<", State::RCDATA, Some("title"));
+        assert_eq!(t.next_token(), None); // '<' → RCDATALessThanSign
+        assert_eq!(t.state(), State::RCDATALessThanSign);
+    }
+
+    #[test]
+    fn rcdata_ampersand_switches_to_charref() {
+        let mut t = enter_content_model("&", State::RCDATA, Some("title"));
+        assert_eq!(t.next_token(), None); // '&' → CharacterReference
+        assert_eq!(t.state(), State::CharacterReference);
+    }
+
+    #[test]
+    fn rcdata_null_emits_replacement_char() {
+        let mut t = enter_content_model("\0", State::RCDATA, Some("title"));
+        assert_eq!(t.next_token(), Some(Token::Character('\u{FFFD}')));
+    }
+
+    #[test]
+    fn rcdata_eof_emits_eof() {
+        let mut t = enter_content_model("", State::RCDATA, Some("title"));
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    #[test]
+    fn rcdata_end_tag_match() {
+        // `</title>` in RCDATA with appropriate_end_tag_name = "title"
+        let mut t = enter_content_model("</title>", State::RCDATA, Some("title"));
+        // '<' → RCDATALessThanSign
+        assert_eq!(t.next_token(), None);
+        // '/' → RCDATAEndTagOpen
+        assert_eq!(t.next_token(), None);
+        // 't' → RCDATAEndTagName (create end tag "t")
+        assert_eq!(t.next_token(), None);
+        // 'i' → append to end tag "ti"
+        assert_eq!(t.next_token(), None);
+        // 't' → append to end tag "tit"
+        assert_eq!(t.next_token(), None);
+        // 'l' → append to end tag "titl"
+        assert_eq!(t.next_token(), None);
+        // 'e' → append to end tag "title"
+        assert_eq!(t.next_token(), None);
+        // '>' → matches appropriate end tag → emit tag, switch to Data
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken {
+                kind: TagKind::End,
+                name: "title".into(),
+                attrs: vec![],
+                self_closing: false,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn rcdata_end_tag_no_match_backout() {
+        // `</div>` in RCDATA with appropriate_end_tag_name = "title" — does not match
+        let mut t = enter_content_model("</div>x", State::RCDATA, Some("title"));
+        // '<' → RCDATALessThanSign
+        assert_eq!(t.next_token(), None);
+        // '/' → RCDATAEndTagOpen
+        assert_eq!(t.next_token(), None);
+        // 'd' → RCDATAEndTagName (create end tag, name="d", buf="d")
+        assert_eq!(t.next_token(), None);
+        // 'i' → append
+        assert_eq!(t.next_token(), None);
+        // 'v' → append
+        assert_eq!(t.next_token(), None);
+        // '>' → not appropriate (name="div" != expected="title") → backout
+        // Handler returns None but pushes pending tokens
+        assert_eq!(t.next_token(), None);
+        // Pending tokens drained: '<' '/' 'd' 'i' 'v' (forward order)
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+        assert_eq!(t.next_token(), Some(Token::Character('/')));
+        assert_eq!(t.next_token(), Some(Token::Character('d')));
+        assert_eq!(t.next_token(), Some(Token::Character('i')));
+        assert_eq!(t.next_token(), Some(Token::Character('v')));
+        // '>' is re-consumed in RCDATA as character token
+        assert_eq!(t.next_token(), Some(Token::Character('>')));
+        // Then 'x'
+        assert_eq!(t.state(), State::RCDATA);
+        assert_eq!(t.next_token(), Some(Token::Character('x')));
+    }
+
+    #[test]
+    fn rawtext_emits_characters() {
+        let mut t = enter_content_model("hello", State::RAWTEXT, Some("style"));
+        assert_eq!(t.next_token(), Some(Token::Character('h')));
+        assert_eq!(t.next_token(), Some(Token::Character('e')));
+        assert_eq!(t.next_token(), Some(Token::Character('l')));
+        assert_eq!(t.next_token(), Some(Token::Character('l')));
+        assert_eq!(t.next_token(), Some(Token::Character('o')));
+    }
+
+    #[test]
+    fn rawtext_ampersand_is_literal() {
+        // RAWTEXT does NOT handle `&` — it's emitted as a regular character
+        let mut t = enter_content_model("&amp;", State::RAWTEXT, Some("style"));
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+        assert_eq!(t.next_token(), Some(Token::Character('a')));
+        assert_eq!(t.next_token(), Some(Token::Character('m')));
+        assert_eq!(t.next_token(), Some(Token::Character('p')));
+        assert_eq!(t.next_token(), Some(Token::Character(';')));
+    }
+
+    #[test]
+    fn rawtext_lt_switches_to_less_than_sign() {
+        let mut t = enter_content_model("<", State::RAWTEXT, Some("style"));
+        assert_eq!(t.next_token(), None); // '<' → RAWTEXTLessThanSign
+        assert_eq!(t.state(), State::RAWTEXTLessThanSign);
+    }
+
+    #[test]
+    fn rawtext_end_tag_match() {
+        // `</style>` in RAWTEXT with appropriate_end_tag_name = "style"
+        let mut t = enter_content_model("</style>", State::RAWTEXT, Some("style"));
+        // '<' → RAWTEXTLessThanSign
+        assert_eq!(t.next_token(), None);
+        // '/' → RAWTEXTEndTagOpen
+        assert_eq!(t.next_token(), None);
+        // 's','t','y','l','e' → RAWTEXTEndTagName
+        for _ in 0..5 { assert_eq!(t.next_token(), None); }
+        // '>' → matches → emit tag, switch to Data
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken {
+                kind: TagKind::End,
+                name: "style".into(),
+                attrs: vec![],
+                self_closing: false,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn rawtext_end_tag_no_match_backout() {
+        // `</div>x` in RAWTEXT with expected "style" — should back out
+        let mut t = enter_content_model("</div>x", State::RAWTEXT, Some("style"));
+        // '<' → RAWTEXTLessThanSign
+        assert_eq!(t.next_token(), None);
+        // '/' → RAWTEXTEndTagOpen
+        assert_eq!(t.next_token(), None);
+        // 'd','i','v' → RAWTEXTEndTagName
+        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        // '>' → not appropriate → backout (returns None, pushes pending)
+        assert_eq!(t.next_token(), None);
+        // Pending tokens drained
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+        assert_eq!(t.next_token(), Some(Token::Character('/')));
+        assert_eq!(t.next_token(), Some(Token::Character('d')));
+        assert_eq!(t.next_token(), Some(Token::Character('i')));
+        assert_eq!(t.next_token(), Some(Token::Character('v')));
+        // '>' re-consumed in RAWTEXT
+        assert_eq!(t.next_token(), Some(Token::Character('>')));
+        assert_eq!(t.state(), State::RAWTEXT);
+        assert_eq!(t.next_token(), Some(Token::Character('x')));
+    }
+
+    #[test]
+    fn rawtext_end_tag_no_appropriate_end_tag() {
+        // No appropriate_end_tag_name set — nothing matches
+        let mut t = enter_content_model("</style>x", State::RAWTEXT, None);
+        // '<' → RAWTEXTLessThanSign
+        assert_eq!(t.next_token(), None);
+        // '/' → RAWTEXTEndTagOpen
+        assert_eq!(t.next_token(), None);
+        // 's','t','y','l','e' → RAWTEXTEndTagName
+        for _ in 0..5 { assert_eq!(t.next_token(), None); }
+        // '>' → not appropriate (None is not "style") → backout (returns None)
+        assert_eq!(t.next_token(), None);
+        // Pending tokens drained
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+        assert_eq!(t.next_token(), Some(Token::Character('/')));
+        assert_eq!(t.next_token(), Some(Token::Character('s')));
+        assert_eq!(t.next_token(), Some(Token::Character('t')));
+        assert_eq!(t.next_token(), Some(Token::Character('y')));
+        assert_eq!(t.next_token(), Some(Token::Character('l')));
+        assert_eq!(t.next_token(), Some(Token::Character('e')));
+    }
+
+    #[test]
+    fn rawtext_end_tag_name_eof() {
+        // RAWTEXT end tag name on EOF emits `</` + switch to Data
+        let mut t = enter_content_model("</sty", State::RAWTEXT, Some("style"));
+        // '<' → RAWTEXTLessThanSign
+        assert_eq!(t.next_token(), None);
+        // '/' → RAWTEXTEndTagOpen
+        assert_eq!(t.next_token(), None);
+        // 's','t','y' → RAWTEXTEndTagName
+        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        // EOF → handler pushes pending '<' '/' and returns None
+        assert_eq!(t.next_token(), None);
+        // Pending tokens drained
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+        assert_eq!(t.next_token(), Some(Token::Character('/')));
+        // Next call: state is Data, naturally at EOF → Data emits EOF
+        assert_eq!(t.state(), State::Data);
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    #[test]
+    fn plaintext_emits_everything_literally() {
+        // PLAINTEXT treats `<`, `&`, everything as literal characters
+        let mut t = enter_content_model("<div>&amp;</div>", State::PLAINTEXT, None);
+        for expected in "<div>&amp;</div>".chars() {
+            assert_eq!(t.next_token(), Some(Token::Character(expected)));
+        }
+    }
+
+    #[test]
+    fn plaintext_null_emits_replacement_char() {
+        let mut t = enter_content_model("\0x", State::PLAINTEXT, None);
+        assert_eq!(t.next_token(), Some(Token::Character('\u{FFFD}')));
+        assert_eq!(t.next_token(), Some(Token::Character('x')));
+    }
+
+    #[test]
+    fn plaintext_eof_emits_eof() {
+        let mut t = enter_content_model("", State::PLAINTEXT, None);
         assert_eq!(t.next_token(), Some(Token::EOF));
     }
 }
