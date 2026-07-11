@@ -209,6 +209,24 @@ impl Tokenizer for HtmlTokenizer {
             State::RAWTEXTLessThanSign => self.handle_rawtext_less_than_sign_state(),
             State::RAWTEXTEndTagOpen => self.handle_rawtext_end_tag_open_state(),
             State::RAWTEXTEndTagName => self.handle_rawtext_end_tag_name_state(),
+            State::ScriptData => self.handle_script_data_state(),
+            State::ScriptDataLessThanSign => self.handle_script_data_less_than_sign_state(),
+            State::ScriptDataEndTagOpen => self.handle_script_data_end_tag_open_state(),
+            State::ScriptDataEndTagName => self.handle_script_data_end_tag_name_state(),
+            State::ScriptDataEscapeStart => self.handle_script_data_escape_start_state(),
+            State::ScriptDataEscapeStartDash => self.handle_script_data_escape_start_dash_state(),
+            State::ScriptDataEscaped => self.handle_script_data_escaped_state(),
+            State::ScriptDataEscapedDash => self.handle_script_data_escaped_dash_state(),
+            State::ScriptDataEscapedDashDash => self.handle_script_data_escaped_dash_dash_state(),
+            State::ScriptDataEscapedLessThanSign => self.handle_script_data_escaped_less_than_sign_state(),
+            State::ScriptDataEscapedEndTagOpen => self.handle_script_data_escaped_end_tag_open_state(),
+            State::ScriptDataEscapedEndTagName => self.handle_script_data_escaped_end_tag_name_state(),
+            State::ScriptDataDoubleEscapeStart => self.handle_script_data_double_escape_start_state(),
+            State::ScriptDataDoubleEscaped => self.handle_script_data_double_escaped_state(),
+            State::ScriptDataDoubleEscapedDash => self.handle_script_data_double_escaped_dash_state(),
+            State::ScriptDataDoubleEscapedDashDash => self.handle_script_data_double_escaped_dash_dash_state(),
+            State::ScriptDataDoubleEscapedLessThanSign => self.handle_script_data_double_escaped_less_than_sign_state(),
+            State::ScriptDataDoubleEscapeEnd => self.handle_script_data_double_escape_end_state(),
             _ => panic!(
                 "State::{:?} is not yet implemented (TODO in types.rs)",
                 self.state
@@ -685,6 +703,738 @@ impl HtmlTokenizer {
         self.current_tag = None;
         self.temporary_buffer.clear();
         self.state = State::RAWTEXT;
+        self.reconsume = true;
+        None
+    }
+
+    // ── Script data states (§13.2.5.4, §13.2.5.15–§13.2.5.17) ────
+
+    /// §13.2.5.4 Script data state
+    ///
+    /// Consume the next input character:
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataLessThanSign
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → emit end-of-file token
+    /// - Anything else → emit character token
+    ///
+    /// Note: ScriptData does NOT handle `&` — no character references.
+    fn handle_script_data_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('<') => {
+                self.state = State::ScriptDataLessThanSign;
+                None
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(c) => Some(Token::Character(c)),
+            None => {
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.15 Script data less-than sign state
+    ///
+    /// Consume the next input character:
+    /// - U+002F SOLIDUS (/) → clear temporary buffer, ScriptDataEndTagOpen
+    /// - U+0021 EXCLAMATION MARK (!) → ScriptDataEscapeStart
+    /// - Anything else → emit `<` character token, reconsume in ScriptData
+    fn handle_script_data_less_than_sign_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('/') => {
+                self.temporary_buffer.clear();
+                self.state = State::ScriptDataEndTagOpen;
+                None
+            }
+            Some('!') => {
+                self.state = State::ScriptDataEscapeStart;
+                None
+            }
+            Some(_c) => {
+                self.state = State::ScriptData;
+                self.reconsume = true;
+                Some(Token::Character('<'))
+            }
+            None => {
+                self.state = State::ScriptData;
+                Some(Token::Character('<'))
+            }
+        }
+    }
+
+    /// §13.2.5.16 Script data end tag open state
+    ///
+    /// Consume the next input character:
+    /// - ASCII alpha → create end tag token (empty name), append lowercase,
+    ///   append original to temporary buffer, ScriptDataEndTagName
+    /// - Anything else → emit `<` + `/` char tokens, reconsume in ScriptData
+    fn handle_script_data_end_tag_open_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                let mut name = String::new();
+                name.push(c.to_ascii_lowercase());
+                self.temporary_buffer.push(c);
+                self.current_tag = Some(TagToken {
+                    kind: TagKind::End,
+                    name,
+                    attrs: Vec::new(),
+                    self_closing: false,
+                });
+                self.state = State::ScriptDataEndTagName;
+                None
+            }
+            Some(_c) => {
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                self.state = State::ScriptData;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                self.state = State::ScriptData;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.17 Script data end tag name state
+    ///
+    /// Consume the next input character:
+    /// - TAB/LF/FF/SPACE → if appropriate end tag, BeforeAttributeName;
+    ///   else "anything else"
+    /// - `/` → if appropriate end tag, SelfClosingStartTag; else "anything else"
+    /// - `>` → if appropriate end tag, emit tag, Data; else "anything else"
+    /// - ASCII upper alpha → append lowercase to tag name, append original to
+    ///   temporary buffer
+    /// - ASCII lower alpha → append to tag name, append to temporary buffer
+    /// - Anything else → emit `<` + `/` + temporary buffer chars, reconsume in
+    ///   ScriptData
+    fn handle_script_data_end_tag_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                if self.is_appropriate_end_tag() {
+                    self.state = State::BeforeAttributeName;
+                    None
+                } else {
+                    self.script_data_end_tag_name_backout()
+                }
+            }
+            Some('/') => {
+                if self.is_appropriate_end_tag() {
+                    self.state = State::SelfClosingStartTag;
+                    None
+                } else {
+                    self.script_data_end_tag_name_backout()
+                }
+            }
+            Some('>') => {
+                if self.is_appropriate_end_tag() {
+                    let tag = self.current_tag.take().unwrap();
+                    self.temporary_buffer.clear();
+                    self.state = State::Data;
+                    Some(Token::Tag(tag))
+                } else {
+                    self.script_data_end_tag_name_backout()
+                }
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c.to_ascii_lowercase());
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c);
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(_c) => self.script_data_end_tag_name_backout(),
+            None => self.script_data_end_tag_name_backout(),
+        }
+    }
+
+    /// §13.2.5.18 Script data escape start state
+    ///
+    /// Consume the next input character:
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapeStartDash
+    /// - Anything else → reconsume in ScriptData
+    fn handle_script_data_escape_start_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => {
+                self.state = State::ScriptDataEscapeStartDash;
+                None
+            }
+            Some(_c) => {
+                self.state = State::ScriptData;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                self.state = State::ScriptData;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.19 Script data escape start dash state
+    ///
+    /// Consume the next input character:
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDashDash
+    /// - Anything else → reconsume in ScriptData
+    fn handle_script_data_escape_start_dash_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => {
+                self.state = State::ScriptDataEscapedDashDash;
+                None
+            }
+            Some(_c) => {
+                self.state = State::ScriptData;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                self.state = State::ScriptData;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    // ── Script data escaped states (§13.2.5.20–§13.2.5.25) ──────
+
+    /// §13.2.5.20 Script data escaped state
+    ///
+    /// Consume the next input character:
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDash
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → parse error; emit end-of-file token
+    /// - Anything else → emit character token
+    fn handle_script_data_escaped_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => {
+                self.state = State::ScriptDataEscapedDash;
+                None
+            }
+            Some('<') => {
+                self.state = State::ScriptDataEscapedLessThanSign;
+                None
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(c) => Some(Token::Character(c)),
+            None => {
+                // TODO: record parse error (eof-in-script-html-comment-like-text)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.21 Script data escaped dash state
+    ///
+    /// Consume the next input character:
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDashDash
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → parse error; emit end-of-file token
+    /// - Anything else → emit `-`, reconsume in ScriptDataEscaped
+    fn handle_script_data_escaped_dash_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => {
+                self.state = State::ScriptDataEscapedDashDash;
+                None
+            }
+            Some('<') => {
+                self.state = State::ScriptDataEscapedLessThanSign;
+                None
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(_c) => {
+                self.state = State::ScriptDataEscaped;
+                self.reconsume = true;
+                Some(Token::Character('-'))
+            }
+            None => {
+                // TODO: record parse error (eof-in-script-html-comment-like-text)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.22 Script data escaped dash dash state
+    ///
+    /// Consume the next input character:
+    /// - U+002D HYPHEN-MINUS (-) → emit `-`
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign
+    /// - U+003E GREATER-THAN SIGN (>) → emit `>`, switch to ScriptData
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → parse error; emit end-of-file token
+    /// - Anything else → emit `--`, reconsume in ScriptDataEscaped
+    fn handle_script_data_escaped_dash_dash_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => Some(Token::Character('-')),
+            Some('<') => {
+                self.state = State::ScriptDataEscapedLessThanSign;
+                None
+            }
+            Some('>') => {
+                self.state = State::ScriptData;
+                Some(Token::Character('>'))
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(c) => {
+                self.state = State::ScriptDataEscaped;
+                self.reconsume = true;
+                // Emit "--" via pending tokens
+                self.pending_tokens.push(Token::Character('-'));
+                self.pending_tokens.push(Token::Character('-'));
+                Some(Token::Character(c))
+            }
+            None => {
+                // TODO: record parse error (eof-in-script-html-comment-like-text)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.23 Script data escaped less-than sign state
+    ///
+    /// Consume the next input character:
+    /// - U+002F SOLIDUS (/) → clear temporary buffer, ScriptDataEscapedEndTagOpen
+    /// - ASCII alpha → clear temporary buffer, create end tag, append
+    ///   lowercase + original to temp, ScriptDataDoubleEscapeStart
+    /// - Anything else → emit `<`, reconsume in ScriptDataEscaped
+    fn handle_script_data_escaped_less_than_sign_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('/') => {
+                self.temporary_buffer.clear();
+                self.state = State::ScriptDataEscapedEndTagOpen;
+                None
+            }
+            Some(c) if c.is_ascii_alphabetic() => {
+                self.temporary_buffer.clear();
+                let mut name = String::new();
+                name.push(c.to_ascii_lowercase());
+                self.temporary_buffer.push(c);
+                self.current_tag = Some(TagToken {
+                    kind: TagKind::End,
+                    name,
+                    attrs: Vec::new(),
+                    self_closing: false,
+                });
+                self.state = State::ScriptDataDoubleEscapeStart;
+                None
+            }
+            Some(_c) => {
+                self.state = State::ScriptDataEscaped;
+                self.reconsume = true;
+                Some(Token::Character('<'))
+            }
+            None => {
+                self.state = State::ScriptDataEscaped;
+                Some(Token::Character('<'))
+            }
+        }
+    }
+
+    /// §13.2.5.24 Script data escaped end tag open state
+    ///
+    /// Consume the next input character:
+    /// - ASCII alpha → create end tag (empty name), append lowercase + original
+    ///   to temp, ScriptDataEscapedEndTagName
+    /// - Anything else → emit `<` + `/`, reconsume in ScriptDataEscaped
+    fn handle_script_data_escaped_end_tag_open_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                let mut name = String::new();
+                name.push(c.to_ascii_lowercase());
+                self.temporary_buffer.push(c);
+                self.current_tag = Some(TagToken {
+                    kind: TagKind::End,
+                    name,
+                    attrs: Vec::new(),
+                    self_closing: false,
+                });
+                self.state = State::ScriptDataEscapedEndTagName;
+                None
+            }
+            Some(_c) => {
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                self.state = State::ScriptDataEscaped;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                self.state = State::ScriptDataEscaped;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.25 Script data escaped end tag name state
+    ///
+    /// Same pattern as other end tag name states but returns to
+    /// ScriptDataEscaped on backout.
+    fn handle_script_data_escaped_end_tag_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                if self.is_appropriate_end_tag() {
+                    self.state = State::BeforeAttributeName;
+                    None
+                } else {
+                    self.script_data_escaped_end_tag_name_backout()
+                }
+            }
+            Some('/') => {
+                if self.is_appropriate_end_tag() {
+                    self.state = State::SelfClosingStartTag;
+                    None
+                } else {
+                    self.script_data_escaped_end_tag_name_backout()
+                }
+            }
+            Some('>') => {
+                if self.is_appropriate_end_tag() {
+                    let tag = self.current_tag.take().unwrap();
+                    self.temporary_buffer.clear();
+                    self.state = State::Data;
+                    Some(Token::Tag(tag))
+                } else {
+                    self.script_data_escaped_end_tag_name_backout()
+                }
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c.to_ascii_lowercase());
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c);
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(_c) => self.script_data_escaped_end_tag_name_backout(),
+            None => self.script_data_escaped_end_tag_name_backout(),
+        }
+    }
+
+    // ── Script data double escaped states (§13.2.5.26–§13.2.5.31) ─
+
+    /// §13.2.5.26 Script data double escape start state
+    ///
+    /// Checks whether the accumulated temporary buffer matches "script".
+    /// If so, enters double-escaped mode. Otherwise returns to escaped.
+    ///
+    /// - TAB/LF/FF/SPACE, `/`, or `>` → if temp buffer is "script",
+    ///   ScriptDataDoubleEscaped; else ScriptDataEscaped
+    /// - ASCII upper alpha → append lowercase to tag name, append original
+    ///   to temp buffer
+    /// - ASCII lower alpha → append to tag name, append to temp buffer
+    /// - Anything else → reconsume in ScriptDataEscaped
+    fn handle_script_data_double_escape_start_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ')
+            | Some('/') | Some('>') => {
+                // Check if temp buffer is exactly "script"
+                if self.temporary_buffer == "script" {
+                    // Tag persists into DoubleEscaped for later emission in
+                    // DoubleEscapeEnd (§13.2.5.31).
+                    self.temporary_buffer.clear();
+                    self.state = State::ScriptDataDoubleEscaped;
+                } else {
+                    self.current_tag = None;
+                    self.temporary_buffer.clear();
+                    self.state = State::ScriptDataEscaped;
+                }
+                None
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c.to_ascii_lowercase());
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c);
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(_c) => {
+                self.current_tag = None;
+                self.temporary_buffer.clear();
+                self.state = State::ScriptDataEscaped;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                self.current_tag = None;
+                self.temporary_buffer.clear();
+                self.state = State::ScriptDataEscaped;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.27 Script data double escaped state
+    ///
+    /// Consume the next input character:
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataDoubleEscapedDash, emit `-`
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataDoubleEscapedLessThanSign,
+    ///   emit `<`
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → parse error; emit end-of-file token
+    /// - Anything else → emit character token
+    fn handle_script_data_double_escaped_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => {
+                self.state = State::ScriptDataDoubleEscapedDash;
+                Some(Token::Character('-'))
+            }
+            Some('<') => {
+                self.state = State::ScriptDataDoubleEscapedLessThanSign;
+                Some(Token::Character('<'))
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(c) => Some(Token::Character(c)),
+            None => {
+                // TODO: record parse error (eof-in-script-html-comment-like-text)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.28 Script data double escaped dash state
+    ///
+    /// Consume the next input character:
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataDoubleEscapedDashDash, emit `-`
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataDoubleEscapedLessThanSign,
+    ///   emit `<`
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → parse error; emit end-of-file token
+    /// - Anything else → emit `-`, reconsume in ScriptDataDoubleEscaped
+    fn handle_script_data_double_escaped_dash_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => {
+                self.state = State::ScriptDataDoubleEscapedDashDash;
+                Some(Token::Character('-'))
+            }
+            Some('<') => {
+                self.state = State::ScriptDataDoubleEscapedLessThanSign;
+                Some(Token::Character('<'))
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(_c) => {
+                self.state = State::ScriptDataDoubleEscaped;
+                self.reconsume = true;
+                Some(Token::Character('-'))
+            }
+            None => {
+                // TODO: record parse error (eof-in-script-html-comment-like-text)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.29 Script data double escaped dash dash state
+    ///
+    /// Consume the next input character:
+    /// - U+002D HYPHEN-MINUS (-) → emit `-`
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataDoubleEscapedLessThanSign,
+    ///   emit `<`
+    /// - U+003E GREATER-THAN SIGN (>) → emit `>`, switch to ScriptData
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → parse error; emit end-of-file token
+    /// - Anything else → emit `--`, reconsume in ScriptDataDoubleEscaped
+    fn handle_script_data_double_escaped_dash_dash_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('-') => Some(Token::Character('-')),
+            Some('<') => {
+                self.state = State::ScriptDataDoubleEscapedLessThanSign;
+                Some(Token::Character('<'))
+            }
+            Some('>') => {
+                self.state = State::ScriptData;
+                Some(Token::Character('>'))
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(c) => {
+                self.state = State::ScriptDataDoubleEscaped;
+                self.reconsume = true;
+                self.pending_tokens.push(Token::Character('-'));
+                self.pending_tokens.push(Token::Character('-'));
+                Some(Token::Character(c))
+            }
+            None => {
+                // TODO: record parse error (eof-in-script-html-comment-like-text)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.30 Script data double escaped less-than sign state
+    ///
+    /// Consume the next input character:
+    /// - U+002F SOLIDUS (/) → clear temporary buffer, emit `/`,
+    ///   ScriptDataDoubleEscapeEnd
+    /// - Anything else → emit `<`, reconsume in ScriptDataDoubleEscaped
+    fn handle_script_data_double_escaped_less_than_sign_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('/') => {
+                self.temporary_buffer.clear();
+                self.state = State::ScriptDataDoubleEscapeEnd;
+                // Emit `/` via pending — the spec says "Emit a U+002F SOLIDUS
+                // character token."
+                self.pending_tokens.push(Token::Character('/'));
+                None
+            }
+            Some(_c) => {
+                self.state = State::ScriptDataDoubleEscaped;
+                self.reconsume = true;
+                Some(Token::Character('<'))
+            }
+            None => {
+                self.state = State::ScriptDataDoubleEscaped;
+                Some(Token::Character('<'))
+            }
+        }
+    }
+
+    /// §13.2.5.31 Script data double escape end state
+    ///
+    /// Checks whether the accumulated temporary buffer matches "script".
+    /// If so, exits double-escaped mode back to escaped. Otherwise backout.
+    ///
+    /// - TAB/LF/FF/SPACE, `/`, or `>` → if temp buffer is "script", emit the
+    ///   current tag token, switch to ScriptDataEscaped; else emit `<` + `/` +
+    ///   temp buffer chars, reconsume in ScriptDataDoubleEscaped
+    /// - ASCII upper alpha → append lowercase to tag name, append original
+    ///   to temp buffer
+    /// - ASCII lower alpha → append to tag name, append to temp buffer
+    /// - Anything else → emit `<` + `/` + temp buffer chars, reconsume in
+    ///   ScriptDataDoubleEscaped
+    fn handle_script_data_double_escape_end_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ')
+            | Some('/') | Some('>') => {
+                if self.temporary_buffer == "script" {
+                    // Exit double-escaped: emit the tag token, return to escaped
+                    if let Some(tag) = self.current_tag.take() {
+                        self.temporary_buffer.clear();
+                        self.state = State::ScriptDataEscaped;
+                        Some(Token::Tag(tag))
+                    } else {
+                        self.temporary_buffer.clear();
+                        self.state = State::ScriptDataEscaped;
+                        None
+                    }
+                } else {
+                    self.script_data_double_escaped_end_tag_name_backout()
+                }
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c.to_ascii_lowercase());
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.name.push(c);
+                }
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(_c) => self.script_data_double_escaped_end_tag_name_backout(),
+            None => self.script_data_double_escaped_end_tag_name_backout(),
+        }
+    }
+
+    // ── Script data backout helpers ─────────────────────────────
+
+    /// Helper: "anything else" backout for ScriptData end tag name state.
+    fn script_data_end_tag_name_backout(&mut self) -> Option<Token> {
+        for ch in self.temporary_buffer.chars().rev() {
+            self.pending_tokens.push(Token::Character(ch));
+        }
+        self.pending_tokens.push(Token::Character('/'));
+        self.pending_tokens.push(Token::Character('<'));
+        self.current_tag = None;
+        self.temporary_buffer.clear();
+        self.state = State::ScriptData;
+        self.reconsume = true;
+        None
+    }
+
+    /// Helper: "anything else" backout for ScriptDataEscaped end tag name.
+    fn script_data_escaped_end_tag_name_backout(&mut self) -> Option<Token> {
+        for ch in self.temporary_buffer.chars().rev() {
+            self.pending_tokens.push(Token::Character(ch));
+        }
+        self.pending_tokens.push(Token::Character('/'));
+        self.pending_tokens.push(Token::Character('<'));
+        self.current_tag = None;
+        self.temporary_buffer.clear();
+        self.state = State::ScriptDataEscaped;
+        self.reconsume = true;
+        None
+    }
+
+    /// Helper: "anything else" backout for ScriptDataDoubleEscapeEnd.
+    fn script_data_double_escaped_end_tag_name_backout(&mut self) -> Option<Token> {
+        for ch in self.temporary_buffer.chars().rev() {
+            self.pending_tokens.push(Token::Character(ch));
+        }
+        self.pending_tokens.push(Token::Character('/'));
+        self.pending_tokens.push(Token::Character('<'));
+        self.current_tag = None;
+        self.temporary_buffer.clear();
+        self.state = State::ScriptDataDoubleEscaped;
         self.reconsume = true;
         None
     }
@@ -3652,5 +4402,190 @@ mod tests {
     fn plaintext_eof_emits_eof() {
         let mut t = enter_content_model("", State::PLAINTEXT, None);
         assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    // ── Script data tests (§13.2.5.4, §13.2.5.15–§13.2.5.31) ────
+
+    #[test]
+    fn script_data_emits_characters() {
+        let mut t = enter_content_model("abc", State::ScriptData, Some("script"));
+        assert_eq!(t.next_token(), Some(Token::Character('a')));
+        assert_eq!(t.next_token(), Some(Token::Character('b')));
+        assert_eq!(t.next_token(), Some(Token::Character('c')));
+    }
+
+    #[test]
+    fn script_data_null_emits_replacement_char() {
+        let mut t = enter_content_model("\0", State::ScriptData, Some("script"));
+        assert_eq!(t.next_token(), Some(Token::Character('\u{FFFD}')));
+    }
+
+    #[test]
+    fn script_data_ampersand_is_literal() {
+        // ScriptData does NOT handle `&` — no character references
+        let mut t = enter_content_model("&amp;", State::ScriptData, Some("script"));
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+        assert_eq!(t.next_token(), Some(Token::Character('a')));
+    }
+
+    #[test]
+    fn script_data_lt_switches_to_less_than_sign() {
+        let mut t = enter_content_model("<", State::ScriptData, Some("script"));
+        assert_eq!(t.next_token(), None); // '<' → ScriptDataLessThanSign
+        assert_eq!(t.state(), State::ScriptDataLessThanSign);
+    }
+
+    #[test]
+    fn script_data_lt_excl_to_escape_start() {
+        // `<!` in ScriptData: '<' → LessThanSign, '!' → EscapeStart
+        let mut t = enter_content_model("<!", State::ScriptData, Some("script"));
+        assert_eq!(t.next_token(), None); // '<' → LessThanSign
+        assert_eq!(t.next_token(), None); // '!' → EscapeStart
+        assert_eq!(t.state(), State::ScriptDataEscapeStart);
+    }
+
+    #[test]
+    fn script_data_escape_start_dash_chain() {
+        // `<!--` in ScriptData → escape start chain
+        let mut t = enter_content_model("<!--", State::ScriptData, Some("script"));
+        assert_eq!(t.next_token(), None); // '<' → LessThanSign
+        assert_eq!(t.next_token(), None); // '!' → EscapeStart
+        assert_eq!(t.next_token(), None); // '-' → EscapeStartDash
+        assert_eq!(t.next_token(), None); // '-' → EscapedDashDash
+        assert_eq!(t.state(), State::ScriptDataEscapedDashDash);
+    }
+
+    #[test]
+    fn script_data_end_tag_match() {
+        // `</script>` in ScriptData matches appropriate end tag
+        let mut t = enter_content_model("</script>", State::ScriptData, Some("script"));
+        // '<' → LessThanSign
+        assert_eq!(t.next_token(), None);
+        // '/' → EndTagOpen
+        assert_eq!(t.next_token(), None);
+        // 's','c','r','i','p','t' → EndTagName
+        for _ in 0..6 { assert_eq!(t.next_token(), None); }
+        // '>' → match → emit tag, Data
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Tag(TagToken {
+                kind: TagKind::End,
+                name: "script".into(),
+                attrs: vec![],
+                self_closing: false,
+            }))
+        );
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn script_data_end_tag_no_match_backout() {
+        // `</div>x` in ScriptData — not appropriate, backout
+        let mut t = enter_content_model("</div>x", State::ScriptData, Some("script"));
+        assert_eq!(t.next_token(), None); // '<' → LessThanSign
+        assert_eq!(t.next_token(), None); // '/' → EndTagOpen
+        for _ in 0..3 { assert_eq!(t.next_token(), None); } // 'd','i','v'
+        assert_eq!(t.next_token(), None); // '>' → not appropriate → backout
+        // Pending tokens drained
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+        assert_eq!(t.next_token(), Some(Token::Character('/')));
+        assert_eq!(t.next_token(), Some(Token::Character('d')));
+        assert_eq!(t.next_token(), Some(Token::Character('i')));
+        assert_eq!(t.next_token(), Some(Token::Character('v')));
+        // '>' re-consumed in ScriptData
+        assert_eq!(t.next_token(), Some(Token::Character('>')));
+        assert_eq!(t.state(), State::ScriptData);
+    }
+
+    #[test]
+    fn script_data_escaped_emits_chars() {
+        let mut t = enter_content_model("x", State::ScriptDataEscaped, Some("script"));
+        assert_eq!(t.next_token(), Some(Token::Character('x')));
+    }
+
+    #[test]
+    fn script_data_escaped_dash_dash_gt_exits_escape() {
+        // `-->` in escaped mode: dash dash dash → emit '>', back to ScriptData
+        let mut t = enter_content_model("-->", State::ScriptDataEscaped, Some("script"));
+        assert_eq!(t.next_token(), None); // '-' → EscapedDash
+        assert_eq!(t.next_token(), None); // '-' → EscapedDashDash
+        assert_eq!(t.next_token(), Some(Token::Character('>'))); // '>' → emit, back to ScriptData
+        assert_eq!(t.state(), State::ScriptData);
+    }
+
+    #[test]
+    fn script_data_escaped_lt_alpha_to_double_escape_start() {
+        // `<s` in escaped: '<' → LessThanSign, 's' → DoubleEscapeStart
+        let mut t = enter_content_model("<s", State::ScriptDataEscaped, Some("script"));
+        assert_eq!(t.next_token(), None); // '<' → EscapedLessThanSign
+        assert_eq!(t.next_token(), None); // 's' → DoubleEscapeStart (alpha)
+        assert_eq!(t.state(), State::ScriptDataDoubleEscapeStart);
+    }
+
+    #[test]
+    fn script_data_double_escape_start_script_match() {
+        // In DoubleEscapeStart, `script` + `/` → enter DoubleEscaped
+        let mut t = enter_content_model("script/", State::ScriptDataDoubleEscapeStart, Some("script"));
+        for _ in 0..6 { assert_eq!(t.next_token(), None); } // 's','c','r','i','p','t' → accumulate
+        assert_eq!(t.next_token(), None); // '/' → temp buffer is "script" → DoubleEscaped
+        assert_eq!(t.state(), State::ScriptDataDoubleEscaped);
+    }
+
+    #[test]
+    fn script_data_double_escape_start_not_script() {
+        // In DoubleEscapeStart, `foo ` → not "script" → back to Escaped
+        let mut t = enter_content_model("foo ", State::ScriptDataDoubleEscapeStart, Some("script"));
+        for _ in 0..3 { assert_eq!(t.next_token(), None); } // 'f','o','o'
+        assert_eq!(t.next_token(), None); // ' ' → not "script" → Escaped
+        assert_eq!(t.state(), State::ScriptDataEscaped);
+    }
+
+    #[test]
+    fn script_data_double_escaped_emits_chars() {
+        let mut t = enter_content_model("hi", State::ScriptDataDoubleEscaped, Some("script"));
+        assert_eq!(t.next_token(), Some(Token::Character('h')));
+        assert_eq!(t.next_token(), Some(Token::Character('i')));
+    }
+
+    #[test]
+    fn script_data_double_escaped_lt_emits_lt() {
+        // In DoubleEscaped, '<' emits '<' immediately, switches to DoubleEscapedLessThanSign
+        let mut t = enter_content_model("<", State::ScriptDataDoubleEscaped, Some("script"));
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+        assert_eq!(t.state(), State::ScriptDataDoubleEscapedLessThanSign);
+    }
+
+    #[test]
+    fn script_data_double_escaped_dash_dash_gt_to_script_data() {
+        // `-->` in double escaped → exit to ScriptData
+        let mut t = enter_content_model("-->", State::ScriptDataDoubleEscaped, Some("script"));
+        assert_eq!(t.next_token(), Some(Token::Character('-'))); // '-' → DoubleEscapedDash, emit '-'
+        assert_eq!(t.next_token(), Some(Token::Character('-'))); // '-' → DoubleEscapedDashDash, emit '-'
+        assert_eq!(t.next_token(), Some(Token::Character('>'))); // '>' → emit '>', ScriptData
+        assert_eq!(t.state(), State::ScriptData);
+    }
+
+    #[test]
+    fn script_data_double_escape_end_script_match() {
+        // Simulate entering DoubleEscapeEnd with `/` path.
+        // In DoubleEscaped, `</` → pend `/`, switch to DoubleEscapeEnd.
+        // Then `script/` → temp buffer is "script" → exit to Escaped.
+        // Since we entered via `/` path (no alpha tag creation),
+        // no tag token is emitted — just state transition.
+        let mut t = enter_content_model("</script/", State::ScriptDataDoubleEscaped, Some("script"));
+        // '<' → emit '<', switch to DoubleEscapedLessThanSign
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+        assert_eq!(t.state(), State::ScriptDataDoubleEscapedLessThanSign);
+        // '/' → push '/', switch to DoubleEscapeEnd
+        assert_eq!(t.next_token(), None);
+        // pending pops '/'
+        assert_eq!(t.next_token(), Some(Token::Character('/')));
+        assert_eq!(t.state(), State::ScriptDataDoubleEscapeEnd);
+        // 's','c','r','i','p','t' → accumulate
+        for _ in 0..6 { assert_eq!(t.next_token(), None); }
+        // '/' → temp buffer == "script" → no tag (entered via / path) →
+        // just switch to Escaped
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::ScriptDataEscaped);
     }
 }

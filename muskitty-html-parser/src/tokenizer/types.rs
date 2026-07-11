@@ -85,8 +85,6 @@ pub enum State {
     /// §13.2.5.3 RAWTEXT state
     RAWTEXT,
     /// §13.2.5.4 Script data state
-    ///
-    /// TODO: not yet implemented
     ScriptData,
     /// §13.2.5.5 PLAINTEXT state
     PLAINTEXT,
@@ -117,72 +115,38 @@ pub enum State {
 
     // ── Script data states ────────────────────────────────
     /// §13.2.5.15 Script data less-than sign state
-    ///
-    /// TODO: not yet implemented
     ScriptDataLessThanSign,
     /// §13.2.5.16 Script data end tag open state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEndTagOpen,
     /// §13.2.5.17 Script data end tag name state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEndTagName,
     /// §13.2.5.18 Script data escape start state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEscapeStart,
     /// §13.2.5.19 Script data escape start dash state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEscapeStartDash,
     /// §13.2.5.20 Script data escaped state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEscaped,
     /// §13.2.5.21 Script data escaped dash state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEscapedDash,
     /// §13.2.5.22 Script data escaped dash dash state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEscapedDashDash,
     /// §13.2.5.23 Script data escaped less-than sign state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEscapedLessThanSign,
     /// §13.2.5.24 Script data escaped end tag open state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEscapedEndTagOpen,
     /// §13.2.5.25 Script data escaped end tag name state
-    ///
-    /// TODO: not yet implemented
     ScriptDataEscapedEndTagName,
     /// §13.2.5.26 Script data double escape start state
-    ///
-    /// TODO: not yet implemented
     ScriptDataDoubleEscapeStart,
     /// §13.2.5.27 Script data double escaped state
-    ///
-    /// TODO: not yet implemented
     ScriptDataDoubleEscaped,
     /// §13.2.5.28 Script data double escaped dash state
-    ///
-    /// TODO: not yet implemented
     ScriptDataDoubleEscapedDash,
     /// §13.2.5.29 Script data double escaped dash dash state
-    ///
-    /// TODO: not yet implemented
     ScriptDataDoubleEscapedDashDash,
     /// §13.2.5.30 Script data double escaped less-than sign state
-    ///
-    /// TODO: not yet implemented
     ScriptDataDoubleEscapedLessThanSign,
     /// §13.2.5.31 Script data double escape end state
-    ///
-    /// TODO: not yet implemented
     ScriptDataDoubleEscapeEnd,
 
     // ── Attribute states ──────────────────────────────────
