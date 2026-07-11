@@ -245,10 +245,9 @@ impl Tokenizer for HtmlTokenizer {
             State::NumericCharacterReferenceEnd => self.handle_numeric_character_reference_end_state(),
             State::NamedCharacterReference => self.handle_named_character_reference_state(),
             State::AmbiguousAmpersand => self.handle_ambiguous_ampersand_state(),
-            _ => panic!(
-                "State::{:?} is not yet implemented (TODO in types.rs)",
-                self.state
-            ),
+            State::CDATASection => self.handle_cdata_section_state(),
+            State::CDATASectionBracket => self.handle_cdata_section_bracket_state(),
+            State::CDATASectionEnd => self.handle_cdata_section_end_state(),
         };
         result
     }
@@ -2218,7 +2217,6 @@ impl HtmlTokenizer {
             let slice: String = self.input[self.pos..self.pos + 7].iter().collect();
             if slice == "[CDATA[" {
                 self.pos += 7;
-                // TODO: Step 1.8 — CDATA 状态尚未实现
                 self.state = State::CDATASection;
                 return None;
             }
@@ -2228,6 +2226,93 @@ impl HtmlTokenizer {
         // 注意：不消费任何字符，BogusComment 会自行消费
         self.state = State::BogusComment;
         None
+    }
+
+    // ── CDATA section states (§13.2.5.69–§13.2.5.71) ────────────
+
+    /// §13.2.5.69 CDATA section state
+    ///
+    /// Consume the next input character:
+    /// - U+005D RIGHT SQUARE BRACKET (]) → CDATASectionBracket
+    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - EOF → parse error; emit end-of-file token
+    /// - Anything else → emit character token
+    fn handle_cdata_section_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(']') => {
+                self.state = State::CDATASectionBracket;
+                None
+            }
+            Some('\0') => {
+                // TODO: record parse error (unexpected-null-character)
+                Some(Token::Character('\u{FFFD}'))
+            }
+            Some(c) => Some(Token::Character(c)),
+            None => {
+                // TODO: record parse error (eof-in-cdata)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+        }
+    }
+
+    /// §13.2.5.70 CDATA section bracket state
+    ///
+    /// Consume the next input character:
+    /// - U+005D RIGHT SQUARE BRACKET (]) → CDATASectionEnd
+    /// - Anything else → emit `]`, reconsume in CDATASection
+    fn handle_cdata_section_bracket_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(']') => {
+                self.state = State::CDATASectionEnd;
+                None
+            }
+            Some(_c) => {
+                self.state = State::CDATASection;
+                self.reconsume = true;
+                Some(Token::Character(']'))
+            }
+            None => {
+                // TODO: record parse error (eof-in-cdata)
+                self.eof_emitted = true;
+                Some(Token::Character(']'))
+            }
+        }
+    }
+
+    /// §13.2.5.71 CDATA section end state
+    ///
+    /// Consume the next input character:
+    /// - U+003E GREATER-THAN SIGN (>) → switch to Data (CDATA closed)
+    /// - U+005D RIGHT SQUARE BRACKET (]) → emit `]`, stay
+    /// - Anything else → emit `]]`, reconsume in CDATASection
+    fn handle_cdata_section_end_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('>') => {
+                self.state = State::Data;
+                None // CDATA closed — no token emitted
+            }
+            Some(']') => {
+                // Emit `]`, stay in CDATASectionEnd (handles `]]]`)
+                Some(Token::Character(']'))
+            }
+            Some(_c) => {
+                // Emit `]]` via pending, reconsume in CDATASection
+                self.pending_tokens.push(Token::Character(']'));
+                self.pending_tokens.push(Token::Character(']'));
+                self.state = State::CDATASection;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                // TODO: record parse error (eof-in-cdata)
+                self.pending_tokens.push(Token::Character(']'));
+                self.pending_tokens.push(Token::Character(']'));
+                self.state = State::CDATASection;
+                self.reconsume = true;
+                None
+            }
+        }
     }
 
     // ── DOCTYPE helpers ───────────────────────────────────────────
@@ -5257,5 +5342,65 @@ mod tests {
         for _ in 0..4 { assert_eq!(t.next_token(), None); } // &gt; resolved
         assert_eq!(t.next_token(), Some(Token::Character('>')));
         assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    // ── CDATA section tests (§13.2.5.69–§13.2.5.71) ─────────
+
+    #[test]
+    fn cdata_emits_characters() {
+        // `<![CDATA[hello]]>` via MarkupDeclarationOpen
+        let mut t = HtmlTokenizer::new("<![CDATA[hello]]>");
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.next_token(), None); // "[CDATA[" → CDATASection
+        assert_eq!(t.next_token(), Some(Token::Character('h')));
+        assert_eq!(t.next_token(), Some(Token::Character('e')));
+        assert_eq!(t.next_token(), Some(Token::Character('l')));
+        assert_eq!(t.next_token(), Some(Token::Character('l')));
+        assert_eq!(t.next_token(), Some(Token::Character('o')));
+        // ']' → CDATASectionBracket
+        assert_eq!(t.next_token(), None);
+        // ']' → CDATASectionEnd
+        assert_eq!(t.next_token(), None);
+        // '>' → Data (CDATA closed, no token emitted)
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::Data);
+    }
+
+    #[test]
+    fn cdata_null_emits_replacement_char() {
+        let mut t = enter_content_model("\0x", State::CDATASection, None);
+        assert_eq!(t.next_token(), Some(Token::Character('\u{FFFD}')));
+        assert_eq!(t.next_token(), Some(Token::Character('x')));
+    }
+
+    #[test]
+    fn cdata_bracket_not_followed_by_bracket() {
+        // `]x` in CDATA: `]` → Bracket, `x` → emit `]` + reconsume
+        let mut t = enter_content_model("]x", State::CDATASection, None);
+        assert_eq!(t.next_token(), None); // ']' → Bracket
+        assert_eq!(t.next_token(), Some(Token::Character(']'))); // 'x' → emit ']'
+        assert_eq!(t.next_token(), Some(Token::Character('x'))); // reconsume 'x' in CDATA
+    }
+
+    #[test]
+    fn cdata_double_bracket_then_not_gt() {
+        // `]]x` in CDATA: ']' → Bracket, ']' → End, 'x' → emit ']]' + reconsume
+        let mut t = enter_content_model("]]x", State::CDATASection, None);
+        assert_eq!(t.next_token(), None); // ']' → Bracket
+        assert_eq!(t.next_token(), None); // ']' → End
+        assert_eq!(t.next_token(), None); // 'x' → emit ']]' (pending), reconsume
+        assert_eq!(t.next_token(), Some(Token::Character(']'))); // pending ']'
+        assert_eq!(t.next_token(), Some(Token::Character(']'))); // pending ']'
+        assert_eq!(t.next_token(), Some(Token::Character('x'))); // reconsume 'x'
+    }
+
+    #[test]
+    fn cdata_end_extra_bracket() {
+        // `]]]` → third bracket emitted, stays in End
+        let mut t = enter_content_model("]]]", State::CDATASection, None);
+        assert_eq!(t.next_token(), None); // ']' → Bracket
+        assert_eq!(t.next_token(), None); // ']' → End
+        assert_eq!(t.next_token(), Some(Token::Character(']'))); // ']' → emit, stay in End
     }
 }

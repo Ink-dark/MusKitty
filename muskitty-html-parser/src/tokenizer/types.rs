@@ -231,16 +231,10 @@ pub enum State {
 
     // ── CDATA section states ──────────────────────────────
     /// §13.2.5.69 CDATA section state
-    ///
-    /// TODO: not yet implemented
     CDATASection,
     /// §13.2.5.70 CDATA section bracket state
-    ///
-    /// TODO: not yet implemented
     CDATASectionBracket,
     /// §13.2.5.71 CDATA section end state
-    ///
-    /// TODO: not yet implemented
     CDATASectionEnd,
 
     // ── Character reference states ────────────────────────
