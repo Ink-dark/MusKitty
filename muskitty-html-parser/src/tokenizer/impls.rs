@@ -128,6 +128,8 @@ impl Tokenizer for HtmlTokenizer {
             State::SelfClosingStartTag => self.handle_self_closing_start_tag_state(),
             State::MarkupDeclarationOpen => self.handle_markup_declaration_open_state(),
             State::Doctype => self.handle_doctype_state(),
+            State::BeforeDoctypeName => self.handle_before_doctype_name_state(),
+            State::DoctypeName => self.handle_doctype_name_state(),
             State::BogusComment => self.handle_bogus_comment_state(),
             State::CommentStart => self.handle_comment_start_state(),
             State::CommentStartDash => self.handle_comment_start_dash_state(),
@@ -490,6 +492,83 @@ impl HtmlTokenizer {
                 self.current_doctype.force_quirks = true;
                 let token = self.emit_current_doctype();
                 Some(token)
+            }
+        }
+    }
+
+    /// §13.2.5.54 Before DOCTYPE name state
+    fn handle_before_doctype_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                // 跳过空白
+                None
+            }
+            Some('\0') => {
+                // TODO: parse error (unexpected-null-character)
+                self.current_doctype.name = Some(String::from("\u{FFFD}"));
+                self.state = State::DoctypeName;
+                None
+            }
+            Some('>') => {
+                // TODO: parse error (missing-doctype-name)
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            None => {
+                // TODO: parse error (eof-in-doctype)
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(c) => {
+                // 创建 DOCTYPE name（ASCII 大写→小写）
+                let ch = if c.is_ascii_uppercase() {
+                    c.to_ascii_lowercase()
+                } else {
+                    c
+                };
+                self.current_doctype.name = Some(String::from(ch));
+                self.state = State::DoctypeName;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.55 DOCTYPE name state
+    fn handle_doctype_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.state = State::AfterDoctypeName;
+                None
+            }
+            Some('>') => {
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some('\0') => {
+                // TODO: parse error (unexpected-null-character)
+                if let Some(ref mut name) = self.current_doctype.name {
+                    name.push('\u{FFFD}');
+                }
+                None
+            }
+            None => {
+                // TODO: parse error (eof-in-doctype)
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(c) => {
+                let ch = if c.is_ascii_uppercase() {
+                    c.to_ascii_lowercase()
+                } else {
+                    c
+                };
+                if let Some(ref mut name) = self.current_doctype.name {
+                    name.push(ch);
+                }
+                None
             }
         }
     }
@@ -1572,6 +1651,101 @@ mod tests {
         // 'h' → reconsume → BeforeDoctypeName
         assert_eq!(t.next_token(), None);
         assert_eq!(t.state(), State::BeforeDoctypeName);
+    }
+
+    // ── DOCTYPE 名称测试 (§13.2.5.54–§13.2.5.55) ─────────────────
+
+    /// 辅助：推进到 BeforeDoctypeName（Doctype 已跳过空白）
+    fn enter_before_doctype_name(input: &str) -> HtmlTokenizer {
+        let mut t = enter_doctype(input);
+        while t.state() == State::Doctype {
+            assert_eq!(t.next_token(), None);
+        }
+        assert_eq!(t.state(), State::BeforeDoctypeName);
+        t
+    }
+
+    #[test]
+    fn doctype_name_simple_html() {
+        let mut t = enter_before_doctype_name("<!DOCTYPE html>");
+        assert_eq!(t.next_token(), None); // 'h' → DoctypeName
+        assert_eq!(t.state(), State::DoctypeName);
+        for _ in 0..3 { assert_eq!(t.next_token(), None); } // 't','m','l'
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: None,
+                system_id: None,
+                force_quirks: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn doctype_name_uppercase() {
+        let mut t = enter_before_doctype_name("<!DOCTYPE HTML>");
+        assert_eq!(t.next_token(), None); // 'H'→'h'
+        assert_eq!(t.next_token(), None); // 'T'→'t'
+        assert_eq!(t.next_token(), None); // 'M'→'m'
+        assert_eq!(t.next_token(), None); // 'L'→'l'
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: None,
+                system_id: None,
+                force_quirks: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn doctype_name_null_char() {
+        let mut t = enter_before_doctype_name("<!DOCTYPE html\0x>");
+        for _ in 0..4 { assert_eq!(t.next_token(), None); } // 'h','t','m','l'
+        assert_eq!(t.next_token(), None); // '\0' → U+FFFD
+        assert_eq!(t.next_token(), None); // 'x'
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Doctype(DoctypeToken {
+                name: Some("html\u{FFFD}x".into()),
+                public_id: None,
+                system_id: None,
+                force_quirks: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn doctype_before_name_empty_gt() {
+        let mut t = enter_doctype("<!DOCTYPE >");
+        assert_eq!(t.next_token(), None); // ' ' → stay Doctype
+        assert_eq!(t.next_token(), None); // '>' → reconsume, BeforeDoctypeName
+        assert_eq!(
+            t.next_token(), // BeforeDoctypeName 处理 '>' → force_quirks emit
+            Some(Token::Doctype(DoctypeToken {
+                name: None,
+                public_id: None,
+                system_id: None,
+                force_quirks: true,
+            }))
+        );
+    }
+
+    #[test]
+    fn doctype_name_eof() {
+        let mut t = enter_before_doctype_name("<!DOCTYPE html");
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(
+            t.next_token(), // EOF → force_quirks emit
+            Some(Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: None,
+                system_id: None,
+                force_quirks: true,
+            }))
+        );
     }
 
     #[test]
