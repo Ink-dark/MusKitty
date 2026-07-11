@@ -4,7 +4,7 @@
 //! following the state machine defined in WHATWG §13.2.5.
 
 use super::trait_def::Tokenizer;
-use super::types::{State, TagKind, TagToken, Token};
+use super::types::{DoctypeToken, State, TagKind, TagToken, Token};
 
 /// A concrete HTML tokenizer.
 ///
@@ -43,6 +43,9 @@ pub struct HtmlTokenizer {
     current_attr_name: String,
     /// The attribute value currently being accumulated (attribute value states).
     current_attr_value: String,
+    /// The DOCTYPE token currently being built (§13.2.5.53–§13.2.5.68).
+    /// Reset when entering DOCTYPE states via MarkupDeclarationOpen.
+    current_doctype: DoctypeToken,
 }
 
 impl HtmlTokenizer {
@@ -60,6 +63,12 @@ impl HtmlTokenizer {
             current_comment: String::new(),
             current_attr_name: String::new(),
             current_attr_value: String::new(),
+            current_doctype: DoctypeToken {
+                name: None,
+                public_id: None,
+                system_id: None,
+                force_quirks: false,
+            },
         }
     }
 
@@ -118,6 +127,7 @@ impl Tokenizer for HtmlTokenizer {
             State::TagName => self.handle_tag_name_state(),
             State::SelfClosingStartTag => self.handle_self_closing_start_tag_state(),
             State::MarkupDeclarationOpen => self.handle_markup_declaration_open_state(),
+            State::Doctype => self.handle_doctype_state(),
             State::BogusComment => self.handle_bogus_comment_state(),
             State::CommentStart => self.handle_comment_start_state(),
             State::CommentStartDash => self.handle_comment_start_dash_state(),
@@ -162,6 +172,12 @@ impl Tokenizer for HtmlTokenizer {
         self.current_comment.clear();
         self.current_attr_name.clear();
         self.current_attr_value.clear();
+        self.current_doctype = DoctypeToken {
+            name: None,
+            public_id: None,
+            system_id: None,
+            force_quirks: false,
+        };
     }
 }
 
@@ -431,6 +447,51 @@ impl HtmlTokenizer {
         // 注意：不消费任何字符，BogusComment 会自行消费
         self.state = State::BogusComment;
         None
+    }
+
+    // ── DOCTYPE helpers ───────────────────────────────────────────
+
+    /// Emit the accumulated `current_doctype` as `Token::Doctype`，
+    /// replace with a fresh default, and switch to Data state.
+    fn emit_current_doctype(&mut self) -> Token {
+        let doctype = std::mem::replace(
+            &mut self.current_doctype,
+            DoctypeToken {
+                name: None,
+                public_id: None,
+                system_id: None,
+                force_quirks: false,
+            },
+        );
+        self.state = State::Data;
+        Token::Doctype(doctype)
+    }
+
+    // ── DOCTYPE state handlers (§13.2.5.53–§13.2.5.68) ───────────
+
+    /// §13.2.5.53 DOCTYPE state
+    ///
+    /// 入口：MarkupDeclarationOpen 识别 "DOCTYPE" 后。跳过空白，非空白 reconsume
+    /// 到 BeforeDoctypeName。
+    fn handle_doctype_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                // 跳过空白
+                None
+            }
+            Some(_c) => {
+                // 非空白字符 → reconsume 到 BeforeDoctypeName
+                self.state = State::BeforeDoctypeName;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                // TODO: parse error (eof-in-doctype)
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+        }
     }
 
     /// §13.2.5.41 Bogus comment state
@@ -1461,16 +1522,56 @@ mod tests {
     }
 
     #[test]
-    #[should_panic] // DOCTYPE 状态尚未实现（Step 1.4）
     fn markup_declaration_open_doctype() {
-        // `<!DOCTYPE` → MarkupDeclarationOpen → Doctype (panics)
+        // `<!DOCTYPE` → MarkupDeclarationOpen → Doctype → EOF → emit force_quirks Doctype
         let mut t = HtmlTokenizer::new("<!DOCTYPE");
         assert_eq!(t.next_token(), None); // Data → TagOpen
         assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
         assert_eq!(t.state(), State::MarkupDeclarationOpen);
         assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → Doctype
-        // 下一次 next_token() 会 dispatch Doctype 状态 → panic
-        let _ = t.next_token();
+        // Doctype 遇到 EOF：force_quirks=true, emit
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Doctype(DoctypeToken {
+                name: None,
+                public_id: None,
+                system_id: None,
+                force_quirks: true,
+            }))
+        );
+    }
+
+    // ── DOCTYPE 测试 (§13.2.5.53) ─────────────────────────────────
+
+    /// 辅助：推进到 Doctype 状态（!DOCTYPE 已消费）
+    fn enter_doctype(input: &str) -> HtmlTokenizer {
+        let mut t = HtmlTokenizer::new(input);
+        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → Doctype
+        assert_eq!(t.state(), State::Doctype);
+        t
+    }
+
+    #[test]
+    fn doctype_entry_skips_whitespace() {
+        // `<!DOCTYPE html>` → 跳过 Doctype 中的空白，进入 BeforeDoctypeName
+        let mut t = enter_doctype("<!DOCTYPE html>");
+        // ' ' → stay in Doctype
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::Doctype);
+        // 'h' → reconsume → BeforeDoctypeName
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::BeforeDoctypeName);
+    }
+
+    #[test]
+    fn doctype_entry_non_whitespace_immediate() {
+        // `<!DOCTYPEhtml>` → 直接进入 BeforeDoctypeName（reconsume）
+        let mut t = enter_doctype("<!DOCTYPEhtml>");
+        // 'h' → reconsume → BeforeDoctypeName
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::BeforeDoctypeName);
     }
 
     #[test]
