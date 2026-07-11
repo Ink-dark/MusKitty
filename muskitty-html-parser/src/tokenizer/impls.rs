@@ -130,6 +130,8 @@ impl Tokenizer for HtmlTokenizer {
             State::Doctype => self.handle_doctype_state(),
             State::BeforeDoctypeName => self.handle_before_doctype_name_state(),
             State::DoctypeName => self.handle_doctype_name_state(),
+            State::AfterDoctypeName => self.handle_after_doctype_name_state(),
+            State::BogusDoctype => self.handle_bogus_doctype_state(),
             State::BogusComment => self.handle_bogus_comment_state(),
             State::CommentStart => self.handle_comment_start_state(),
             State::CommentStartDash => self.handle_comment_start_dash_state(),
@@ -568,6 +570,71 @@ impl HtmlTokenizer {
                 if let Some(ref mut name) = self.current_doctype.name {
                     name.push(ch);
                 }
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.56 After DOCTYPE name state
+    fn handle_after_doctype_name_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                None // stay in AfterDoctypeName
+            }
+            Some('>') => {
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            None => {
+                // TODO: parse error (eof-in-doctype)
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(_c) => {
+                // 尝试匹配 "PUBLIC" 或 "SYSTEM"（大小写不敏感，6 字符）
+                // 注意：_c 已经被 next_char() 消费，需从 pos-1 开始比较
+                if self.pos + 5 <= self.input.len() {
+                    let start = self.pos - 1;
+                    let slice: String = self.input[start..start + 6].iter().collect();
+                    if slice.eq_ignore_ascii_case("PUBLIC") {
+                        self.pos = start + 6;
+                        self.state = State::AfterDoctypePublicKeyword;
+                        return None;
+                    }
+                    if slice.eq_ignore_ascii_case("SYSTEM") {
+                        self.pos = start + 6;
+                        self.state = State::AfterDoctypeSystemKeyword;
+                        return None;
+                    }
+                }
+                // 不匹配 → BogusDoctype（force_quirks=true）
+                self.current_doctype.force_quirks = true;
+                self.state = State::BogusDoctype;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.68 Bogus DOCTYPE state
+    fn handle_bogus_doctype_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('>') => {
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some('\0') => {
+                // TODO: parse error (unexpected-null-character)
+                // 忽略字符，不追加
+                None
+            }
+            None => {
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(_) => {
+                // 忽略其他字符
                 None
             }
         }
@@ -1739,6 +1806,86 @@ mod tests {
         for _ in 0..4 { assert_eq!(t.next_token(), None); }
         assert_eq!(
             t.next_token(), // EOF → force_quirks emit
+            Some(Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: None,
+                system_id: None,
+                force_quirks: true,
+            }))
+        );
+    }
+
+    // ── AfterDoctypeName + BogusDoctype 测试 (§13.2.5.56, §13.2.5.68) ─
+
+    #[test]
+    fn doctype_after_name_public_keyword() {
+        let mut t = enter_before_doctype_name("<!DOCTYPE html PUBLIC \"-//EN\">");
+        // 'h','t','m','l'
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        // ' ' → AfterDoctypeName
+        assert_eq!(t.next_token(), None); // skip whitespace in AfterDoctypeName
+        assert_eq!(t.state(), State::AfterDoctypeName);
+        // 'P' → matches "PUBLIC"
+        assert_eq!(t.next_token(), None);
+        assert_eq!(t.state(), State::AfterDoctypePublicKeyword);
+    }
+
+    #[test]
+    fn doctype_after_name_system_keyword() {
+        let mut t = enter_before_doctype_name("<!DOCTYPE html SYSTEM \"about:\">");
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // ' ' → AfterDoctypeName
+        assert_eq!(t.state(), State::AfterDoctypeName);
+        assert_eq!(t.next_token(), None); // 'S' → matches "SYSTEM"
+        assert_eq!(t.state(), State::AfterDoctypeSystemKeyword);
+    }
+
+    #[test]
+    fn doctype_after_name_gt_emits() {
+        let mut t = enter_before_doctype_name("<!DOCTYPE html>");
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: None,
+                system_id: None,
+                force_quirks: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn doctype_after_name_unknown_to_bogus() {
+        // `<!DOCTYPE html x>` → 'x' 不匹配 PUBLIC/SYSTEM → BogusDoctype
+        let mut t = enter_before_doctype_name("<!DOCTYPE html x>");
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // ' ' → AfterDoctypeName
+        assert_eq!(t.next_token(), None); // 'x' → BogusDoctype (reconsume)
+        assert_eq!(t.state(), State::BogusDoctype);
+        // BogusDoctype: ignore 'x' (reconsumed) → '>' emit
+        assert_eq!(t.next_token(), None); // 'x' ignored by BogusDoctype
+        assert_eq!(
+            t.next_token(), // '>' emit
+            Some(Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: None,
+                system_id: None,
+                force_quirks: true,
+            }))
+        );
+    }
+
+    #[test]
+    fn doctype_bogus_ignores_chars() {
+        let mut t = enter_before_doctype_name("<!DOCTYPE html foo>");
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), None); // ' ' → AfterDoctypeName
+        assert_eq!(t.next_token(), None); // 'f' → BogusDoctype (reconsume)
+        // BogusDoctype 忽略 'f','o','o'
+        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        assert_eq!(
+            t.next_token(), // '>' emit
             Some(Token::Doctype(DoctypeToken {
                 name: Some("html".into()),
                 public_id: None,
