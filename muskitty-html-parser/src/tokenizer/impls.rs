@@ -131,6 +131,17 @@ impl Tokenizer for HtmlTokenizer {
             State::BeforeDoctypeName => self.handle_before_doctype_name_state(),
             State::DoctypeName => self.handle_doctype_name_state(),
             State::AfterDoctypeName => self.handle_after_doctype_name_state(),
+            State::AfterDoctypePublicKeyword => self.handle_after_doctype_public_keyword_state(),
+            State::BeforeDoctypePublicId => self.handle_before_doctype_public_id_state(),
+            State::DoctypePublicIdDoubleQuoted => self.handle_doctype_public_id_double_quoted_state(),
+            State::DoctypePublicIdSingleQuoted => self.handle_doctype_public_id_single_quoted_state(),
+            State::AfterDoctypePublicId => self.handle_after_doctype_public_id_state(),
+            State::BetweenDoctypePublicAndSystemIds => self.handle_between_doctype_public_and_system_ids_state(),
+            State::AfterDoctypeSystemKeyword => self.handle_after_doctype_system_keyword_state(),
+            State::BeforeDoctypeSystemId => self.handle_before_doctype_system_id_state(),
+            State::DoctypeSystemIdDoubleQuoted => self.handle_doctype_system_id_double_quoted_state(),
+            State::DoctypeSystemIdSingleQuoted => self.handle_doctype_system_id_single_quoted_state(),
+            State::AfterDoctypeSystemId => self.handle_after_doctype_system_id_state(),
             State::BogusDoctype => self.handle_bogus_doctype_state(),
             State::BogusComment => self.handle_bogus_comment_state(),
             State::CommentStart => self.handle_comment_start_state(),
@@ -635,6 +646,329 @@ impl HtmlTokenizer {
             }
             Some(_) => {
                 // 忽略其他字符
+                None
+            }
+        }
+    }
+
+    // ── DOCTYPE PUBLIC 标识符路径 (§13.2.5.57–§13.2.5.62) ───────
+
+    /// §13.2.5.57 After DOCTYPE public keyword state
+    fn handle_after_doctype_public_keyword_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.state = State::BeforeDoctypePublicId;
+                None
+            }
+            Some('"') | Some('\'') | Some('>') => {
+                // TODO: parse error
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            None => {
+                // TODO: parse error (eof-in-doctype)
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(_) => {
+                self.current_doctype.force_quirks = true;
+                self.state = State::BogusDoctype;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.58 Before DOCTYPE public identifier state
+    fn handle_before_doctype_public_id_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                None // skip whitespace
+            }
+            Some('"') => {
+                self.current_doctype.public_id = Some(String::new());
+                self.state = State::DoctypePublicIdDoubleQuoted;
+                None
+            }
+            Some('\'') => {
+                self.current_doctype.public_id = Some(String::new());
+                self.state = State::DoctypePublicIdSingleQuoted;
+                None
+            }
+            Some('>') | None => {
+                // TODO: parse error
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(_) => {
+                // TODO: parse error
+                self.current_doctype.force_quirks = true;
+                self.state = State::BogusDoctype;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.59 DOCTYPE public identifier (double-quoted) state
+    fn handle_doctype_public_id_double_quoted_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('"') => {
+                self.state = State::AfterDoctypePublicId;
+                None
+            }
+            Some('>') | None => {
+                // TODO: parse error (eof-in-doctype / abrupt-doctype-public-identifier)
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some('\0') => {
+                // TODO: parse error (unexpected-null-character)
+                if let Some(ref mut id) = self.current_doctype.public_id {
+                    id.push('\u{FFFD}');
+                }
+                None
+            }
+            Some(c) => {
+                if let Some(ref mut id) = self.current_doctype.public_id {
+                    id.push(c);
+                }
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.60 DOCTYPE public identifier (single-quoted) state
+    fn handle_doctype_public_id_single_quoted_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\'') => {
+                self.state = State::AfterDoctypePublicId;
+                None
+            }
+            Some('>') | None => {
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some('\0') => {
+                if let Some(ref mut id) = self.current_doctype.public_id {
+                    id.push('\u{FFFD}');
+                }
+                None
+            }
+            Some(c) => {
+                if let Some(ref mut id) = self.current_doctype.public_id {
+                    id.push(c);
+                }
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.61 After DOCTYPE public identifier state
+    fn handle_after_doctype_public_id_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.state = State::BetweenDoctypePublicAndSystemIds;
+                None
+            }
+            Some('>') => {
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some('"') | Some('\'') => {
+                // TODO: parse error (unexpected-quote-before-doctype-system-id)
+                self.current_doctype.force_quirks = true;
+                self.state = State::BogusDoctype;
+                None
+            }
+            None => {
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(_) => {
+                self.current_doctype.force_quirks = true;
+                self.state = State::BogusDoctype;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.62 Between DOCTYPE public and system identifiers state
+    fn handle_between_doctype_public_and_system_ids_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                None
+            }
+            Some('>') => {
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some('"') => {
+                self.current_doctype.system_id = Some(String::new());
+                self.state = State::DoctypeSystemIdDoubleQuoted;
+                None
+            }
+            Some('\'') => {
+                self.current_doctype.system_id = Some(String::new());
+                self.state = State::DoctypeSystemIdSingleQuoted;
+                None
+            }
+            None => {
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(_c) => {
+                // 尝试匹配 "SYSTEM"
+                if self.pos + 5 <= self.input.len() {
+                    let start = self.pos - 1;
+                    let slice: String = self.input[start..start + 6].iter().collect();
+                    if slice.eq_ignore_ascii_case("SYSTEM") {
+                        self.pos = start + 6;
+                        self.state = State::AfterDoctypeSystemKeyword;
+                        return None;
+                    }
+                }
+                self.current_doctype.force_quirks = true;
+                self.state = State::BogusDoctype;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    // ── DOCTYPE SYSTEM 标识符路径 (§13.2.5.63–§13.2.5.67) ───────
+
+    /// §13.2.5.63 After DOCTYPE system keyword state
+    fn handle_after_doctype_system_keyword_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                self.state = State::BeforeDoctypeSystemId;
+                None
+            }
+            Some('"') | Some('\'') | Some('>') => {
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            None => {
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(_) => {
+                self.current_doctype.force_quirks = true;
+                self.state = State::BogusDoctype;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.64 Before DOCTYPE system identifier state
+    fn handle_before_doctype_system_id_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                None
+            }
+            Some('"') => {
+                self.current_doctype.system_id = Some(String::new());
+                self.state = State::DoctypeSystemIdDoubleQuoted;
+                None
+            }
+            Some('\'') => {
+                self.current_doctype.system_id = Some(String::new());
+                self.state = State::DoctypeSystemIdSingleQuoted;
+                None
+            }
+            Some('>') | None => {
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(_) => {
+                self.current_doctype.force_quirks = true;
+                self.state = State::BogusDoctype;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.65 DOCTYPE system identifier (double-quoted) state
+    fn handle_doctype_system_id_double_quoted_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('"') => {
+                self.state = State::AfterDoctypeSystemId;
+                None
+            }
+            Some('>') | None => {
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some('\0') => {
+                if let Some(ref mut id) = self.current_doctype.system_id {
+                    id.push('\u{FFFD}');
+                }
+                None
+            }
+            Some(c) => {
+                if let Some(ref mut id) = self.current_doctype.system_id {
+                    id.push(c);
+                }
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.66 DOCTYPE system identifier (single-quoted) state
+    fn handle_doctype_system_id_single_quoted_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\'') => {
+                self.state = State::AfterDoctypeSystemId;
+                None
+            }
+            Some('>') | None => {
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some('\0') => {
+                if let Some(ref mut id) = self.current_doctype.system_id {
+                    id.push('\u{FFFD}');
+                }
+                None
+            }
+            Some(c) => {
+                if let Some(ref mut id) = self.current_doctype.system_id {
+                    id.push(c);
+                }
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.67 After DOCTYPE system identifier state
+    fn handle_after_doctype_system_id_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
+                None
+            }
+            Some('>') => {
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            None => {
+                self.current_doctype.force_quirks = true;
+                let token = self.emit_current_doctype();
+                Some(token)
+            }
+            Some(_) => {
+                // TODO: parse error (unexpected-character-after-doctype-system-identifier)
+                self.state = State::BogusDoctype;
                 None
             }
         }
@@ -1892,6 +2226,89 @@ mod tests {
                 system_id: None,
                 force_quirks: true,
             }))
+        );
+    }
+
+    // ── DOCTYPE PUBLIC/SYSTEM 标识符集成测试 ──────────────────────
+
+    #[test]
+    fn doctype_public_id_double_quoted() {
+        let mut t = HtmlTokenizer::new(
+            "<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01//EN\">"
+        );
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: Some("-//W3C//DTD HTML 4.01//EN".into()),
+                system_id: None,
+                force_quirks: false,
+            })
+        );
+    }
+
+    #[test]
+    fn doctype_system_id_double_quoted() {
+        let mut t = HtmlTokenizer::new(
+            "<!DOCTYPE html SYSTEM \"about:legacy-compat\">"
+        );
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: None,
+                system_id: Some("about:legacy-compat".into()),
+                force_quirks: false,
+            })
+        );
+    }
+
+    #[test]
+    fn doctype_full_public_and_system() {
+        let mut t = HtmlTokenizer::new(
+            "<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \
+             \"http://www.w3.org/TR/html4/strict.dtd\">"
+        );
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: Some("-//W3C//DTD HTML 4.01//EN".into()),
+                system_id: Some("http://www.w3.org/TR/html4/strict.dtd".into()),
+                force_quirks: false,
+            })
+        );
+    }
+
+    #[test]
+    fn doctype_public_id_single_quoted() {
+        let mut t = HtmlTokenizer::new(
+            "<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.0//EN'>"
+        );
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: Some("-//W3C//DTD XHTML 1.0//EN".into()),
+                system_id: None,
+                force_quirks: false,
+            })
+        );
+    }
+
+    #[test]
+    fn doctype_system_id_single_quoted() {
+        let mut t = HtmlTokenizer::new(
+            "<!DOCTYPE html SYSTEM 'about:legacy-compat'>"
+        );
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Doctype(DoctypeToken {
+                name: Some("html".into()),
+                public_id: None,
+                system_id: Some("about:legacy-compat".into()),
+                force_quirks: false,
+            })
         );
     }
 
