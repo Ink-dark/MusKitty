@@ -1898,121 +1898,14 @@ impl HtmlTokenizer {
     }
 
     // ── Named entity table ────────────────────────────────────
+    // Moved to src/tokenizer/entities.rs — full WHATWG entity table
+    // with 2,231 entries using sorted array + binary search.
 
-    /// Resolve a named character reference to its Unicode character(s).
-    /// Returns `Some(char)` if the entity is known, `None` otherwise.
-    ///
-    /// The entity name is case-sensitive and does NOT include the leading `&`
-    /// or trailing `;`.
-    ///
-    /// Currently covers the ~30 most common HTML entities.
-    /// Full WHATWG entity table (~2200 entities) is a future step.
-    fn resolve_named_entity(name: &str) -> Option<char> {
-        // Keep entries sorted alphabetically for binary search
-        match name {
-            "AElig" => Some('\u{00C6}'),
-            "Aacute" => Some('\u{00C1}'),
-            "Acirc" => Some('\u{00C2}'),
-            "Agrave" => Some('\u{00C0}'),
-            "Aring" => Some('\u{00C5}'),
-            "Atilde" => Some('\u{00C3}'),
-            "Auml" => Some('\u{00C4}'),
-            "Ccedil" => Some('\u{00C7}'),
-            "Eacute" => Some('\u{00C9}'),
-            "Egrave" => Some('\u{00C8}'),
-            "Iacute" => Some('\u{00CD}'),
-            "Icirc" => Some('\u{00CE}'),
-            "Igrave" => Some('\u{00CC}'),
-            "Ntilde" => Some('\u{00D1}'),
-            "Oacute" => Some('\u{00D3}'),
-            "Ocirc" => Some('\u{00D4}'),
-            "Ograve" => Some('\u{00D2}'),
-            "Oslash" => Some('\u{00D8}'),
-            "Otilde" => Some('\u{00D5}'),
-            "Ouml" => Some('\u{00D6}'),
-            "Uacute" => Some('\u{00DA}'),
-            "Ugrave" => Some('\u{00D9}'),
-            "aacute" => Some('\u{00E1}'),
-            "acirc" => Some('\u{00E2}'),
-            "acute" => Some('\u{00B4}'),
-            "aelig" => Some('\u{00E6}'),
-            "agrave" => Some('\u{00E0}'),
-            "amp" => Some('\u{0026}'),
-            "apos" => Some('\u{0027}'),
-            "aring" => Some('\u{00E5}'),
-            "atilde" => Some('\u{00E3}'),
-            "auml" => Some('\u{00E4}'),
-            "brvbar" => Some('\u{00A6}'),
-            "ccedil" => Some('\u{00E7}'),
-            "cedil" => Some('\u{00B8}'),
-            "cent" => Some('\u{00A2}'),
-            "copy" => Some('\u{00A9}'),
-            "curren" => Some('\u{00A4}'),
-            "deg" => Some('\u{00B0}'),
-            "divide" => Some('\u{00F7}'),
-            "eacute" => Some('\u{00E9}'),
-            "ecirc" => Some('\u{00EA}'),
-            "egrave" => Some('\u{00E8}'),
-            "eth" => Some('\u{00F0}'),
-            "euml" => Some('\u{00EB}'),
-            "frac12" => Some('\u{00BD}'),
-            "frac14" => Some('\u{00BC}'),
-            "frac34" => Some('\u{00BE}'),
-            "gt" => Some('\u{003E}'),
-            "hellip" => Some('\u{2026}'),
-            "iacute" => Some('\u{00ED}'),
-            "icirc" => Some('\u{00EE}'),
-            "iexcl" => Some('\u{00A1}'),
-            "igrave" => Some('\u{00EC}'),
-            "iquest" => Some('\u{00BF}'),
-            "iuml" => Some('\u{00EF}'),
-            "laquo" => Some('\u{00AB}'),
-            "ldquo" => Some('\u{201C}'),
-            "lsquo" => Some('\u{2018}'),
-            "lt" => Some('\u{003C}'),
-            "macr" => Some('\u{00AF}'),
-            "mdash" => Some('\u{2014}'),
-            "micro" => Some('\u{00B5}'),
-            "middot" => Some('\u{00B7}'),
-            "nbsp" => Some('\u{00A0}'),
-            "ndash" => Some('\u{2013}'),
-            "not" => Some('\u{00AC}'),
-            "ntilde" => Some('\u{00F1}'),
-            "oacute" => Some('\u{00F3}'),
-            "ocirc" => Some('\u{00F4}'),
-            "ograve" => Some('\u{00F2}'),
-            "ordf" => Some('\u{00AA}'),
-            "ordm" => Some('\u{00BA}'),
-            "oslash" => Some('\u{00F8}'),
-            "otilde" => Some('\u{00F5}'),
-            "ouml" => Some('\u{00F6}'),
-            "para" => Some('\u{00B6}'),
-            "plusmn" => Some('\u{00B1}'),
-            "pound" => Some('\u{00A3}'),
-            "quot" => Some('\u{0022}'),
-            "raquo" => Some('\u{00BB}'),
-            "rdquo" => Some('\u{201D}'),
-            "reg" => Some('\u{00AE}'),
-            "rsquo" => Some('\u{2019}'),
-            "sect" => Some('\u{00A7}'),
-            "shy" => Some('\u{00AD}'),
-            "sup1" => Some('\u{00B9}'),
-            "sup2" => Some('\u{00B2}'),
-            "sup3" => Some('\u{00B3}'),
-            "szlig" => Some('\u{00DF}'),
-            "thorn" => Some('\u{00FE}'),
-            "times" => Some('\u{00D7}'),
-            "trade" => Some('\u{2122}'),
-            "uacute" => Some('\u{00FA}'),
-            "ucirc" => Some('\u{00FB}'),
-            "ugrave" => Some('\u{00F9}'),
-            "uml" => Some('\u{00A8}'),
-            "uuml" => Some('\u{00FC}'),
-            "yacute" => Some('\u{00FD}'),
-            "yen" => Some('\u{00A5}'),
-            "yuml" => Some('\u{00FF}'),
-            _ => None,
-        }
+    /// Resolve a named character reference to its Unicode string.
+    /// Delegates to the generated entity table in `entities.rs`.
+    /// Returns `Some(&str)` with 1-2 code points if found, `None` otherwise.
+    fn resolve_named_entity(name: &str) -> Option<&'static str> {
+        crate::tokenizer::entities::resolve_named_entity(name)
     }
 
     /// §13.2.5.73 Named character reference state
@@ -2028,15 +1921,14 @@ impl HtmlTokenizer {
     fn handle_named_character_reference_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some(';') => {
-                // End of entity name — look up accumulated chars
-                let entity_char = Self::resolve_named_entity(&self.temporary_buffer);
-                match entity_char {
-                    Some(ch) => {
+                let resolved = Self::resolve_named_entity(&self.temporary_buffer);
+                match resolved {
+                    Some(s) => {
                         self.temporary_buffer.clear();
                         let state = self.return_state.take().unwrap_or(State::Data);
-                        self.emit_char_to_attr(ch, state);
+                        self.emit_str_to_attr(s, state);
                         self.state = state;
-                        Some(Token::Character(ch))
+                        self.emit_multi_char(s)
                     }
                     None => {
                         // Unknown entity: push buffered chars to pending,
@@ -2057,17 +1949,18 @@ impl HtmlTokenizer {
             }
             Some(_c) => {
                 // Non-alphanumeric, non-`;`: try lookup without semicolon
-                let entity_char = Self::resolve_named_entity(&self.temporary_buffer);
-                self.temporary_buffer.clear();
-                match entity_char {
-                    Some(ch) => {
+                let resolved = Self::resolve_named_entity(&self.temporary_buffer);
+                match resolved {
+                    Some(s) => {
+                        self.temporary_buffer.clear();
                         let state = self.return_state.take().unwrap_or(State::Data);
-                        self.emit_char_to_attr(ch, state);
+                        self.emit_str_to_attr(s, state);
                         self.state = state;
                         self.reconsume = true;
-                        Some(Token::Character(ch))
+                        self.emit_multi_char(s)
                     }
                     None => {
+                        self.temporary_buffer.clear();
                         self.state = State::AmbiguousAmpersand;
                         self.reconsume = true;
                         None
@@ -2080,6 +1973,18 @@ impl HtmlTokenizer {
                 None
             }
         }
+    }
+
+    /// Emit the first char of a resolved entity string, pushing remaining
+    /// chars to pending_tokens.
+    fn emit_multi_char(&mut self, s: &str) -> Option<Token> {
+        let mut chars = s.chars();
+        let first = chars.next().unwrap();
+        // Push remaining chars in reverse for correct pop order
+        for ch in chars.rev() {
+            self.pending_tokens.push(Token::Character(ch));
+        }
+        Some(Token::Character(first))
     }
 
     /// §13.2.5.74 Ambiguous ampersand state
@@ -2112,14 +2017,14 @@ impl HtmlTokenizer {
         }
     }
 
-    /// Helper: emit a character to current_attr_value if the return state
-    /// is an attribute value state.
-    fn emit_char_to_attr(&mut self, ch: char, return_state: State) {
+    /// Helper: emit resolved character(s) to current_attr_value if the
+    /// return state is an attribute value state.
+    fn emit_str_to_attr(&mut self, s: &str, return_state: State) {
         match return_state {
             State::AttributeValueDoubleQuoted
             | State::AttributeValueSingleQuoted
             | State::AttributeValueUnquoted => {
-                self.current_attr_value.push(ch);
+                self.current_attr_value.push_str(s);
             }
             _ => {}
         }
@@ -5320,16 +5225,28 @@ mod tests {
 
     #[test]
     fn char_ref_unknown_entity_ambiguous() {
-        // `&notin;` — `notin` not in minimal table → ambiguous ampersand
-        let mut t = HtmlTokenizer::new("&notin;");
+        // `&unknownfoo;` — not in entity table → ambiguous ampersand
+        let mut t = HtmlTokenizer::new("&unknownfoo;");
         // 8 Nones then pending tokens + AmbigAmpersand emit
-        for _ in 0..8 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), Some(Token::Character('n')));
-        assert_eq!(t.next_token(), Some(Token::Character('o')));
-        assert_eq!(t.next_token(), Some(Token::Character('t')));
-        assert_eq!(t.next_token(), Some(Token::Character('i')));
-        assert_eq!(t.next_token(), Some(Token::Character('n')));
-        assert_eq!(t.next_token(), Some(Token::Character(';')));
+        assert_eq!(next_real_token(&mut t), Token::Character('u'));
+        assert_eq!(next_real_token(&mut t), Token::Character('n'));
+        assert_eq!(next_real_token(&mut t), Token::Character('k'));
+        assert_eq!(next_real_token(&mut t), Token::Character('n'));
+        assert_eq!(next_real_token(&mut t), Token::Character('o'));
+        assert_eq!(next_real_token(&mut t), Token::Character('w'));
+        assert_eq!(next_real_token(&mut t), Token::Character('n'));
+        assert_eq!(next_real_token(&mut t), Token::Character('f'));
+        assert_eq!(next_real_token(&mut t), Token::Character('o'));
+        assert_eq!(next_real_token(&mut t), Token::Character('o'));
+        assert_eq!(next_real_token(&mut t), Token::Character(';'));
+    }
+
+    #[test]
+    fn char_ref_notin_entity() {
+        // `&notin;` → ∉ (U+2209), now in full entity table
+        let mut t = HtmlTokenizer::new("&notin;");
+        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('\u{2209}')));
     }
 
     #[test]

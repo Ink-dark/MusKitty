@@ -8,6 +8,7 @@
 //! These tokens are consumed by the tree construction stage to build
 //! the DOM tree.
 
+mod entities;
 mod impls;
 mod trait_def;
 mod types;
