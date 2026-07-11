@@ -245,39 +245,21 @@ pub enum State {
 
     // ── Character reference states ────────────────────────
     /// §13.2.5.72 Character reference state
-    ///
-    /// TODO: not yet implemented
     CharacterReference,
     /// §13.2.5.73 Named character reference state
-    ///
-    /// TODO: not yet implemented
     NamedCharacterReference,
     /// §13.2.5.74 Ambiguous ampersand state
-    ///
-    /// TODO: not yet implemented
     AmbiguousAmpersand,
     /// §13.2.5.75 Numeric character reference state
-    ///
-    /// TODO: not yet implemented
     NumericCharacterReference,
     /// §13.2.5.76 Hexadecimal character reference start state
-    ///
-    /// TODO: not yet implemented
     HexCharacterReferenceStart,
     /// §13.2.5.77 Decimal character reference start state
-    ///
-    /// TODO: not yet implemented
     DecimalCharacterReferenceStart,
     /// §13.2.5.78 Hexadecimal character reference state
-    ///
-    /// TODO: not yet implemented
     HexCharacterReference,
     /// §13.2.5.79 Decimal character reference state
-    ///
-    /// TODO: not yet implemented
     DecimalCharacterReference,
     /// §13.2.5.80 Numeric character reference end state
-    ///
-    /// TODO: not yet implemented
     NumericCharacterReferenceEnd,
 }

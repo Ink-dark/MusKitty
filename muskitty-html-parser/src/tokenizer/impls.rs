@@ -59,6 +59,13 @@ pub struct HtmlTokenizer {
     /// Used when a single state transition needs to emit multiple tokens
     /// (e.g. "anything else" in RCDATA/RAWTEXT end tag name).
     pending_tokens: Vec<Token>,
+    /// The return state for character references (§13.2.5.72–§13.2.5.80).
+    /// Set before entering CharacterReference state so the tokenizer knows
+    /// where to return after resolving the reference.
+    return_state: Option<State>,
+    /// Accumulator for numeric character reference value
+    /// (§13.2.5.78–§13.2.5.79).
+    character_reference_code: u32,
 }
 
 impl HtmlTokenizer {
@@ -85,6 +92,8 @@ impl HtmlTokenizer {
             appropriate_end_tag_name: None,
             temporary_buffer: String::new(),
             pending_tokens: Vec::new(),
+            return_state: None,
+            character_reference_code: 0,
         }
     }
 
@@ -227,6 +236,15 @@ impl Tokenizer for HtmlTokenizer {
             State::ScriptDataDoubleEscapedDashDash => self.handle_script_data_double_escaped_dash_dash_state(),
             State::ScriptDataDoubleEscapedLessThanSign => self.handle_script_data_double_escaped_less_than_sign_state(),
             State::ScriptDataDoubleEscapeEnd => self.handle_script_data_double_escape_end_state(),
+            State::CharacterReference => self.handle_character_reference_state(),
+            State::NumericCharacterReference => self.handle_numeric_character_reference_state(),
+            State::HexCharacterReferenceStart => self.handle_hex_character_reference_start_state(),
+            State::DecimalCharacterReferenceStart => self.handle_decimal_character_reference_start_state(),
+            State::HexCharacterReference => self.handle_hex_character_reference_state(),
+            State::DecimalCharacterReference => self.handle_decimal_character_reference_state(),
+            State::NumericCharacterReferenceEnd => self.handle_numeric_character_reference_end_state(),
+            State::NamedCharacterReference => self.handle_named_character_reference_state(),
+            State::AmbiguousAmpersand => self.handle_ambiguous_ampersand_state(),
             _ => panic!(
                 "State::{:?} is not yet implemented (TODO in types.rs)",
                 self.state
@@ -261,6 +279,8 @@ impl Tokenizer for HtmlTokenizer {
         self.appropriate_end_tag_name = None;
         self.temporary_buffer.clear();
         self.pending_tokens.clear();
+        self.return_state = None;
+        self.character_reference_code = 0;
     }
 }
 
@@ -279,7 +299,7 @@ impl HtmlTokenizer {
     fn handle_data_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('&') => {
-                // TODO: set return state to Data, then switch to CharacterReference
+                self.return_state = Some(State::Data);
                 self.state = State::CharacterReference;
                 None // no token emitted yet — CharacterReference will emit one
             }
@@ -318,7 +338,7 @@ impl HtmlTokenizer {
     fn handle_rcdata_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('&') => {
-                // TODO: set return state to RCDATA, then switch to CharacterReference
+                self.return_state = Some(State::RCDATA);
                 self.state = State::CharacterReference;
                 None
             }
@@ -1610,6 +1630,550 @@ impl HtmlTokenizer {
         }
     }
 
+    // ── Character reference states (§13.2.5.72–§13.2.5.80) ─────－
+
+    /// §13.2.5.72 Character reference state
+    ///
+    /// Dispatches the character following `&`:
+    /// - U+0009 TAB → emit `&`, reconsume in return_state
+    /// - U+000A LF → emit `&`, reconsume in return_state
+    /// - U+000C FF → emit `&`, reconsume in return_state
+    /// - U+0020 SPACE → emit `&`, reconsume in return_state
+    /// - U+003C LESS-THAN SIGN (<) → emit `&`, reconsume in return_state
+    /// - U+0026 AMPERSAND (&) → emit `&`, reconsume in return_state
+    /// - EOF → parse error; emit `&`, reconsume EOF
+    /// - U+0023 NUMBER SIGN (#) → NumericCharacterReference
+    /// - ASCII alphanumeric → NamedCharacterReference
+    /// - Anything else → emit `&`, reconsume in return_state
+    fn handle_character_reference_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            // Characters that cause immediate fallback (not a valid char ref)
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ')
+            | Some('<') | Some('&') => {
+                self.emit_ampersand_and_return()
+            }
+            None => {
+                // TODO: record parse error (eof-in-tag — actually not in a tag,
+                // but spec says this is an error)
+                self.emit_ampersand_and_return()
+            }
+            Some('#') => {
+                self.state = State::NumericCharacterReference;
+                None
+            }
+            Some(c) if c.is_ascii_alphanumeric() => {
+                self.state = State::NamedCharacterReference;
+                // The character was already consumed — we'll handle it
+                // in NamedCharacterReference. For the spec-compliant approach,
+                // we should reconsume it rather than consume it.
+                // But since NamedCharacterReference needs to build up the name,
+                // we reconsume so it can consume this char.
+                self.reconsume = true;
+                None
+            }
+            Some(_c) => {
+                // Non-alphanumeric, non-# → not a character reference
+                self.emit_ampersand_and_return()
+            }
+        }
+    }
+
+    /// §13.2.5.75 Numeric character reference state
+    ///
+    /// Consume the next input character:
+    /// - U+0078 x / U+0058 X → HexCharacterReferenceStart
+    /// - ASCII digit → reconsume in DecimalCharacterReferenceStart
+    /// - Anything else → parse error; emit `&#`, reconsume
+    fn handle_numeric_character_reference_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('x') | Some('X') => {
+                self.character_reference_code = 0;
+                self.state = State::HexCharacterReferenceStart;
+                None
+            }
+            Some(c) if c.is_ascii_digit() => {
+                self.character_reference_code = 0;
+                self.state = State::DecimalCharacterReferenceStart;
+                self.reconsume = true;
+                None
+            }
+            Some(_c) => {
+                // TODO: record parse error (absence-of-digits-in-numeric-character-reference)
+                self.emit_ampersand_hash_and_return()
+            }
+            None => {
+                // TODO: record parse error
+                self.emit_ampersand_hash_and_return()
+            }
+        }
+    }
+
+    /// §13.2.5.76 Hexadecimal character reference start state
+    ///
+    /// Consume the next input character:
+    /// - ASCII hex digit → reconsume in HexCharacterReference
+    /// - Anything else → parse error; emit `&#x`, reconsume
+    fn handle_hex_character_reference_start_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_hexdigit() => {
+                self.state = State::HexCharacterReference;
+                self.reconsume = true;
+                None
+            }
+            Some(_c) => {
+                // TODO: record parse error (absence-of-digits-in-numeric-character-reference)
+                self.emit_ampersand_hash_x_and_return()
+            }
+            None => {
+                self.emit_ampersand_hash_x_and_return()
+            }
+        }
+    }
+
+    /// §13.2.5.77 Decimal character reference start state
+    ///
+    /// Consume the next input character:
+    /// - ASCII digit → reconsume in DecimalCharacterReference
+    /// - Anything else → parse error; emit `&#`, reconsume
+    fn handle_decimal_character_reference_start_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_digit() => {
+                self.state = State::DecimalCharacterReference;
+                self.reconsume = true;
+                None
+            }
+            Some(_c) => {
+                // TODO: record parse error
+                self.emit_ampersand_hash_and_return()
+            }
+            None => {
+                self.emit_ampersand_hash_and_return()
+            }
+        }
+    }
+
+    /// §13.2.5.78 Hexadecimal character reference state
+    ///
+    /// Consume the next input character:
+    /// - ASCII hex digit → multiply code by 16, add digit value, stay
+    /// - U+003B SEMICOLON (;) → switch to NumericCharacterReferenceEnd
+    /// - Anything else → parse error; reconsume in NumericCharacterReferenceEnd
+    fn handle_hex_character_reference_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_hexdigit() => {
+                let digit = match c {
+                    '0'..='9' => c as u32 - '0' as u32,
+                    'a'..='f' => c as u32 - 'a' as u32 + 10,
+                    'A'..='F' => c as u32 - 'A' as u32 + 10,
+                    _ => unreachable!(),
+                };
+                self.character_reference_code =
+                    self.character_reference_code.wrapping_mul(16).wrapping_add(digit);
+                None
+            }
+            Some(';') => {
+                self.state = State::NumericCharacterReferenceEnd;
+                None
+            }
+            Some(_c) => {
+                // TODO: record parse error (missing-semicolon-after-character-reference)
+                self.state = State::NumericCharacterReferenceEnd;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                // TODO: record parse error
+                self.state = State::NumericCharacterReferenceEnd;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.79 Decimal character reference state
+    ///
+    /// Consume the next input character:
+    /// - ASCII digit → multiply code by 10, add digit value, stay
+    /// - U+003B SEMICOLON (;) → switch to NumericCharacterReferenceEnd
+    /// - Anything else → parse error; reconsume in NumericCharacterReferenceEnd
+    fn handle_decimal_character_reference_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_digit() => {
+                let digit = c as u32 - '0' as u32;
+                self.character_reference_code =
+                    self.character_reference_code.wrapping_mul(10).wrapping_add(digit);
+                None
+            }
+            Some(';') => {
+                self.state = State::NumericCharacterReferenceEnd;
+                None
+            }
+            Some(_c) => {
+                // TODO: record parse error (missing-semicolon-after-character-reference)
+                self.state = State::NumericCharacterReferenceEnd;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                self.state = State::NumericCharacterReferenceEnd;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.80 Numeric character reference end state
+    ///
+    /// Validate the accumulated code point and emit:
+    /// - 0x00 → parse error; emit U+FFFD
+    /// - 0x80–0x9F → replace with Windows-1252 equivalent (0x80 → €, etc.)
+    /// - Surrogate (0xD800–0xDFFF) → parse error; emit U+FFFD
+    /// - > 0x10FFFF → parse error; emit U+FFFD
+    /// - Valid → emit the resolved character, return to return_state
+    fn handle_numeric_character_reference_end_state(&mut self) -> Option<Token> {
+        let code = self.character_reference_code;
+        self.character_reference_code = 0;
+
+        let ch = match code {
+            0x00 => {
+                // TODO: record parse error (null-character-reference)
+                '\u{FFFD}'
+            }
+            // Surrogate range
+            0xD800..=0xDFFF => {
+                // TODO: record parse error
+                '\u{FFFD}'
+            }
+            // Beyond Unicode
+            c if c > 0x10FFFF => {
+                // TODO: record parse error
+                '\u{FFFD}'
+            }
+            // Windows-1252 replacement range (0x80–0x9F, except some)
+            0x80 => '\u{20AC}', // €
+            0x82 => '\u{201A}', // ‚
+            0x83 => '\u{0192}', // ƒ
+            0x84 => '\u{201E}', // „
+            0x85 => '\u{2026}', // …
+            0x86 => '\u{2020}', // †
+            0x87 => '\u{2021}', // ‡
+            0x88 => '\u{02C6}', // ˆ
+            0x89 => '\u{2030}', // ‰
+            0x8A => '\u{0160}', // Š
+            0x8B => '\u{2039}', // ‹
+            0x8C => '\u{0152}', // Œ
+            0x8E => '\u{017D}', // Ž
+            0x91 => '\u{2018}', // '
+            0x92 => '\u{2019}', // '
+            0x93 => '\u{201C}', // "
+            0x94 => '\u{201D}', // "
+            0x95 => '\u{2022}', // •
+            0x96 => '\u{2013}', // –
+            0x97 => '\u{2014}', // —
+            0x98 => '\u{02DC}', // ˜
+            0x99 => '\u{2122}', // ™
+            0x9A => '\u{0161}', // š
+            0x9B => '\u{203A}', // ›
+            0x9C => '\u{0153}', // œ
+            0x9E => '\u{017E}', // ž
+            0x9F => '\u{0178}', // Ÿ
+            // Valid Unicode
+            _ => {
+                // Safety: we already checked surrogates and >0x10FFFF
+                char::from_u32(code).unwrap_or('\u{FFFD}')
+            }
+        };
+
+        let state = self.return_state.take().unwrap_or(State::Data);
+        // If returning to an attribute value state, append to attr value
+        match state {
+            State::AttributeValueDoubleQuoted
+            | State::AttributeValueSingleQuoted
+            | State::AttributeValueUnquoted => {
+                self.current_attr_value.push(ch);
+            }
+            _ => {}
+        }
+        self.state = state;
+        Some(Token::Character(ch))
+    }
+
+    // ── Named entity table ────────────────────────────────────
+
+    /// Resolve a named character reference to its Unicode character(s).
+    /// Returns `Some(char)` if the entity is known, `None` otherwise.
+    ///
+    /// The entity name is case-sensitive and does NOT include the leading `&`
+    /// or trailing `;`.
+    ///
+    /// Currently covers the ~30 most common HTML entities.
+    /// Full WHATWG entity table (~2200 entities) is a future step.
+    fn resolve_named_entity(name: &str) -> Option<char> {
+        // Keep entries sorted alphabetically for binary search
+        match name {
+            "AElig" => Some('\u{00C6}'),
+            "Aacute" => Some('\u{00C1}'),
+            "Acirc" => Some('\u{00C2}'),
+            "Agrave" => Some('\u{00C0}'),
+            "Aring" => Some('\u{00C5}'),
+            "Atilde" => Some('\u{00C3}'),
+            "Auml" => Some('\u{00C4}'),
+            "Ccedil" => Some('\u{00C7}'),
+            "Eacute" => Some('\u{00C9}'),
+            "Egrave" => Some('\u{00C8}'),
+            "Iacute" => Some('\u{00CD}'),
+            "Icirc" => Some('\u{00CE}'),
+            "Igrave" => Some('\u{00CC}'),
+            "Ntilde" => Some('\u{00D1}'),
+            "Oacute" => Some('\u{00D3}'),
+            "Ocirc" => Some('\u{00D4}'),
+            "Ograve" => Some('\u{00D2}'),
+            "Oslash" => Some('\u{00D8}'),
+            "Otilde" => Some('\u{00D5}'),
+            "Ouml" => Some('\u{00D6}'),
+            "Uacute" => Some('\u{00DA}'),
+            "Ugrave" => Some('\u{00D9}'),
+            "aacute" => Some('\u{00E1}'),
+            "acirc" => Some('\u{00E2}'),
+            "acute" => Some('\u{00B4}'),
+            "aelig" => Some('\u{00E6}'),
+            "agrave" => Some('\u{00E0}'),
+            "amp" => Some('\u{0026}'),
+            "apos" => Some('\u{0027}'),
+            "aring" => Some('\u{00E5}'),
+            "atilde" => Some('\u{00E3}'),
+            "auml" => Some('\u{00E4}'),
+            "brvbar" => Some('\u{00A6}'),
+            "ccedil" => Some('\u{00E7}'),
+            "cedil" => Some('\u{00B8}'),
+            "cent" => Some('\u{00A2}'),
+            "copy" => Some('\u{00A9}'),
+            "curren" => Some('\u{00A4}'),
+            "deg" => Some('\u{00B0}'),
+            "divide" => Some('\u{00F7}'),
+            "eacute" => Some('\u{00E9}'),
+            "ecirc" => Some('\u{00EA}'),
+            "egrave" => Some('\u{00E8}'),
+            "eth" => Some('\u{00F0}'),
+            "euml" => Some('\u{00EB}'),
+            "frac12" => Some('\u{00BD}'),
+            "frac14" => Some('\u{00BC}'),
+            "frac34" => Some('\u{00BE}'),
+            "gt" => Some('\u{003E}'),
+            "hellip" => Some('\u{2026}'),
+            "iacute" => Some('\u{00ED}'),
+            "icirc" => Some('\u{00EE}'),
+            "iexcl" => Some('\u{00A1}'),
+            "igrave" => Some('\u{00EC}'),
+            "iquest" => Some('\u{00BF}'),
+            "iuml" => Some('\u{00EF}'),
+            "laquo" => Some('\u{00AB}'),
+            "ldquo" => Some('\u{201C}'),
+            "lsquo" => Some('\u{2018}'),
+            "lt" => Some('\u{003C}'),
+            "macr" => Some('\u{00AF}'),
+            "mdash" => Some('\u{2014}'),
+            "micro" => Some('\u{00B5}'),
+            "middot" => Some('\u{00B7}'),
+            "nbsp" => Some('\u{00A0}'),
+            "ndash" => Some('\u{2013}'),
+            "not" => Some('\u{00AC}'),
+            "ntilde" => Some('\u{00F1}'),
+            "oacute" => Some('\u{00F3}'),
+            "ocirc" => Some('\u{00F4}'),
+            "ograve" => Some('\u{00F2}'),
+            "ordf" => Some('\u{00AA}'),
+            "ordm" => Some('\u{00BA}'),
+            "oslash" => Some('\u{00F8}'),
+            "otilde" => Some('\u{00F5}'),
+            "ouml" => Some('\u{00F6}'),
+            "para" => Some('\u{00B6}'),
+            "plusmn" => Some('\u{00B1}'),
+            "pound" => Some('\u{00A3}'),
+            "quot" => Some('\u{0022}'),
+            "raquo" => Some('\u{00BB}'),
+            "rdquo" => Some('\u{201D}'),
+            "reg" => Some('\u{00AE}'),
+            "rsquo" => Some('\u{2019}'),
+            "sect" => Some('\u{00A7}'),
+            "shy" => Some('\u{00AD}'),
+            "sup1" => Some('\u{00B9}'),
+            "sup2" => Some('\u{00B2}'),
+            "sup3" => Some('\u{00B3}'),
+            "szlig" => Some('\u{00DF}'),
+            "thorn" => Some('\u{00FE}'),
+            "times" => Some('\u{00D7}'),
+            "trade" => Some('\u{2122}'),
+            "uacute" => Some('\u{00FA}'),
+            "ucirc" => Some('\u{00FB}'),
+            "ugrave" => Some('\u{00F9}'),
+            "uml" => Some('\u{00A8}'),
+            "uuml" => Some('\u{00FC}'),
+            "yacute" => Some('\u{00FD}'),
+            "yen" => Some('\u{00A5}'),
+            "yuml" => Some('\u{00FF}'),
+            _ => None,
+        }
+    }
+
+    /// §13.2.5.73 Named character reference state
+    ///
+    /// Consumes ASCII alphanumeric characters to build an entity name,
+    /// then looks it up in the entity table.
+    ///
+    /// - On `;` → lookup match: if found → emit resolved char; else → ambiguous
+    /// - On ASCII alphanum → append to buffer, stay
+    /// - On anything else → lookup without `;`: if found → emit resolved char +
+    ///   reconsume; else → ambiguous ampersand
+    /// - EOF → ambiguous ampersand
+    fn handle_named_character_reference_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(';') => {
+                // End of entity name — look up accumulated chars
+                let entity_char = Self::resolve_named_entity(&self.temporary_buffer);
+                match entity_char {
+                    Some(ch) => {
+                        self.temporary_buffer.clear();
+                        let state = self.return_state.take().unwrap_or(State::Data);
+                        self.emit_char_to_attr(ch, state);
+                        self.state = state;
+                        Some(Token::Character(ch))
+                    }
+                    None => {
+                        // Unknown entity: push buffered chars to pending,
+                        // reconsume `;` so AmbiguousAmpersand sees it.
+                        for ch in self.temporary_buffer.chars().rev() {
+                            self.pending_tokens.push(Token::Character(ch));
+                        }
+                        self.temporary_buffer.clear();
+                        self.state = State::AmbiguousAmpersand;
+                        self.reconsume = true;
+                        None
+                    }
+                }
+            }
+            Some(c) if c.is_ascii_alphanumeric() => {
+                self.temporary_buffer.push(c);
+                None
+            }
+            Some(_c) => {
+                // Non-alphanumeric, non-`;`: try lookup without semicolon
+                let entity_char = Self::resolve_named_entity(&self.temporary_buffer);
+                self.temporary_buffer.clear();
+                match entity_char {
+                    Some(ch) => {
+                        let state = self.return_state.take().unwrap_or(State::Data);
+                        self.emit_char_to_attr(ch, state);
+                        self.state = state;
+                        self.reconsume = true;
+                        Some(Token::Character(ch))
+                    }
+                    None => {
+                        self.state = State::AmbiguousAmpersand;
+                        self.reconsume = true;
+                        None
+                    }
+                }
+            }
+            None => {
+                // EOF after starting a named reference → ambiguous
+                self.state = State::AmbiguousAmpersand;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.74 Ambiguous ampersand state
+    ///
+    /// Consume the next input character:
+    /// - ASCII alphanumeric → emit the character, stay
+    /// - U+003B SEMICOLON (;) → emit `;`, switch to return_state
+    /// - Anything else → reconsume in return_state
+    fn handle_ambiguous_ampersand_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_alphanumeric() => {
+                Some(Token::Character(c))
+            }
+            Some(';') => {
+                let state = self.return_state.take().unwrap_or(State::Data);
+                self.state = state;
+                Some(Token::Character(';'))
+            }
+            Some(_c) => {
+                let state = self.return_state.take().unwrap_or(State::Data);
+                self.state = state;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                let state = self.return_state.take().unwrap_or(State::Data);
+                self.state = state;
+                None
+            }
+        }
+    }
+
+    /// Helper: emit a character to current_attr_value if the return state
+    /// is an attribute value state.
+    fn emit_char_to_attr(&mut self, ch: char, return_state: State) {
+        match return_state {
+            State::AttributeValueDoubleQuoted
+            | State::AttributeValueSingleQuoted
+            | State::AttributeValueUnquoted => {
+                self.current_attr_value.push(ch);
+            }
+            _ => {}
+        }
+    }
+
+    // ── Character reference fallback helpers ──────────────────
+
+    /// Emit `&` and return to the return_state.
+    /// Used when an `&` is not followed by a valid character reference.
+    /// Per spec §13.2.5.72, the current input character is re-consumed
+    /// in the return state.
+    fn emit_ampersand_and_return(&mut self) -> Option<Token> {
+        let state = self.return_state.take().unwrap_or(State::Data);
+        self.state = state;
+        self.reconsume = true;
+        self.append_char_to_attr_if_needed('&', state);
+        Some(Token::Character('&'))
+    }
+
+    /// Emit `&#` and return via pending tokens.
+    fn emit_ampersand_hash_and_return(&mut self) -> Option<Token> {
+        self.pending_tokens.push(Token::Character('#'));
+        self.pending_tokens.push(Token::Character('&'));
+        let state = self.return_state.take().unwrap_or(State::Data);
+        self.state = state;
+        self.reconsume = true;
+        None
+    }
+
+    /// Emit `&#x` and return via pending tokens.
+    fn emit_ampersand_hash_x_and_return(&mut self) -> Option<Token> {
+        self.pending_tokens.push(Token::Character('x'));
+        self.pending_tokens.push(Token::Character('#'));
+        self.pending_tokens.push(Token::Character('&'));
+        let state = self.return_state.take().unwrap_or(State::Data);
+        self.state = state;
+        self.reconsume = true;
+        None
+    }
+
+    /// Append a character to `current_attr_value` if the state is
+    /// an attribute value state.
+    fn append_char_to_attr_if_needed(&mut self, ch: char, state: State) {
+        match state {
+            State::AttributeValueDoubleQuoted
+            | State::AttributeValueSingleQuoted
+            | State::AttributeValueUnquoted => {
+                self.current_attr_value.push(ch);
+            }
+            _ => {}
+        }
+    }
+
     // ── Attribute state helpers ───────────────────────────────────
 
     /// Push the currently accumulated attribute (name + value) into the tag.
@@ -2649,9 +3213,8 @@ impl HtmlTokenizer {
                 None
             }
             Some('&') => {
-                // TODO: Switch to character reference state with return state
-                self.current_attr_value.push('&');
-                self.state = State::AttributeValueDoubleQuoted;
+                self.return_state = Some(State::AttributeValueDoubleQuoted);
+                self.state = State::CharacterReference;
                 None
             }
             Some('\0') => {
@@ -2681,9 +3244,8 @@ impl HtmlTokenizer {
                 None
             }
             Some('&') => {
-                // TODO: Switch to character reference state with return state
-                self.current_attr_value.push('&');
-                self.state = State::AttributeValueSingleQuoted;
+                self.return_state = Some(State::AttributeValueSingleQuoted);
+                self.state = State::CharacterReference;
                 None
             }
             Some('\0') => {
@@ -2713,9 +3275,8 @@ impl HtmlTokenizer {
                 None
             }
             Some('&') => {
-                // TODO: Switch to character reference state with return state
-                self.current_attr_value.push('&');
-                self.state = State::AttributeValueUnquoted;
+                self.return_state = Some(State::AttributeValueUnquoted);
+                self.state = State::CharacterReference;
                 None
             }
             Some('>') => {
@@ -4587,5 +5148,114 @@ mod tests {
         // just switch to Escaped
         assert_eq!(t.next_token(), None);
         assert_eq!(t.state(), State::ScriptDataEscaped);
+    }
+
+    // ── Character reference tests (§13.2.5.72–§13.2.5.80) ──────
+
+    #[test]
+    fn char_ref_named_amp() {
+        // `&amp;` → `&`: '&' 'a' 'm' 'p' ';' (5 Nones → Some)
+        let mut t = HtmlTokenizer::new("&amp;");
+        for _ in 0..5 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+    }
+
+    #[test]
+    fn char_ref_named_lt() {
+        // `&lt;` → `<`: '&' 'l' 't' ';' (3 Nones → Some)
+        let mut t = HtmlTokenizer::new("&lt;");
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+    }
+
+    #[test]
+    fn char_ref_named_gt() {
+        // `&gt;` → `>`: '&' 'g' 't' ';' (4 Nones → Some)
+        let mut t = HtmlTokenizer::new("&gt;");
+        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('>')));
+    }
+
+    #[test]
+    fn char_ref_named_quot() {
+        // `&quot;` → `"`: '&' 'q' 'u' 'o' 't' ';' (5 Nones → Some)
+        let mut t = HtmlTokenizer::new("&quot;");
+        for _ in 0..6 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('"')));
+    }
+
+    #[test]
+    fn char_ref_numeric_decimal() {
+        let mut t = HtmlTokenizer::new("&#60;");
+        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+    }
+
+    #[test]
+    fn char_ref_numeric_hex() {
+        let mut t = HtmlTokenizer::new("&#x3C;");
+        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+    }
+
+    #[test]
+    fn char_ref_not_a_ref_space() {
+        // `& a` → emit `&`, then ` ` in Data
+        let mut t = HtmlTokenizer::new("& a");
+        assert_eq!(t.next_token(), None);  // '&' → CharacterReference
+        assert_eq!(t.next_token(), Some(Token::Character('&'))); // ' ' → fallback
+        assert_eq!(t.next_token(), Some(Token::Character(' '))); // reconsume ' '
+        assert_eq!(t.next_token(), Some(Token::Character('a')));
+    }
+
+    #[test]
+    fn char_ref_ampersand_not_ref() {
+        // `&&` → emit `&`, reconsume `&`
+        let mut t = HtmlTokenizer::new("&&");
+        assert_eq!(t.next_token(), None); // '&' → CharacterReference
+        assert_eq!(t.next_token(), Some(Token::Character('&'))); // '&' → fallback
+        assert_eq!(t.next_token(), None); // reconsume '&' → CharacterReference
+        assert_eq!(t.next_token(), Some(Token::Character('&'))); // at EOF → fallback
+    }
+
+    #[test]
+    fn char_ref_numeric_null() {
+        // `&#x00;` → U+FFFD: '&' '#' 'x' '0' '0' ';' (5 Nones → Some)
+        let mut t = HtmlTokenizer::new("&#x00;");
+        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('\u{FFFD}')));
+    }
+
+    #[test]
+    fn char_ref_numeric_win1252() {
+        let mut t = HtmlTokenizer::new("&#x80;");
+        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('\u{20AC}')));
+    }
+
+    #[test]
+    fn char_ref_unknown_entity_ambiguous() {
+        // `&notin;` — `notin` not in minimal table → ambiguous ampersand
+        let mut t = HtmlTokenizer::new("&notin;");
+        // 8 Nones then pending tokens + AmbigAmpersand emit
+        for _ in 0..8 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.next_token(), Some(Token::Character('n')));
+        assert_eq!(t.next_token(), Some(Token::Character('o')));
+        assert_eq!(t.next_token(), Some(Token::Character('t')));
+        assert_eq!(t.next_token(), Some(Token::Character('i')));
+        assert_eq!(t.next_token(), Some(Token::Character('n')));
+        assert_eq!(t.next_token(), Some(Token::Character(';')));
+    }
+
+    #[test]
+    fn char_ref_e2e_data_state() {
+        // `&lt;a&gt;` → `<a>`
+        let mut t = HtmlTokenizer::new("&lt;a&gt;");
+        for _ in 0..4 { assert_eq!(t.next_token(), None); } // &lt; resolved
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+        assert_eq!(t.next_token(), Some(Token::Character('a')));
+        for _ in 0..4 { assert_eq!(t.next_token(), None); } // &gt; resolved
+        assert_eq!(t.next_token(), Some(Token::Character('>')));
+        assert_eq!(t.next_token(), Some(Token::EOF));
     }
 }
