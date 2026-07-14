@@ -11,23 +11,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test Commands
 
 ```bash
-cd muskitty-html-parser
-cargo check          # 快速检查（比 build 快，必须零 warning）
-cargo test           # 运行全部测试
+cargo check                          # 检查整个 workspace（必须零 warning）
+cargo check -p muskitty-html-parser  # 只检查 html-parser crate
+cargo test                           # 运行全部测试
+cargo test -p muskitty-html-parser   # 只跑 html-parser crate 测试
 cargo test -p muskitty-html-parser --lib  # 只跑 lib tests
+cargo test --test html5lib_tokenizer -- --nocapture  # html5lib 套件
 ```
 
 ## Architecture
 
 ```
-muskitty-html-parser/          # 当前唯一的 crate
-  src/
-    tokenizer/                 # WHATWG §13.2.5 — tokenization 状态机
-      types.rs                 # Token, TagToken, DoctypeToken, State
-      trait_def.rs             # Tokenizer trait 签名
-    parser/                    # §13.2.6 — tree construction（预留）
-    dom/                       # DOM 节点类型（预留）
-    error/                     # parse error 类型（预留）
+muskitty/                          (Cargo workspace root)
+  Cargo.toml                       (workspace 定义)
+  crates/
+    muskitty-html-parser/          # WHATWG HTML parser (tokenizer + tree construction)
+      src/
+        tokenizer/                 # §13.2.5 tokenization 状态机
+          types.rs                 # Token, TagToken, DoctypeToken, State
+          trait_def.rs             # Tokenizer trait 签名
+        parser/                    # §13.2.6 tree construction（预留）
+        dom/                       # DOM 节点类型（预留）
+        error/                     # parse error 类型（预留）
+    # 未来 crate 预留:
+    # muskitty-dom/
+    # muskitty-css/
+    # muskitty-network/
+    # muskitty-layout/
+    # muskitty-renderer/
 ```
 
 两阶段模型：**tokenizer** 消耗码点流，产出 token → **tree construction** 消耗 token，构建 DOM。
@@ -52,7 +63,7 @@ muskitty-html-parser/          # 当前唯一的 crate
 8. **Self-check** — 提防：Kitchen Sink / Wrong Abstraction / Optimistic Path / Runaway Refactor
 
 ### Commit Discipline
-- 每个子任务 + cargo check/test 通过后立即 commit
+- 每个子任务 + cargo check/test + cargo fmt 通过后立即 commit
 - Message 格式：`[module] what + why`，例：`[tokenizer] add Data state, matches WHATWG §13.2.5.1`
 - 必须 `git add <specific files>`，禁止 `git commit -a`
 - 禁止 `git rebase -i` 压缩已完成的 commit

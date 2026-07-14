@@ -34,6 +34,18 @@ pub struct HtmlTokenizer {
     /// without advancing `pos`. Used by states that "reconsume" the character
     /// in a different state (§13.2.5 convention).
     reconsume: bool,
+    /// When true, the most recent `next_char()` consumed the end of the input
+    /// (returned `None`). Combined with [`reconsume`](Self::reconsume), this
+    /// makes a "reconsume in <state>" transition from an EOF arm replay the
+    /// EOF (return `None`) rather than re-emitting the last real code point.
+    ///
+    /// Without this, any EOF arm that sets `reconsume = true` would loop
+    /// forever: `next_char()` replays `input[pos-1]` (the final char), so the
+    /// return state re-processes that char and may route right back, emitting
+    /// a token each iteration without ever advancing — the input never ends.
+    /// This was the root cause of the html5lib harness OOM (20 GB) on
+    /// `&`-at-EOF inputs.
+    last_was_eof: bool,
     /// The tag token currently being built, if any.
     /// Set when entering TagName state, emitted when tag is complete.
     current_tag: Option<TagToken>,
@@ -79,6 +91,7 @@ impl HtmlTokenizer {
             state: State::Data,
             eof_emitted: false,
             reconsume: false,
+            last_was_eof: false,
             current_tag: None,
             current_comment: String::new(),
             current_attr_name: String::new(),
@@ -111,6 +124,9 @@ impl HtmlTokenizer {
         let c = self.current_char();
         if c.is_some() {
             self.pos += 1;
+            self.last_was_eof = false;
+        } else {
+            self.last_was_eof = true;
         }
         c
     }
@@ -118,14 +134,27 @@ impl HtmlTokenizer {
     /// Return the next input character, respecting the reconsume flag.
     ///
     /// If [`reconsume`](Self::reconsume) is true, returns the previously
-    /// consumed character (at `pos - 1`) and clears the flag without
-    /// advancing. Otherwise, consumes and advances as usual.
+    /// consumed character (at `pos - 1`) without advancing. Otherwise,
+    /// consumes and advances as usual.
     ///
     /// This implements the "reconsume the current input character" convention
     /// used throughout §13.2.5.
+    ///
+    /// # EOF reconsume
+    ///
+    /// When an EOF arm sets `reconsume = true`, the spec's "reconsume the
+    /// current input character" means the return state must see the EOF
+    /// again — not the last real code point. [`last_was_eof`](Self::last_was_eof)
+    /// records whether the most recent consume hit EOF so this can replay
+    /// `None` instead of `input[pos-1]`. Without this, every EOF reconsume
+    /// would loop forever (see the field doc).
     fn next_char(&mut self) -> Option<char> {
         if self.reconsume {
             self.reconsume = false;
+            if self.last_was_eof {
+                // Reconsuming EOF: there is no code point to replay.
+                return None;
+            }
             // The character to reconsume was already consumed — it's at pos-1.
             if self.pos > 0 && self.pos <= self.input.len() {
                 Some(self.input[self.pos - 1])
@@ -155,8 +184,17 @@ impl HtmlTokenizer {
     }
 }
 
-impl Tokenizer for HtmlTokenizer {
-    fn next_token(&mut self) -> Option<Token> {
+impl HtmlTokenizer {
+    /// Advance the state machine by exactly one step and return whatever
+    /// the active state handler produces (a token, or `None` when this
+    /// step only switched state without emitting).
+    ///
+    /// This is the single-step primitive. The public [`Tokenizer::next_token`]
+    /// loops over this until a real token drops out, so callers never observe
+    /// the intermediate `None`s. Kept as a separate method so unit tests can
+    /// still assert on individual state transitions when that granularity is
+    /// useful.
+    fn step(&mut self) -> Option<Token> {
         // After EOF has been emitted, the stream is exhausted.
         if self.eof_emitted {
             return None;
@@ -180,14 +218,24 @@ impl Tokenizer for HtmlTokenizer {
             State::AfterDoctypeName => self.handle_after_doctype_name_state(),
             State::AfterDoctypePublicKeyword => self.handle_after_doctype_public_keyword_state(),
             State::BeforeDoctypePublicId => self.handle_before_doctype_public_id_state(),
-            State::DoctypePublicIdDoubleQuoted => self.handle_doctype_public_id_double_quoted_state(),
-            State::DoctypePublicIdSingleQuoted => self.handle_doctype_public_id_single_quoted_state(),
+            State::DoctypePublicIdDoubleQuoted => {
+                self.handle_doctype_public_id_double_quoted_state()
+            }
+            State::DoctypePublicIdSingleQuoted => {
+                self.handle_doctype_public_id_single_quoted_state()
+            }
             State::AfterDoctypePublicId => self.handle_after_doctype_public_id_state(),
-            State::BetweenDoctypePublicAndSystemIds => self.handle_between_doctype_public_and_system_ids_state(),
+            State::BetweenDoctypePublicAndSystemIds => {
+                self.handle_between_doctype_public_and_system_ids_state()
+            }
             State::AfterDoctypeSystemKeyword => self.handle_after_doctype_system_keyword_state(),
             State::BeforeDoctypeSystemId => self.handle_before_doctype_system_id_state(),
-            State::DoctypeSystemIdDoubleQuoted => self.handle_doctype_system_id_double_quoted_state(),
-            State::DoctypeSystemIdSingleQuoted => self.handle_doctype_system_id_single_quoted_state(),
+            State::DoctypeSystemIdDoubleQuoted => {
+                self.handle_doctype_system_id_double_quoted_state()
+            }
+            State::DoctypeSystemIdSingleQuoted => {
+                self.handle_doctype_system_id_single_quoted_state()
+            }
             State::AfterDoctypeSystemId => self.handle_after_doctype_system_id_state(),
             State::BogusDoctype => self.handle_bogus_doctype_state(),
             State::BogusComment => self.handle_bogus_comment_state(),
@@ -196,8 +244,12 @@ impl Tokenizer for HtmlTokenizer {
             State::Comment => self.handle_comment_state(),
             State::CommentLessThanSign => self.handle_comment_less_than_sign_state(),
             State::CommentLessThanSignBang => self.handle_comment_less_than_sign_bang_state(),
-            State::CommentLessThanSignBangDash => self.handle_comment_less_than_sign_bang_dash_state(),
-            State::CommentLessThanSignBangDashDash => self.handle_comment_less_than_sign_bang_dash_dash_state(),
+            State::CommentLessThanSignBangDash => {
+                self.handle_comment_less_than_sign_bang_dash_state()
+            }
+            State::CommentLessThanSignBangDashDash => {
+                self.handle_comment_less_than_sign_bang_dash_dash_state()
+            }
             State::CommentEndDash => self.handle_comment_end_dash_state(),
             State::CommentEnd => self.handle_comment_end_state(),
             State::CommentEndBang => self.handle_comment_end_bang_state(),
@@ -227,22 +279,40 @@ impl Tokenizer for HtmlTokenizer {
             State::ScriptDataEscaped => self.handle_script_data_escaped_state(),
             State::ScriptDataEscapedDash => self.handle_script_data_escaped_dash_state(),
             State::ScriptDataEscapedDashDash => self.handle_script_data_escaped_dash_dash_state(),
-            State::ScriptDataEscapedLessThanSign => self.handle_script_data_escaped_less_than_sign_state(),
-            State::ScriptDataEscapedEndTagOpen => self.handle_script_data_escaped_end_tag_open_state(),
-            State::ScriptDataEscapedEndTagName => self.handle_script_data_escaped_end_tag_name_state(),
-            State::ScriptDataDoubleEscapeStart => self.handle_script_data_double_escape_start_state(),
+            State::ScriptDataEscapedLessThanSign => {
+                self.handle_script_data_escaped_less_than_sign_state()
+            }
+            State::ScriptDataEscapedEndTagOpen => {
+                self.handle_script_data_escaped_end_tag_open_state()
+            }
+            State::ScriptDataEscapedEndTagName => {
+                self.handle_script_data_escaped_end_tag_name_state()
+            }
+            State::ScriptDataDoubleEscapeStart => {
+                self.handle_script_data_double_escape_start_state()
+            }
             State::ScriptDataDoubleEscaped => self.handle_script_data_double_escaped_state(),
-            State::ScriptDataDoubleEscapedDash => self.handle_script_data_double_escaped_dash_state(),
-            State::ScriptDataDoubleEscapedDashDash => self.handle_script_data_double_escaped_dash_dash_state(),
-            State::ScriptDataDoubleEscapedLessThanSign => self.handle_script_data_double_escaped_less_than_sign_state(),
+            State::ScriptDataDoubleEscapedDash => {
+                self.handle_script_data_double_escaped_dash_state()
+            }
+            State::ScriptDataDoubleEscapedDashDash => {
+                self.handle_script_data_double_escaped_dash_dash_state()
+            }
+            State::ScriptDataDoubleEscapedLessThanSign => {
+                self.handle_script_data_double_escaped_less_than_sign_state()
+            }
             State::ScriptDataDoubleEscapeEnd => self.handle_script_data_double_escape_end_state(),
             State::CharacterReference => self.handle_character_reference_state(),
             State::NumericCharacterReference => self.handle_numeric_character_reference_state(),
             State::HexCharacterReferenceStart => self.handle_hex_character_reference_start_state(),
-            State::DecimalCharacterReferenceStart => self.handle_decimal_character_reference_start_state(),
+            State::DecimalCharacterReferenceStart => {
+                self.handle_decimal_character_reference_start_state()
+            }
             State::HexCharacterReference => self.handle_hex_character_reference_state(),
             State::DecimalCharacterReference => self.handle_decimal_character_reference_state(),
-            State::NumericCharacterReferenceEnd => self.handle_numeric_character_reference_end_state(),
+            State::NumericCharacterReferenceEnd => {
+                self.handle_numeric_character_reference_end_state()
+            }
             State::NamedCharacterReference => self.handle_named_character_reference_state(),
             State::AmbiguousAmpersand => self.handle_ambiguous_ampersand_state(),
             State::CDATASection => self.handle_cdata_section_state(),
@@ -250,6 +320,39 @@ impl Tokenizer for HtmlTokenizer {
             State::CDATASectionEnd => self.handle_cdata_section_end_state(),
         };
         result
+    }
+}
+
+impl Tokenizer for HtmlTokenizer {
+    fn next_token(&mut self) -> Option<Token> {
+        // Loop over single steps until a real token is produced. State
+        // handlers that only switch state return `None`; those intermediate
+        // steps are invisible to the caller. The loop terminates because
+        // every state path makes progress — it either consumes a code point,
+        // sets a reconsume that flips into a consuming state, emits a token,
+        // or reaches EOF (which sets eof_emitted and returns EOF, after
+        // which the step guard returns None and we break out). A safety
+        // bound guards against any latent state-machine bug hanging forever.
+        let mut bound = 1_000_000;
+        while bound > 0 {
+            bound -= 1;
+            match self.step() {
+                Some(token) => return Some(token),
+                None => {
+                    // No token this step. If the stream is exhausted, stop;
+                    // otherwise the step changed state and we keep going.
+                    if self.eof_emitted {
+                        return None;
+                    }
+                }
+            }
+        }
+        // Unreachable for a conforming input — every transition terminates.
+        // Reached only if a state-machine bug causes a non-productive cycle.
+        // Surface it loudly rather than spinning silently.
+        panic!(
+            "tokenizer state machine made no progress; probable reconsume/infinite-transition bug"
+        );
     }
 
     fn set_state(&mut self, state: State) {
@@ -265,6 +368,7 @@ impl Tokenizer for HtmlTokenizer {
         self.state = State::Data;
         self.eof_emitted = false;
         self.reconsume = false;
+        self.last_was_eof = false;
         self.current_tag = None;
         self.current_comment.clear();
         self.current_attr_name.clear();
@@ -1181,8 +1285,7 @@ impl HtmlTokenizer {
     /// - Anything else → reconsume in ScriptDataEscaped
     fn handle_script_data_double_escape_start_state(&mut self) -> Option<Token> {
         match self.next_char() {
-            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ')
-            | Some('/') | Some('>') => {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') | Some('/') | Some('>') => {
                 // Check if temp buffer is exactly "script"
                 if self.temporary_buffer == "script" {
                     // Tag persists into DoubleEscaped for later emission in
@@ -1378,8 +1481,7 @@ impl HtmlTokenizer {
     ///   ScriptDataDoubleEscaped
     fn handle_script_data_double_escape_end_state(&mut self) -> Option<Token> {
         match self.next_char() {
-            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ')
-            | Some('/') | Some('>') => {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') | Some('/') | Some('>') => {
                 if self.temporary_buffer == "script" {
                     // Exit double-escaped: emit the tag token, return to escaped
                     if let Some(tag) = self.current_tag.take() {
@@ -1647,8 +1749,7 @@ impl HtmlTokenizer {
     fn handle_character_reference_state(&mut self) -> Option<Token> {
         match self.next_char() {
             // Characters that cause immediate fallback (not a valid char ref)
-            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ')
-            | Some('<') | Some('&') => {
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') | Some('<') | Some('&') => {
                 self.emit_ampersand_and_return()
             }
             None => {
@@ -1723,9 +1824,7 @@ impl HtmlTokenizer {
                 // TODO: record parse error (absence-of-digits-in-numeric-character-reference)
                 self.emit_ampersand_hash_x_and_return()
             }
-            None => {
-                self.emit_ampersand_hash_x_and_return()
-            }
+            None => self.emit_ampersand_hash_x_and_return(),
         }
     }
 
@@ -1745,9 +1844,7 @@ impl HtmlTokenizer {
                 // TODO: record parse error
                 self.emit_ampersand_hash_and_return()
             }
-            None => {
-                self.emit_ampersand_hash_and_return()
-            }
+            None => self.emit_ampersand_hash_and_return(),
         }
     }
 
@@ -1766,8 +1863,10 @@ impl HtmlTokenizer {
                     'A'..='F' => c as u32 - 'A' as u32 + 10,
                     _ => unreachable!(),
                 };
-                self.character_reference_code =
-                    self.character_reference_code.wrapping_mul(16).wrapping_add(digit);
+                self.character_reference_code = self
+                    .character_reference_code
+                    .wrapping_mul(16)
+                    .wrapping_add(digit);
                 None
             }
             Some(';') => {
@@ -1799,8 +1898,10 @@ impl HtmlTokenizer {
         match self.next_char() {
             Some(c) if c.is_ascii_digit() => {
                 let digit = c as u32 - '0' as u32;
-                self.character_reference_code =
-                    self.character_reference_code.wrapping_mul(10).wrapping_add(digit);
+                self.character_reference_code = self
+                    .character_reference_code
+                    .wrapping_mul(10)
+                    .wrapping_add(digit);
                 None
             }
             Some(';') => {
@@ -1910,34 +2011,38 @@ impl HtmlTokenizer {
 
     /// §13.2.5.73 Named character reference state
     ///
-    /// Consumes ASCII alphanumeric characters to build an entity name,
-    /// then looks it up in the entity table.
+    /// Consumes ASCII alphanumeric characters to build an entity name in
+    /// `temporary_buffer`, then looks it up in the entity table.
     ///
-    /// - On `;` → lookup match: if found → emit resolved char; else → ambiguous
-    /// - On ASCII alphanum → append to buffer, stay
-    /// - On anything else → lookup without `;`: if found → emit resolved char +
-    ///   reconsume; else → ambiguous ampersand
-    /// - EOF → ambiguous ampersand
+    /// - On `;` → lookup `buffer + ";"`: if found → emit resolved char(s);
+    ///   else → flush `&` + buffer as literal, reconsume `;` in return state.
+    /// - On ASCII alphanum → append to buffer, stay.
+    /// - On anything else → lookup `buffer` (legacy entities only): if found
+    ///   → check attr-context rule, emit resolved or flush literal, reconsume
+    ///   in return state; else → flush `&` + buffer as literal, reconsume.
+    /// - EOF → lookup `buffer`: if found → emit; else → flush literal.
+    ///
+    /// In attribute value context, resolved chars and literal flushes go ONLY
+    /// to `current_attr_value` — no Character tokens are emitted. In body
+    /// context, they go ONLY to the token stream.
     fn handle_named_character_reference_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some(';') => {
-                let resolved = Self::resolve_named_entity(&self.temporary_buffer);
-                match resolved {
+                // Try to resolve as entity with `;` appended.
+                let name_with_semi = format!("{};", self.temporary_buffer);
+                match Self::resolve_named_entity(&name_with_semi) {
                     Some(s) => {
                         self.temporary_buffer.clear();
                         let state = self.return_state.take().unwrap_or(State::Data);
-                        self.emit_str_to_attr(s, state);
                         self.state = state;
-                        self.emit_multi_char(s)
+                        self.emit_resolved(s, state)
                     }
                     None => {
-                        // Unknown entity: push buffered chars to pending,
-                        // reconsume `;` so AmbiguousAmpersand sees it.
-                        for ch in self.temporary_buffer.chars().rev() {
-                            self.pending_tokens.push(Token::Character(ch));
-                        }
-                        self.temporary_buffer.clear();
-                        self.state = State::AmbiguousAmpersand;
+                        // No match: flush `&` + buffer as literal, reconsume
+                        // `;` in return state (which emits `;` as literal).
+                        let state = self.return_state.take().unwrap_or(State::Data);
+                        self.flush_literal_ampersand_and_name(state);
+                        self.state = state;
                         self.reconsume = true;
                         None
                     }
@@ -1947,30 +2052,58 @@ impl HtmlTokenizer {
                 self.temporary_buffer.push(c);
                 None
             }
-            Some(_c) => {
-                // Non-alphanumeric, non-`;`: try lookup without semicolon
-                let resolved = Self::resolve_named_entity(&self.temporary_buffer);
-                match resolved {
+            Some(c) => {
+                // Non-alphanumeric, non-`;`: try lookup without `;` (legacy).
+                match Self::resolve_named_entity(&self.temporary_buffer) {
                     Some(s) => {
-                        self.temporary_buffer.clear();
                         let state = self.return_state.take().unwrap_or(State::Data);
-                        self.emit_str_to_attr(s, state);
-                        self.state = state;
-                        self.reconsume = true;
-                        self.emit_multi_char(s)
+                        // Attr-context rule (§13.2.5.77): if consumed as part
+                        // of an attribute, and the match doesn't end with `;`
+                        // (legacy), and the next char is `=` or ASCII alphanum,
+                        // don't resolve — flush as literal instead.
+                        let in_attr = matches!(
+                            state,
+                            State::AttributeValueDoubleQuoted
+                                | State::AttributeValueSingleQuoted
+                                | State::AttributeValueUnquoted
+                        );
+                        if in_attr && (c == '=' || c.is_ascii_alphanumeric()) {
+                            self.flush_literal_ampersand_and_name(state);
+                            self.state = state;
+                            self.reconsume = true;
+                            None
+                        } else {
+                            self.temporary_buffer.clear();
+                            self.state = state;
+                            self.reconsume = true;
+                            self.emit_resolved(s, state)
+                        }
                     }
                     None => {
-                        self.temporary_buffer.clear();
-                        self.state = State::AmbiguousAmpersand;
+                        let state = self.return_state.take().unwrap_or(State::Data);
+                        self.flush_literal_ampersand_and_name(state);
+                        self.state = state;
                         self.reconsume = true;
                         None
                     }
                 }
             }
             None => {
-                // EOF after starting a named reference → ambiguous
-                self.state = State::AmbiguousAmpersand;
-                None
+                // EOF: try lookup without `;` (legacy only).
+                match Self::resolve_named_entity(&self.temporary_buffer) {
+                    Some(s) => {
+                        self.temporary_buffer.clear();
+                        let state = self.return_state.take().unwrap_or(State::Data);
+                        self.state = state;
+                        self.emit_resolved(s, state)
+                    }
+                    None => {
+                        let state = self.return_state.take().unwrap_or(State::Data);
+                        self.flush_literal_ampersand_and_name(state);
+                        self.state = state;
+                        None
+                    }
+                }
             }
         }
     }
@@ -1995,9 +2128,7 @@ impl HtmlTokenizer {
     /// - Anything else → reconsume in return_state
     fn handle_ambiguous_ampersand_state(&mut self) -> Option<Token> {
         match self.next_char() {
-            Some(c) if c.is_ascii_alphanumeric() => {
-                Some(Token::Character(c))
-            }
+            Some(c) if c.is_ascii_alphanumeric() => Some(Token::Character(c)),
             Some(';') => {
                 let state = self.return_state.take().unwrap_or(State::Data);
                 self.state = state;
@@ -2017,17 +2148,42 @@ impl HtmlTokenizer {
         }
     }
 
-    /// Helper: emit resolved character(s) to current_attr_value if the
-    /// return state is an attribute value state.
-    fn emit_str_to_attr(&mut self, s: &str, return_state: State) {
+    /// Emit resolved entity character(s), handling attribute vs body context.
+    /// In attribute value state: append to `current_attr_value` only (no token).
+    /// In other states: emit as Character token(s) via [`emit_multi_char`].
+    fn emit_resolved(&mut self, s: &str, return_state: State) -> Option<Token> {
         match return_state {
             State::AttributeValueDoubleQuoted
             | State::AttributeValueSingleQuoted
             | State::AttributeValueUnquoted => {
                 self.current_attr_value.push_str(s);
+                None
             }
-            _ => {}
+            _ => self.emit_multi_char(s),
         }
+    }
+
+    /// Flush `&` + `temporary_buffer` contents as literal characters.
+    /// In attribute value state: append to `current_attr_value` only.
+    /// In other states: push as pending Character tokens (`&` pops first,
+    /// then name chars in forward order).
+    fn flush_literal_ampersand_and_name(&mut self, return_state: State) {
+        match return_state {
+            State::AttributeValueDoubleQuoted
+            | State::AttributeValueSingleQuoted
+            | State::AttributeValueUnquoted => {
+                self.current_attr_value.push('&');
+                self.current_attr_value.push_str(&self.temporary_buffer);
+            }
+            _ => {
+                // Push in reverse so `&` pops first, then name chars forward.
+                for ch in self.temporary_buffer.chars().rev() {
+                    self.pending_tokens.push(Token::Character(ch));
+                }
+                self.pending_tokens.push(Token::Character('&'));
+            }
+        }
+        self.temporary_buffer.clear();
     }
 
     // ── Character reference fallback helpers ──────────────────
@@ -2556,9 +2712,7 @@ impl HtmlTokenizer {
     /// §13.2.5.62 Between DOCTYPE public and system identifiers state
     fn handle_between_doctype_public_and_system_ids_state(&mut self) -> Option<Token> {
         match self.next_char() {
-            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
-                None
-            }
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => None,
             Some('>') => {
                 let token = self.emit_current_doctype();
                 Some(token)
@@ -2627,9 +2781,7 @@ impl HtmlTokenizer {
     /// §13.2.5.64 Before DOCTYPE system identifier state
     fn handle_before_doctype_system_id_state(&mut self) -> Option<Token> {
         match self.next_char() {
-            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
-                None
-            }
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => None,
             Some('"') => {
                 self.current_doctype.system_id = Some(String::new());
                 self.state = State::DoctypeSystemIdDoubleQuoted;
@@ -2710,9 +2862,7 @@ impl HtmlTokenizer {
     /// §13.2.5.67 After DOCTYPE system identifier state
     fn handle_after_doctype_system_id_state(&mut self) -> Option<Token> {
         match self.next_char() {
-            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => {
-                None
-            }
+            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') => None,
             Some('>') => {
                 let token = self.emit_current_doctype();
                 Some(token)
@@ -3345,7 +3495,7 @@ mod tests {
     #[test]
     fn data_state_switches_to_tag_open_on_less_than() {
         let mut t = HtmlTokenizer::new("<");
-        let token = t.next_token();
+        let token = t.step();
         assert_eq!(token, None); // no token emitted — state changed
         assert_eq!(t.state(), State::TagOpen);
     }
@@ -3353,7 +3503,7 @@ mod tests {
     #[test]
     fn data_state_switches_to_character_reference_on_ampersand() {
         let mut t = HtmlTokenizer::new("&");
-        let token = t.next_token();
+        let token = t.step();
         assert_eq!(token, None); // no token emitted — state changed
         assert_eq!(t.state(), State::CharacterReference);
     }
@@ -3396,7 +3546,103 @@ mod tests {
         assert_eq!(t.next_token(), Some(Token::Character('b')));
         assert_eq!(t.next_token(), Some(Token::Character('c')));
         assert_eq!(t.next_token(), Some(Token::EOF));
-        assert_eq!(t.next_token(), None); // stream done
+        assert_eq!(t.step(), None); // stream done
+    }
+
+    // ── EOF reconsume regression tests ─────────────────────────────
+    //
+    // The root cause of the html5lib harness OOM (20 GB) was that any EOF
+    // arm which set `reconsume = true` replayed the *last real code point*
+    // instead of EOF, sending the state machine into an infinite
+    // character-emitting loop. These cases guard the fix: `&` (or other
+    // EOF-reconsume triggers) at the end of input must terminate cleanly.
+
+    #[test]
+    fn data_state_ampersand_at_eof_emits_amp_then_eof() {
+        // `&` alone in Data: '&' → CharacterReference; EOF → flush '&' and
+        // reconsume EOF in Data → EOF token.
+        let mut t = HtmlTokenizer::new("&");
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+        assert_eq!(t.next_token(), Some(Token::EOF));
+        assert_eq!(t.next_token(), None);
+    }
+
+    #[test]
+    fn data_state_double_ampersand_at_eof() {
+        // `&&`: first '&' → CharacterReference; second '&' → flush first '&'
+        // and reconsume; Data sees '&' → CharacterReference; EOF → flush
+        // second '&'; EOF → EOF token.
+        let mut t = HtmlTokenizer::new("&&");
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    #[test]
+    fn data_state_ampersand_hash_at_eof_emits_hash_amp_then_eof() {
+        // `&#` at EOF: '&' → CharacterReference → '#' → NumericCharacterReference;
+        // EOF → flush '&#' (via pending tokens) and reconsume EOF in Data → EOF.
+        let mut t = HtmlTokenizer::new("&#");
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+        assert_eq!(t.next_token(), Some(Token::Character('#')));
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    #[test]
+    fn data_state_ampersand_hash_x_at_eof() {
+        // `&#x` at EOF flushes '&#x' then emits EOF.
+        let mut t = HtmlTokenizer::new("&#x");
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+        assert_eq!(t.next_token(), Some(Token::Character('#')));
+        assert_eq!(t.next_token(), Some(Token::Character('x')));
+        assert_eq!(t.next_token(), Some(Token::EOF));
+    }
+
+    #[test]
+    fn rcdata_ampersand_at_eof_terminates() {
+        let mut t = enter_content_model("&", State::RCDATA, Some("title"));
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+        assert_eq!(t.next_token(), Some(Token::EOF));
+        assert_eq!(t.next_token(), None);
+    }
+
+    #[test]
+    fn doctype_public_id_ampersand_then_eof_terminates() {
+        // `<!DOCTYPE a PUBLIC"&`: after the PUBLIC keyword, a `"` is an
+        // unexpected quote → force_quirks and emit the doctype immediately
+        // (before a public id is opened). The trailing `&` is then a Data
+        // character reference at EOF, which must terminate cleanly rather
+        // than loop forever (the original OOM bug).
+        let mut t = HtmlTokenizer::new("<!DOCTYPE a PUBLIC\"&");
+        let tok = t.next_token();
+        match tok {
+            Some(Token::Doctype(d)) => {
+                assert_eq!(d.force_quirks, true);
+                assert_eq!(d.name.as_deref(), Some("a"));
+            }
+            other => panic!("expected Doctype, got {other:?}"),
+        }
+        assert_eq!(t.next_token(), Some(Token::Character('&')));
+        assert_eq!(t.next_token(), Some(Token::EOF));
+        assert_eq!(t.next_token(), None);
+    }
+
+    #[test]
+    fn doctype_public_id_ampersand_inside_then_eof_terminates() {
+        // `<!DOCTYPE a PUBLIC "x&` — '&' is now inside the public id string
+        // (a literal char), and EOF forces quirks.
+        let mut t = HtmlTokenizer::new("<!DOCTYPE a PUBLIC \"x&");
+        let tok = t.next_token();
+        match tok {
+            Some(Token::Doctype(d)) => {
+                assert_eq!(d.force_quirks, true);
+                assert_eq!(d.name.as_deref(), Some("a"));
+                assert_eq!(d.public_id.as_deref(), Some("x&"));
+            }
+            other => panic!("expected Doctype with public_id=\"x&\", got {other:?}"),
+        }
+        assert_eq!(t.next_token(), Some(Token::EOF));
+        assert_eq!(t.next_token(), None);
     }
 
     // ── TagName tests (§13.2.5.8) ──────────────────────────────
@@ -3405,10 +3651,10 @@ mod tests {
     fn enter_tag_name(input: &str) -> HtmlTokenizer {
         let mut t = HtmlTokenizer::new(input);
         // Data → TagOpen (on `<`)
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::TagOpen);
         // TagOpen → creates start tag + TagName (on first alpha)
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::TagName);
         // Verify the tag name was initialized with the first char
         // (we can't check current_tag directly since it's private, but we
@@ -3437,13 +3683,13 @@ mod tests {
     fn tag_name_emits_tag_with_lowercased_name() {
         // `<DIV>` → tag name should be "div"
         let mut t = HtmlTokenizer::new("<DIV>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // Data → TagOpen
         assert_eq!(t.state(), State::TagOpen);
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="d"
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // 'I' → append 'i'
+        assert_eq!(t.step(), None); // 'I' → append 'i'
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // 'V' → append 'v'
+        assert_eq!(t.step(), None); // 'V' → append 'v'
         assert_eq!(t.state(), State::TagName);
         // '>' → emit tag
         let token = t.next_token();
@@ -3463,13 +3709,13 @@ mod tests {
     fn tag_name_appends_lowercased_uppercase_chars() {
         // `<AbC>` → tag name should be "abc"
         let mut t = HtmlTokenizer::new("<AbC>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // Data → TagOpen
         assert_eq!(t.state(), State::TagOpen);
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="a"
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="a"
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // 'b' → append, still TagName
+        assert_eq!(t.step(), None); // 'b' → append, still TagName
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // 'C' → append 'c', still TagName
+        assert_eq!(t.step(), None); // 'C' → append 'c', still TagName
         assert_eq!(t.state(), State::TagName);
         // '>' → emit tag
         let token = t.next_token();
@@ -3488,13 +3734,13 @@ mod tests {
     fn tag_name_switches_to_self_closing_on_solidus() {
         // `<br/>` → after "br", '/' switches to SelfClosingStartTag
         let mut t = HtmlTokenizer::new("<br/>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // Data → TagOpen
         assert_eq!(t.state(), State::TagOpen);
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="b"
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="b"
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // 'r' appended, still TagName
+        assert_eq!(t.step(), None); // 'r' appended, still TagName
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // '/' → SelfClosingStartTag
+        assert_eq!(t.step(), None); // '/' → SelfClosingStartTag
         assert_eq!(t.state(), State::SelfClosingStartTag);
         // Now '/' is consumed, next char is '>'
         let token = t.next_token();
@@ -3516,14 +3762,14 @@ mod tests {
     fn end_tag_open_creates_end_tag_on_alpha() {
         // `</div>`: `<` → TagOpen, `/` → EndTagOpen, `d` → creates end tag + TagName
         let mut t = HtmlTokenizer::new("</div>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // Data → TagOpen
         assert_eq!(t.state(), State::TagOpen);
-        assert_eq!(t.next_token(), None); // TagOpen → EndTagOpen
+        assert_eq!(t.step(), None); // TagOpen → EndTagOpen
         assert_eq!(t.state(), State::EndTagOpen);
-        assert_eq!(t.next_token(), None); // EndTagOpen → TagName, name="d"
+        assert_eq!(t.step(), None); // EndTagOpen → TagName, name="d"
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // 'i' → append
-        assert_eq!(t.next_token(), None); // 'v' → append
+        assert_eq!(t.step(), None); // 'i' → append
+        assert_eq!(t.step(), None); // 'v' → append
         let token = t.next_token(); // '>' → emit
         assert_eq!(
             token,
@@ -3540,11 +3786,11 @@ mod tests {
     #[test]
     fn end_tag_open_lowercases_tag_name() {
         let mut t = HtmlTokenizer::new("</DIV>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → EndTagOpen
-        assert_eq!(t.next_token(), None); // EndTagOpen → TagName, name="d"
-        assert_eq!(t.next_token(), None); // 'i'
-        assert_eq!(t.next_token(), None); // 'v'
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → EndTagOpen
+        assert_eq!(t.step(), None); // EndTagOpen → TagName, name="d"
+        assert_eq!(t.step(), None); // 'i'
+        assert_eq!(t.step(), None); // 'v'
         let token = t.next_token(); // '>' → emit
         assert_eq!(
             token,
@@ -3562,23 +3808,22 @@ mod tests {
     fn end_tag_open_non_alpha_switches_to_data() {
         // `</>` → not alpha, switch to Data, don't emit anything
         let mut t = HtmlTokenizer::new("</>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → EndTagOpen
-        // EndTagOpen sees `>`: not alpha → switch to Data, no emit
-        let token = t.next_token();
-        assert_eq!(token, None); // nothing emitted
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → EndTagOpen
+                                    // EndTagOpen sees `>`: not alpha → switch to Data, no emit. Under the
+                                    // public contract, next_token() loops until a token drops out — the
+                                    // following EOF is that token.
+        assert_eq!(t.next_token(), Some(Token::EOF));
         assert_eq!(t.state(), State::Data);
-        // The '>' was consumed by EndTagOpen (not re-consumed), so next char is EOF
-        let token2 = t.next_token();
-        assert_eq!(token2, Some(Token::EOF));
+        assert_eq!(t.next_token(), None); // stream done
     }
 
     #[test]
     fn end_tag_open_eof_emits_lt_then_eof() {
         // `</` + EOF → emit `<`, return to Data, then emit EOF
         let mut t = HtmlTokenizer::new("</");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → EndTagOpen
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → EndTagOpen
         let token = t.next_token();
         assert_eq!(token, Some(Token::Character('<')));
         assert_eq!(t.state(), State::Data);
@@ -3592,23 +3837,33 @@ mod tests {
     fn e2e_simple_open_close_tag() {
         // `<p>hello</p>` → start tag, chars, end tag, EOF
         let mut t = HtmlTokenizer::new("<p>hello</p>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="p"
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="p"
         assert_eq!(
             t.next_token(),
-            Some(Token::Tag(TagToken { kind: TagKind::Start, name: "p".into(), attrs: Vec::new(), self_closing: false }))
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "p".into(),
+                attrs: Vec::new(),
+                self_closing: false
+            }))
         ); // '>' → emit
         assert_eq!(t.next_token(), Some(Token::Character('h')));
         assert_eq!(t.next_token(), Some(Token::Character('e')));
         assert_eq!(t.next_token(), Some(Token::Character('l')));
         assert_eq!(t.next_token(), Some(Token::Character('l')));
         assert_eq!(t.next_token(), Some(Token::Character('o')));
-        assert_eq!(t.next_token(), None); // '<' → TagOpen
-        assert_eq!(t.next_token(), None); // '/' → EndTagOpen
-        assert_eq!(t.next_token(), None); // 'p' → TagName, name="p"
+        assert_eq!(t.step(), None); // '<' → TagOpen
+        assert_eq!(t.step(), None); // '/' → EndTagOpen
+        assert_eq!(t.step(), None); // 'p' → TagName, name="p"
         assert_eq!(
             t.next_token(),
-            Some(Token::Tag(TagToken { kind: TagKind::End, name: "p".into(), attrs: Vec::new(), self_closing: false }))
+            Some(Token::Tag(TagToken {
+                kind: TagKind::End,
+                name: "p".into(),
+                attrs: Vec::new(),
+                self_closing: false
+            }))
         ); // '>' → emit
         assert_eq!(t.next_token(), Some(Token::EOF));
     }
@@ -3617,13 +3872,18 @@ mod tests {
     fn e2e_self_closing_tag() {
         // `<br/>` → self-closing start tag, EOF
         let mut t = HtmlTokenizer::new("<br/>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="b"
-        assert_eq!(t.next_token(), None); // 'r' → append
-        assert_eq!(t.next_token(), None); // '/' → SelfClosingStartTag
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="b"
+        assert_eq!(t.step(), None); // 'r' → append
+        assert_eq!(t.step(), None); // '/' → SelfClosingStartTag
         assert_eq!(
             t.next_token(),
-            Some(Token::Tag(TagToken { kind: TagKind::Start, name: "br".into(), attrs: Vec::new(), self_closing: true }))
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "br".into(),
+                attrs: Vec::new(),
+                self_closing: true
+            }))
         ); // '>' → emit
         assert_eq!(t.next_token(), Some(Token::EOF));
     }
@@ -3632,26 +3892,36 @@ mod tests {
     fn e2e_tag_space_then_chars() {
         // `<div>text</div>` → start tag, text chars, end tag, EOF
         let mut t = HtmlTokenizer::new("<div>text</div>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
-        assert_eq!(t.next_token(), None); // 'i'
-        assert_eq!(t.next_token(), None); // 'v'
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.step(), None); // 'i'
+        assert_eq!(t.step(), None); // 'v'
         assert_eq!(
             t.next_token(),
-            Some(Token::Tag(TagToken { kind: TagKind::Start, name: "div".into(), attrs: Vec::new(), self_closing: false }))
+            Some(Token::Tag(TagToken {
+                kind: TagKind::Start,
+                name: "div".into(),
+                attrs: Vec::new(),
+                self_closing: false
+            }))
         ); // '>' → emit
         assert_eq!(t.next_token(), Some(Token::Character('t')));
         assert_eq!(t.next_token(), Some(Token::Character('e')));
         assert_eq!(t.next_token(), Some(Token::Character('x')));
         assert_eq!(t.next_token(), Some(Token::Character('t')));
-        assert_eq!(t.next_token(), None); // '<' → TagOpen
-        assert_eq!(t.next_token(), None); // '/' → EndTagOpen
-        assert_eq!(t.next_token(), None); // 'd' → TagName, name="d"
-        assert_eq!(t.next_token(), None); // 'i'
-        assert_eq!(t.next_token(), None); // 'v'
+        assert_eq!(t.step(), None); // '<' → TagOpen
+        assert_eq!(t.step(), None); // '/' → EndTagOpen
+        assert_eq!(t.step(), None); // 'd' → TagName, name="d"
+        assert_eq!(t.step(), None); // 'i'
+        assert_eq!(t.step(), None); // 'v'
         assert_eq!(
             t.next_token(),
-            Some(Token::Tag(TagToken { kind: TagKind::End, name: "div".into(), attrs: Vec::new(), self_closing: false }))
+            Some(Token::Tag(TagToken {
+                kind: TagKind::End,
+                name: "div".into(),
+                attrs: Vec::new(),
+                self_closing: false
+            }))
         ); // '>' → emit
         assert_eq!(t.next_token(), Some(Token::EOF));
     }
@@ -3660,15 +3930,15 @@ mod tests {
     fn tag_name_switches_to_before_attribute_name_on_space() {
         // `<div class="x">` → space switches to BeforeAttributeName
         let mut t = HtmlTokenizer::new("<div class=\"x\">");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // Data → TagOpen
         assert_eq!(t.state(), State::TagOpen);
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="d"
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // 'i' → append
+        assert_eq!(t.step(), None); // 'i' → append
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // 'v' → append
+        assert_eq!(t.step(), None); // 'v' → append
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        assert_eq!(t.step(), None); // ' ' → BeforeAttributeName
         assert_eq!(t.state(), State::BeforeAttributeName);
     }
 
@@ -3677,7 +3947,7 @@ mod tests {
         // Non-ASCII characters in TagOpen fall through to Data (correct per spec).
         // `<日本語>` → '<' is emitted as text, then Japanese chars are character tokens.
         let mut t = HtmlTokenizer::new("<日本語>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen (no emit)
+        assert_eq!(t.step(), None); // Data → TagOpen (no emit)
         assert_eq!(t.state(), State::TagOpen);
         assert_eq!(t.next_token(), Some(Token::Character('<'))); // TagOpen: not alpha, emit '<', reconsume
         assert_eq!(t.state(), State::Data);
@@ -3692,15 +3962,15 @@ mod tests {
         // Non-ASCII chars ARE appended to the tag name once we're in TagName state.
         // `<a日本語>`: 'a' enters TagName, then '日', '本', '語' are appended.
         let mut t = HtmlTokenizer::new("<a日本語>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // Data → TagOpen
         assert_eq!(t.state(), State::TagOpen);
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="a"
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="a"
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // '日' → append
+        assert_eq!(t.step(), None); // '日' → append
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // '本' → append
+        assert_eq!(t.step(), None); // '本' → append
         assert_eq!(t.state(), State::TagName);
-        assert_eq!(t.next_token(), None); // '語' → append
+        assert_eq!(t.step(), None); // '語' → append
         assert_eq!(t.state(), State::TagName);
         // '>' → emit tag with name "a日本語"
         let token = t.next_token();
@@ -3720,12 +3990,12 @@ mod tests {
     fn tag_name_handles_null_character() {
         // `<a\x00>` → NULL in TagName should append U+FFFD, then '>' emits tag
         let mut t = HtmlTokenizer::new("<a\x00>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // Data → TagOpen
         assert_eq!(t.state(), State::TagOpen);
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="a"
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="a"
         assert_eq!(t.state(), State::TagName);
         // '\0' in TagName: append U+FFFD (parse error), stay in TagName
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::TagName);
         // '>' → emit tag with name "a\u{FFFD}"
         let token = t.next_token();
@@ -3747,10 +4017,10 @@ mod tests {
     fn markup_declaration_open_dash_dash_to_comment_start() {
         // `<!--` → MarkupDeclarationOpen → CommentStart
         let mut t = HtmlTokenizer::new("<!--");
-        assert_eq!(t.next_token(), None); // Data → TagOpen ('<')
-        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen ('!')
+        assert_eq!(t.step(), None); // Data → TagOpen ('<')
+        assert_eq!(t.step(), None); // TagOpen → MarkupDeclarationOpen ('!')
         assert_eq!(t.state(), State::MarkupDeclarationOpen);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart ("--")
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart ("--")
         assert_eq!(t.state(), State::CommentStart);
     }
 
@@ -3758,11 +4028,11 @@ mod tests {
     fn markup_declaration_open_doctype() {
         // `<!DOCTYPE` → MarkupDeclarationOpen → Doctype → EOF → emit force_quirks Doctype
         let mut t = HtmlTokenizer::new("<!DOCTYPE");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → MarkupDeclarationOpen
         assert_eq!(t.state(), State::MarkupDeclarationOpen);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → Doctype
-        // Doctype 遇到 EOF：force_quirks=true, emit
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → Doctype
+                                    // Doctype 遇到 EOF：force_quirks=true, emit
         assert_eq!(
             t.next_token(),
             Some(Token::Doctype(DoctypeToken {
@@ -3779,9 +4049,9 @@ mod tests {
     /// 辅助：推进到 Doctype 状态（!DOCTYPE 已消费）
     fn enter_doctype(input: &str) -> HtmlTokenizer {
         let mut t = HtmlTokenizer::new(input);
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → Doctype
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → Doctype
         assert_eq!(t.state(), State::Doctype);
         t
     }
@@ -3791,10 +4061,10 @@ mod tests {
         // `<!DOCTYPE html>` → 跳过 Doctype 中的空白，进入 BeforeDoctypeName
         let mut t = enter_doctype("<!DOCTYPE html>");
         // ' ' → stay in Doctype
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::Doctype);
         // 'h' → reconsume → BeforeDoctypeName
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::BeforeDoctypeName);
     }
 
@@ -3803,7 +4073,7 @@ mod tests {
         // `<!DOCTYPEhtml>` → 直接进入 BeforeDoctypeName（reconsume）
         let mut t = enter_doctype("<!DOCTYPEhtml>");
         // 'h' → reconsume → BeforeDoctypeName
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::BeforeDoctypeName);
     }
 
@@ -3813,7 +4083,7 @@ mod tests {
     fn enter_before_doctype_name(input: &str) -> HtmlTokenizer {
         let mut t = enter_doctype(input);
         while t.state() == State::Doctype {
-            assert_eq!(t.next_token(), None);
+            assert_eq!(t.step(), None);
         }
         assert_eq!(t.state(), State::BeforeDoctypeName);
         t
@@ -3822,9 +4092,11 @@ mod tests {
     #[test]
     fn doctype_name_simple_html() {
         let mut t = enter_before_doctype_name("<!DOCTYPE html>");
-        assert_eq!(t.next_token(), None); // 'h' → DoctypeName
+        assert_eq!(t.step(), None); // 'h' → DoctypeName
         assert_eq!(t.state(), State::DoctypeName);
-        for _ in 0..3 { assert_eq!(t.next_token(), None); } // 't','m','l'
+        for _ in 0..3 {
+            assert_eq!(t.step(), None);
+        } // 't','m','l'
         assert_eq!(
             t.next_token(),
             Some(Token::Doctype(DoctypeToken {
@@ -3839,10 +4111,10 @@ mod tests {
     #[test]
     fn doctype_name_uppercase() {
         let mut t = enter_before_doctype_name("<!DOCTYPE HTML>");
-        assert_eq!(t.next_token(), None); // 'H'→'h'
-        assert_eq!(t.next_token(), None); // 'T'→'t'
-        assert_eq!(t.next_token(), None); // 'M'→'m'
-        assert_eq!(t.next_token(), None); // 'L'→'l'
+        assert_eq!(t.step(), None); // 'H'→'h'
+        assert_eq!(t.step(), None); // 'T'→'t'
+        assert_eq!(t.step(), None); // 'M'→'m'
+        assert_eq!(t.step(), None); // 'L'→'l'
         assert_eq!(
             t.next_token(),
             Some(Token::Doctype(DoctypeToken {
@@ -3857,9 +4129,11 @@ mod tests {
     #[test]
     fn doctype_name_null_char() {
         let mut t = enter_before_doctype_name("<!DOCTYPE html\0x>");
-        for _ in 0..4 { assert_eq!(t.next_token(), None); } // 'h','t','m','l'
-        assert_eq!(t.next_token(), None); // '\0' → U+FFFD
-        assert_eq!(t.next_token(), None); // 'x'
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        } // 'h','t','m','l'
+        assert_eq!(t.step(), None); // '\0' → U+FFFD
+        assert_eq!(t.step(), None); // 'x'
         assert_eq!(
             t.next_token(),
             Some(Token::Doctype(DoctypeToken {
@@ -3874,8 +4148,8 @@ mod tests {
     #[test]
     fn doctype_before_name_empty_gt() {
         let mut t = enter_doctype("<!DOCTYPE >");
-        assert_eq!(t.next_token(), None); // ' ' → stay Doctype
-        assert_eq!(t.next_token(), None); // '>' → reconsume, BeforeDoctypeName
+        assert_eq!(t.step(), None); // ' ' → stay Doctype
+        assert_eq!(t.step(), None); // '>' → reconsume, BeforeDoctypeName
         assert_eq!(
             t.next_token(), // BeforeDoctypeName 处理 '>' → force_quirks emit
             Some(Token::Doctype(DoctypeToken {
@@ -3890,7 +4164,9 @@ mod tests {
     #[test]
     fn doctype_name_eof() {
         let mut t = enter_before_doctype_name("<!DOCTYPE html");
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(
             t.next_token(), // EOF → force_quirks emit
             Some(Token::Doctype(DoctypeToken {
@@ -3908,29 +4184,35 @@ mod tests {
     fn doctype_after_name_public_keyword() {
         let mut t = enter_before_doctype_name("<!DOCTYPE html PUBLIC \"-//EN\">");
         // 'h','t','m','l'
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
         // ' ' → AfterDoctypeName
-        assert_eq!(t.next_token(), None); // skip whitespace in AfterDoctypeName
+        assert_eq!(t.step(), None); // skip whitespace in AfterDoctypeName
         assert_eq!(t.state(), State::AfterDoctypeName);
         // 'P' → matches "PUBLIC"
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::AfterDoctypePublicKeyword);
     }
 
     #[test]
     fn doctype_after_name_system_keyword() {
         let mut t = enter_before_doctype_name("<!DOCTYPE html SYSTEM \"about:\">");
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // ' ' → AfterDoctypeName
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // ' ' → AfterDoctypeName
         assert_eq!(t.state(), State::AfterDoctypeName);
-        assert_eq!(t.next_token(), None); // 'S' → matches "SYSTEM"
+        assert_eq!(t.step(), None); // 'S' → matches "SYSTEM"
         assert_eq!(t.state(), State::AfterDoctypeSystemKeyword);
     }
 
     #[test]
     fn doctype_after_name_gt_emits() {
         let mut t = enter_before_doctype_name("<!DOCTYPE html>");
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(
             t.next_token(),
             Some(Token::Doctype(DoctypeToken {
@@ -3946,12 +4228,14 @@ mod tests {
     fn doctype_after_name_unknown_to_bogus() {
         // `<!DOCTYPE html x>` → 'x' 不匹配 PUBLIC/SYSTEM → BogusDoctype
         let mut t = enter_before_doctype_name("<!DOCTYPE html x>");
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // ' ' → AfterDoctypeName
-        assert_eq!(t.next_token(), None); // 'x' → BogusDoctype (reconsume)
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // ' ' → AfterDoctypeName
+        assert_eq!(t.step(), None); // 'x' → BogusDoctype (reconsume)
         assert_eq!(t.state(), State::BogusDoctype);
         // BogusDoctype: ignore 'x' (reconsumed) → '>' emit
-        assert_eq!(t.next_token(), None); // 'x' ignored by BogusDoctype
+        assert_eq!(t.step(), None); // 'x' ignored by BogusDoctype
         assert_eq!(
             t.next_token(), // '>' emit
             Some(Token::Doctype(DoctypeToken {
@@ -3966,11 +4250,15 @@ mod tests {
     #[test]
     fn doctype_bogus_ignores_chars() {
         let mut t = enter_before_doctype_name("<!DOCTYPE html foo>");
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // ' ' → AfterDoctypeName
-        assert_eq!(t.next_token(), None); // 'f' → BogusDoctype (reconsume)
-        // BogusDoctype 忽略 'f','o','o'
-        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // ' ' → AfterDoctypeName
+        assert_eq!(t.step(), None); // 'f' → BogusDoctype (reconsume)
+                                    // BogusDoctype 忽略 'f','o','o'
+        for _ in 0..3 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(
             t.next_token(), // '>' emit
             Some(Token::Doctype(DoctypeToken {
@@ -3986,9 +4274,7 @@ mod tests {
 
     #[test]
     fn doctype_public_id_double_quoted() {
-        let mut t = HtmlTokenizer::new(
-            "<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01//EN\">"
-        );
+        let mut t = HtmlTokenizer::new("<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01//EN\">");
         assert_eq!(
             next_real_token(&mut t),
             Token::Doctype(DoctypeToken {
@@ -4002,9 +4288,7 @@ mod tests {
 
     #[test]
     fn doctype_system_id_double_quoted() {
-        let mut t = HtmlTokenizer::new(
-            "<!DOCTYPE html SYSTEM \"about:legacy-compat\">"
-        );
+        let mut t = HtmlTokenizer::new("<!DOCTYPE html SYSTEM \"about:legacy-compat\">");
         assert_eq!(
             next_real_token(&mut t),
             Token::Doctype(DoctypeToken {
@@ -4020,7 +4304,7 @@ mod tests {
     fn doctype_full_public_and_system() {
         let mut t = HtmlTokenizer::new(
             "<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \
-             \"http://www.w3.org/TR/html4/strict.dtd\">"
+             \"http://www.w3.org/TR/html4/strict.dtd\">",
         );
         assert_eq!(
             next_real_token(&mut t),
@@ -4035,9 +4319,7 @@ mod tests {
 
     #[test]
     fn doctype_public_id_single_quoted() {
-        let mut t = HtmlTokenizer::new(
-            "<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.0//EN'>"
-        );
+        let mut t = HtmlTokenizer::new("<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.0//EN'>");
         assert_eq!(
             next_real_token(&mut t),
             Token::Doctype(DoctypeToken {
@@ -4051,9 +4333,7 @@ mod tests {
 
     #[test]
     fn doctype_system_id_single_quoted() {
-        let mut t = HtmlTokenizer::new(
-            "<!DOCTYPE html SYSTEM 'about:legacy-compat'>"
-        );
+        let mut t = HtmlTokenizer::new("<!DOCTYPE html SYSTEM 'about:legacy-compat'>");
         assert_eq!(
             next_real_token(&mut t),
             Token::Doctype(DoctypeToken {
@@ -4069,9 +4349,9 @@ mod tests {
     fn markup_declaration_open_bogus() {
         // `<!foo` → MarkupDeclarationOpen → BogusComment
         let mut t = HtmlTokenizer::new("<!foo");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
-        assert_eq!(t.next_token(), None); // → BogusComment
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.step(), None); // → BogusComment
         assert_eq!(t.state(), State::BogusComment);
     }
 
@@ -4081,10 +4361,12 @@ mod tests {
     fn bogus_comment_emits_on_greater_than() {
         // `<?xml>` → Token::Comment("?xml")
         let mut t = HtmlTokenizer::new("<?xml>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → BogusComment ('?')
-        // 'x', 'm', 'l'
-        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → BogusComment ('?')
+                                    // 'x', 'm', 'l'
+        for _ in 0..3 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Comment("?xml".into())));
     }
 
@@ -4092,24 +4374,21 @@ mod tests {
     fn bogus_comment_handles_null() {
         // `<?a\0b>` → Token::Comment("?a\u{FFFD}b")
         let mut t = HtmlTokenizer::new("<?a\0b>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → BogusComment ('?')
-        assert_eq!(t.next_token(), None); // 'a'
-        assert_eq!(t.next_token(), None); // '\0' → U+FFFD
-        assert_eq!(t.next_token(), None); // 'b'
-        assert_eq!(
-            t.next_token(),
-            Some(Token::Comment("?a\u{FFFD}b".into()))
-        );
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → BogusComment ('?')
+        assert_eq!(t.step(), None); // 'a'
+        assert_eq!(t.step(), None); // '\0' → U+FFFD
+        assert_eq!(t.step(), None); // 'b'
+        assert_eq!(t.next_token(), Some(Token::Comment("?a\u{FFFD}b".into())));
     }
 
     #[test]
     fn bogus_comment_eof() {
         // `<?x` + EOF → Token::Comment("?x") + EOF
         let mut t = HtmlTokenizer::new("<?x");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → BogusComment
-        assert_eq!(t.next_token(), None); // 'x'
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → BogusComment
+        assert_eq!(t.step(), None); // 'x'
         assert_eq!(t.next_token(), Some(Token::Comment("?x".into())));
         assert_eq!(t.next_token(), Some(Token::EOF));
     }
@@ -4118,11 +4397,13 @@ mod tests {
     fn bogus_comment_from_bang() {
         // `<!foo>` → MarkupDeclarationOpen → BogusComment → Token::Comment("foo")
         let mut t = HtmlTokenizer::new("<!foo>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → BogusComment
-        // 'f', 'o', 'o'
-        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → BogusComment
+                                    // 'f', 'o', 'o'
+        for _ in 0..3 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Comment("foo".into())));
     }
 
@@ -4132,16 +4413,16 @@ mod tests {
     /// 调用后 pos 在 '!' 之后，state = TagOpen 刚设置 MarkupDeclarationOpen 但还未执行
     fn enter_markup_declaration(t: &mut HtmlTokenizer) {
         // Data → TagOpen → MarkupDeclarationOpen (doesn't consume yet)
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen (sees '!')
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → MarkupDeclarationOpen (sees '!')
     }
 
     #[test]
     fn comment_start_dash_to_comment_start_dash() {
         let mut t = HtmlTokenizer::new("<!---");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart ("--")
-        assert_eq!(t.next_token(), None); // CommentStart → CommentStartDash ('-')
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart ("--")
+        assert_eq!(t.step(), None); // CommentStart → CommentStartDash ('-')
         assert_eq!(t.state(), State::CommentStartDash);
     }
 
@@ -4149,7 +4430,7 @@ mod tests {
     fn comment_start_empty_comment_on_gt() {
         let mut t = HtmlTokenizer::new("<!-->");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
         assert_eq!(t.next_token(), Some(Token::Comment("".into()))); // '>' → emit empty
     }
 
@@ -4157,8 +4438,8 @@ mod tests {
     fn comment_start_lt_to_comment_lt_sign() {
         let mut t = HtmlTokenizer::new("<!--<");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // '<' → CommentLessThanSign
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // '<' → CommentLessThanSign
         assert_eq!(t.state(), State::CommentLessThanSign);
     }
 
@@ -4166,8 +4447,8 @@ mod tests {
     fn comment_start_null_to_comment() {
         let mut t = HtmlTokenizer::new("<!--\0");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // '\0' → Comment (with U+FFFD)
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // '\0' → Comment (with U+FFFD)
         assert_eq!(t.state(), State::Comment);
     }
 
@@ -4175,8 +4456,8 @@ mod tests {
     fn comment_start_dash_gt_emits_empty() {
         let mut t = HtmlTokenizer::new("<!--->");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // '-' → CommentStartDash
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // '-' → CommentStartDash
         assert_eq!(t.next_token(), Some(Token::Comment("".into()))); // '>' → emit
     }
 
@@ -4184,9 +4465,9 @@ mod tests {
     fn comment_start_dash_other_to_comment() {
         let mut t = HtmlTokenizer::new("<!---a");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // '-' → CommentStartDash
-        assert_eq!(t.next_token(), None); // 'a' → Comment (appends "-a")
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // '-' → CommentStartDash
+        assert_eq!(t.step(), None); // 'a' → Comment (appends "-a")
         assert_eq!(t.state(), State::Comment);
     }
 
@@ -4194,13 +4475,13 @@ mod tests {
     fn comment_state_appends_chars() {
         let mut t = HtmlTokenizer::new("<!--abc-->");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // 'a' → Comment
-        assert_eq!(t.next_token(), None); // 'b'
-        assert_eq!(t.next_token(), None); // 'c'
-        // '-->' closing
-        assert_eq!(t.next_token(), None); // '-' → CommentEndDash
-        assert_eq!(t.next_token(), None); // '-' → CommentEnd
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // 'a' → Comment
+        assert_eq!(t.step(), None); // 'b'
+        assert_eq!(t.step(), None); // 'c'
+                                    // '-->' closing
+        assert_eq!(t.step(), None); // '-' → CommentEndDash
+        assert_eq!(t.step(), None); // '-' → CommentEnd
         assert_eq!(t.next_token(), Some(Token::Comment("abc".into()))); // '>' emit
     }
 
@@ -4208,9 +4489,9 @@ mod tests {
     fn comment_state_lt_switches() {
         let mut t = HtmlTokenizer::new("<!--a<");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // 'a' → Comment
-        assert_eq!(t.next_token(), None); // '<' → CommentLessThanSign
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // 'a' → Comment
+        assert_eq!(t.step(), None); // '<' → CommentLessThanSign
         assert_eq!(t.state(), State::CommentLessThanSign);
     }
 
@@ -4218,9 +4499,9 @@ mod tests {
     fn comment_state_dash_switches() {
         let mut t = HtmlTokenizer::new("<!--a-");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // 'a' → Comment
-        assert_eq!(t.next_token(), None); // '-' → CommentEndDash
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // 'a' → Comment
+        assert_eq!(t.step(), None); // '-' → CommentEndDash
         assert_eq!(t.state(), State::CommentEndDash);
     }
 
@@ -4228,17 +4509,14 @@ mod tests {
     fn comment_state_null_handles() {
         let mut t = HtmlTokenizer::new("<!--a\0b-->");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // 'a' → Comment
-        assert_eq!(t.next_token(), None); // '\0' → U+FFFD
-        assert_eq!(t.next_token(), None); // 'b'
-        // '-->'
-        assert_eq!(t.next_token(), None); // '-' → CommentEndDash
-        assert_eq!(t.next_token(), None); // '-' → CommentEnd
-        assert_eq!(
-            t.next_token(),
-            Some(Token::Comment("a\u{FFFD}b".into()))
-        );
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // 'a' → Comment
+        assert_eq!(t.step(), None); // '\0' → U+FFFD
+        assert_eq!(t.step(), None); // 'b'
+                                    // '-->'
+        assert_eq!(t.step(), None); // '-' → CommentEndDash
+        assert_eq!(t.step(), None); // '-' → CommentEnd
+        assert_eq!(t.next_token(), Some(Token::Comment("a\u{FFFD}b".into())));
     }
 
     // ── CommentLessThanSign 系列测试 (§13.2.5.46–§13.2.5.49) ────
@@ -4247,10 +4525,10 @@ mod tests {
     fn comment_lt_sign_excl_to_bang() {
         let mut t = HtmlTokenizer::new("<!--a<!--b-->");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // CommentStart → Comment ('a')
-        assert_eq!(t.next_token(), None); // Comment → CommentLessThanSign ('<')
-        assert_eq!(t.next_token(), None); // CommentLessThanSign → Bang ('!')
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // CommentStart → Comment ('a')
+        assert_eq!(t.step(), None); // Comment → CommentLessThanSign ('<')
+        assert_eq!(t.step(), None); // CommentLessThanSign → Bang ('!')
         assert_eq!(t.state(), State::CommentLessThanSignBang);
     }
 
@@ -4258,10 +4536,10 @@ mod tests {
     fn comment_lt_sign_lt_stays() {
         let mut t = HtmlTokenizer::new("<!--a<<b-->");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // CommentStart → Comment ('a')
-        assert_eq!(t.next_token(), None); // Comment → CommentLessThanSign ('<')
-        assert_eq!(t.next_token(), None); // LessThanSign → stay, append '<'
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // CommentStart → Comment ('a')
+        assert_eq!(t.step(), None); // Comment → CommentLessThanSign ('<')
+        assert_eq!(t.step(), None); // LessThanSign → stay, append '<'
         assert_eq!(t.state(), State::CommentLessThanSign);
     }
 
@@ -4269,11 +4547,11 @@ mod tests {
     fn comment_lt_bang_dash_chain() {
         let mut t = HtmlTokenizer::new("<!--a<!-b-->");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // CommentStart → Comment ('a')
-        assert_eq!(t.next_token(), None); // Comment → CommentLessThanSign ('<')
-        assert_eq!(t.next_token(), None); // LessThanSign → Bang ('!')
-        assert_eq!(t.next_token(), None); // Bang → BangDash ('-')
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // CommentStart → Comment ('a')
+        assert_eq!(t.step(), None); // Comment → CommentLessThanSign ('<')
+        assert_eq!(t.step(), None); // LessThanSign → Bang ('!')
+        assert_eq!(t.step(), None); // Bang → BangDash ('-')
         assert_eq!(t.state(), State::CommentLessThanSignBangDash);
     }
 
@@ -4281,13 +4559,13 @@ mod tests {
     fn comment_lt_bang_dash_dash_to_dashdash() {
         let mut t = HtmlTokenizer::new("<!--<!--b-->");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // CommentStart → Comment (no chars before '<')
-        assert_eq!(t.next_token(), None); // Comment → CommentLessThanSign ('<')
-        assert_eq!(t.next_token(), None); // LessThanSign → Bang ('!')
-        assert_eq!(t.next_token(), None); // Bang → BangDash ('-')
-        assert_eq!(t.next_token(), None); // BangDash → BangDashDash ('-')
-        // BangDashDash 总是回到 Comment（任意字符 reconsume）
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // CommentStart → Comment (no chars before '<')
+        assert_eq!(t.step(), None); // Comment → CommentLessThanSign ('<')
+        assert_eq!(t.step(), None); // LessThanSign → Bang ('!')
+        assert_eq!(t.step(), None); // Bang → BangDash ('-')
+        assert_eq!(t.step(), None); // BangDash → BangDashDash ('-')
+                                    // BangDashDash 总是回到 Comment（任意字符 reconsume）
         assert_eq!(t.state(), State::Comment);
     }
 
@@ -4296,23 +4574,23 @@ mod tests {
         // `<!-- a<!--> b -->` → comment 内容为 " a<!--> b "
         let mut t = HtmlTokenizer::new("<!-- a<!--> b -->");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // ' ' → Comment
-        assert_eq!(t.next_token(), None); // 'a'
-        // '<', '!', '-', '-' → LessThanSign → Bang → BangDash → BangDashDash
-        assert_eq!(t.next_token(), None); // '<' → LessThanSign
-        assert_eq!(t.next_token(), None); // '!' → Bang
-        assert_eq!(t.next_token(), None); // '-' → BangDash
-        assert_eq!(t.next_token(), None); // '-' → BangDashDash
-        assert_eq!(t.next_token(), None); // '>' → back to Comment
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // ' ' → Comment
+        assert_eq!(t.step(), None); // 'a'
+                                    // '<', '!', '-', '-' → LessThanSign → Bang → BangDash → BangDashDash
+        assert_eq!(t.step(), None); // '<' → LessThanSign
+        assert_eq!(t.step(), None); // '!' → Bang
+        assert_eq!(t.step(), None); // '-' → BangDash
+        assert_eq!(t.step(), None); // '-' → BangDashDash
+        assert_eq!(t.step(), None); // '>' → back to Comment
         assert_eq!(t.state(), State::Comment);
         // ' b '
-        assert_eq!(t.next_token(), None); // ' '
-        assert_eq!(t.next_token(), None); // 'b'
-        assert_eq!(t.next_token(), None); // ' '
-        // '-->' closing
-        assert_eq!(t.next_token(), None); // '-' → CommentEndDash
-        assert_eq!(t.next_token(), None); // '-' → CommentEnd
+        assert_eq!(t.step(), None); // ' '
+        assert_eq!(t.step(), None); // 'b'
+        assert_eq!(t.step(), None); // ' '
+                                    // '-->' closing
+        assert_eq!(t.step(), None); // '-' → CommentEndDash
+        assert_eq!(t.step(), None); // '-' → CommentEnd
         assert_eq!(
             t.next_token(),
             // 注：`<!-->` 在注释内部被 silently consumed（规范 §13.2.5.46–49），不追加到内容
@@ -4327,9 +4605,11 @@ mod tests {
         let mut t = HtmlTokenizer::new("<!--hello-->");
         enter_markup_declaration(&mut t);
         // CommentStart + 'h','e','l','l','o' = 1 + 5 = 6 calls
-        for _ in 0..6 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // '-' → CommentEndDash
-        assert_eq!(t.next_token(), None); // '-' → CommentEnd
+        for _ in 0..6 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // '-' → CommentEndDash
+        assert_eq!(t.step(), None); // '-' → CommentEnd
         assert_eq!(t.next_token(), Some(Token::Comment("hello".into()))); // '>'
     }
 
@@ -4338,10 +4618,12 @@ mod tests {
         // `<!--hello--!>` → emit "hello"
         let mut t = HtmlTokenizer::new("<!--hello--!>");
         enter_markup_declaration(&mut t);
-        for _ in 0..6 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // '-' → CommentEndDash
-        assert_eq!(t.next_token(), None); // '-' → CommentEnd
-        assert_eq!(t.next_token(), None); // '!' → CommentEndBang
+        for _ in 0..6 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // '-' → CommentEndDash
+        assert_eq!(t.step(), None); // '-' → CommentEnd
+        assert_eq!(t.step(), None); // '!' → CommentEndBang
         assert_eq!(t.next_token(), Some(Token::Comment("hello".into()))); // '>'
     }
 
@@ -4350,11 +4632,13 @@ mod tests {
         // `<!--hello--!->` → CommentEndBang appends '--!', '-' → CommentEnd
         let mut t = HtmlTokenizer::new("<!--hello--!->");
         enter_markup_declaration(&mut t);
-        for _ in 0..6 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // '-' → CommentEndDash
-        assert_eq!(t.next_token(), None); // '-' → CommentEnd
-        assert_eq!(t.next_token(), None); // '!' → CommentEndBang
-        assert_eq!(t.next_token(), None); // '-' → CommentEnd (appended '--!')
+        for _ in 0..6 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // '-' → CommentEndDash
+        assert_eq!(t.step(), None); // '-' → CommentEnd
+        assert_eq!(t.step(), None); // '!' → CommentEndBang
+        assert_eq!(t.step(), None); // '-' → CommentEnd (appended '--!')
         assert_eq!(t.next_token(), Some(Token::Comment("hello--!".into()))); // '>' emit
     }
 
@@ -4363,11 +4647,13 @@ mod tests {
         // `<!--hello---->` → 多余的 '-'
         let mut t = HtmlTokenizer::new("<!--hello---->");
         enter_markup_declaration(&mut t);
-        for _ in 0..6 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // '-' → CommentEndDash (1st)
-        assert_eq!(t.next_token(), None); // '-' → CommentEnd (2nd)
-        assert_eq!(t.next_token(), None); // '-' → stay, append '-' (3rd)
-        assert_eq!(t.next_token(), None); // '-' → stay, append '-' (4th)
+        for _ in 0..6 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // '-' → CommentEndDash (1st)
+        assert_eq!(t.step(), None); // '-' → CommentEnd (2nd)
+        assert_eq!(t.step(), None); // '-' → stay, append '-' (3rd)
+        assert_eq!(t.step(), None); // '-' → stay, append '-' (4th)
         assert_eq!(t.next_token(), Some(Token::Comment("hello--".into()))); // '>'
     }
 
@@ -4375,10 +4661,10 @@ mod tests {
     fn comment_state_eof() {
         let mut t = HtmlTokenizer::new("<!--abc");
         enter_markup_declaration(&mut t);
-        assert_eq!(t.next_token(), None); // MarkupDeclarationOpen → CommentStart
-        assert_eq!(t.next_token(), None); // 'a' → Comment
-        assert_eq!(t.next_token(), None); // 'b'
-        assert_eq!(t.next_token(), None); // 'c'
+        assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
+        assert_eq!(t.step(), None); // 'a' → Comment
+        assert_eq!(t.step(), None); // 'b'
+        assert_eq!(t.step(), None); // 'c'
         assert_eq!(t.next_token(), Some(Token::Comment("abc".into()))); // EOF → emit
     }
 
@@ -4408,20 +4694,14 @@ mod tests {
     fn comment_e2e_empty() {
         // `<!---->` → 空注释
         let mut t = HtmlTokenizer::new("<!---->");
-        assert_eq!(
-            next_real_token(&mut t),
-            Token::Comment("".into())
-        );
+        assert_eq!(next_real_token(&mut t), Token::Comment("".into()));
     }
 
     #[test]
     fn comment_e2e_followed_by_tag() {
         // `<!-- comment --><div>` → Comment + Tag
         let mut t = HtmlTokenizer::new("<!-- comment --><div>");
-        assert_eq!(
-            next_real_token(&mut t),
-            Token::Comment(" comment ".into())
-        );
+        assert_eq!(next_real_token(&mut t), Token::Comment(" comment ".into()));
         assert_eq!(
             next_real_token(&mut t),
             Token::Tag(TagToken {
@@ -4438,10 +4718,7 @@ mod tests {
         // `<!-- <!-- nested --> -->`
         // 内部 `<!--` 按规范 silently consumed，内容仅为 " nested "
         let mut t = HtmlTokenizer::new("<!-- <!-- nested --> -->");
-        assert_eq!(
-            next_real_token(&mut t),
-            Token::Comment("  nested ".into())
-        );
+        assert_eq!(next_real_token(&mut t), Token::Comment("  nested ".into()));
     }
 
     // ── Attribute tests (§13.2.5.32–§13.2.5.39) ──────────────────
@@ -4450,25 +4727,25 @@ mod tests {
     fn attr_single_double_quoted_value() {
         // `<div class="x">` → start tag with one double-quoted attribute
         let mut t = HtmlTokenizer::new("<div class=\"x\">");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
-        assert_eq!(t.next_token(), None); // 'i'
-        assert_eq!(t.next_token(), None); // 'v'
-        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.step(), None); // 'i'
+        assert_eq!(t.step(), None); // 'v'
+        assert_eq!(t.step(), None); // ' ' → BeforeAttributeName
         assert_eq!(t.state(), State::BeforeAttributeName);
-        assert_eq!(t.next_token(), None); // 'c' → BA reconsume (call 6)
-        assert_eq!(t.next_token(), None); // 'l' (call 7, reconsume 'c')
-        assert_eq!(t.next_token(), None); // 'a' (call 8)
-        assert_eq!(t.next_token(), None); // 's' (call 9)
-        assert_eq!(t.next_token(), None); // 's' (call 10, last char)
-        assert_eq!(t.next_token(), None); // 's' (call 11 — 第二个 's')
-        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue (call 12)
+        assert_eq!(t.step(), None); // 'c' → BA reconsume (call 6)
+        assert_eq!(t.step(), None); // 'l' (call 7, reconsume 'c')
+        assert_eq!(t.step(), None); // 'a' (call 8)
+        assert_eq!(t.step(), None); // 's' (call 9)
+        assert_eq!(t.step(), None); // 's' (call 10, last char)
+        assert_eq!(t.step(), None); // 's' (call 11 — 第二个 's')
+        assert_eq!(t.step(), None); // '=' → BeforeAttributeValue (call 12)
         assert_eq!(t.state(), State::BeforeAttributeValue);
-        assert_eq!(t.next_token(), None); // '"' → AttributeValueDoubleQuoted (call 13)
+        assert_eq!(t.step(), None); // '"' → AttributeValueDoubleQuoted (call 13)
         assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
-        assert_eq!(t.next_token(), None); // 'x' → append
+        assert_eq!(t.step(), None); // 'x' → append
         assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
-        assert_eq!(t.next_token(), None); // '"' → AfterAttributeValueQuoted, emit attr
+        assert_eq!(t.step(), None); // '"' → AfterAttributeValueQuoted, emit attr
         assert_eq!(t.state(), State::AfterAttributeValueQuoted);
         assert_eq!(
             t.next_token(),
@@ -4486,21 +4763,27 @@ mod tests {
     fn attr_single_quoted_value() {
         // `<input type='text'>` → single-quoted attribute
         let mut t = HtmlTokenizer::new("<input type='text'>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="i"
-        // 'n', 'p', 'u', 't'
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
-        // 't', 'y', 'p', 'e' — 需要 5 次调用（BeforeAttributeName reconsume 占用 1 次）
-        // BeforeAttributeName → reconsume 't' → AttributeName → 'y','p','e'
-        for _ in 0..5 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="i"
+                                    // 'n', 'p', 'u', 't'
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // ' ' → BeforeAttributeName
+                                    // 't', 'y', 'p', 'e' — 需要 5 次调用（BeforeAttributeName reconsume 占用 1 次）
+                                    // BeforeAttributeName → reconsume 't' → AttributeName → 'y','p','e'
+        for _ in 0..5 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // '=' → BeforeAttributeValue
         assert_eq!(t.state(), State::BeforeAttributeValue);
-        assert_eq!(t.next_token(), None); // '\'' → AttributeValueSingleQuoted
+        assert_eq!(t.step(), None); // '\'' → AttributeValueSingleQuoted
         assert_eq!(t.state(), State::AttributeValueSingleQuoted);
         // 't', 'e', 'x', 't'
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // '\'' → AfterAttributeValueQuoted, emit attr
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // '\'' → AfterAttributeValueQuoted, emit attr
         assert_eq!(
             t.next_token(),
             Some(Token::Tag(TagToken {
@@ -4516,17 +4799,19 @@ mod tests {
     fn attr_unquoted_value() {
         // `<a href=x>` → unquoted attribute value
         let mut t = HtmlTokenizer::new("<a href=x>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="a"
-        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="a"
+        assert_eq!(t.step(), None); // ' ' → BeforeAttributeName
         assert_eq!(t.state(), State::BeforeAttributeName);
         // 'h', 'r', 'e', 'f' — 需要 5 次（BA reconsume + 'h' reconsume + 3 剩余字符）
-        for _ in 0..5 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
+        for _ in 0..5 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // '=' → BeforeAttributeValue
         assert_eq!(t.state(), State::BeforeAttributeValue);
-        assert_eq!(t.next_token(), None); // 'x' → AttributeValueUnquoted
+        assert_eq!(t.step(), None); // 'x' → AttributeValueUnquoted
         assert_eq!(t.state(), State::AttributeValueUnquoted);
-        assert_eq!(t.next_token(), None); // '>' → emit attr, emit tag
+        assert_eq!(t.step(), None); // '>' → emit attr, emit tag
         assert_eq!(
             t.next_token(),
             Some(Token::Tag(TagToken {
@@ -4543,43 +4828,45 @@ mod tests {
         // `<div id="a" class="b">` → two attributes
         let mut t = HtmlTokenizer::new("<div id=\"a\" class=\"b\">");
         // Skip to tag name done: `<` → TagOpen, `d` → name, `i`, `v`
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="d"
-        assert_eq!(t.next_token(), None); // 'i'
-        assert_eq!(t.next_token(), None); // 'v'
-        // ' ' → BeforeAttributeName
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="d"
+        assert_eq!(t.step(), None); // 'i'
+        assert_eq!(t.step(), None); // 'v'
+                                    // ' ' → BeforeAttributeName
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::BeforeAttributeName);
         // 'i', 'd' — 需要 3 次（BA reconsume + 'i' reconsume + 'd'）
-        assert_eq!(t.next_token(), None); // BA → reconsume 'i'
-        assert_eq!(t.next_token(), None); // reconsume 'i'
-        assert_eq!(t.next_token(), None); // 'd'
-        // '=' → BeforeAttributeValue
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None); // BA → reconsume 'i'
+        assert_eq!(t.step(), None); // reconsume 'i'
+        assert_eq!(t.step(), None); // 'd'
+                                    // '=' → BeforeAttributeValue
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::BeforeAttributeValue);
         // '"' → AttributeValueDoubleQuoted
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
         // 'a'
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '"' → AfterAttributeValueQuoted, emit attr("id","a")
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::AfterAttributeValueQuoted);
         // ' ' → BeforeAttributeName
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::BeforeAttributeName);
         // 'c', 'l', 'a', 's', 's' — 需要 6 次（BA reconsume + 'c' reconsume + 4 剩余字符）
-        for _ in 0..6 { assert_eq!(t.next_token(), None); }
+        for _ in 0..6 {
+            assert_eq!(t.step(), None);
+        }
         // '=' → BeforeAttributeValue
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::BeforeAttributeValue);
         // '"' → AttributeValueDoubleQuoted
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::AttributeValueDoubleQuoted);
         // 'b'
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '"' → AfterAttributeValueQuoted, emit attr("class","b")
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::AfterAttributeValueQuoted);
         // '>' → emit tag
         let token = t.next_token();
@@ -4599,14 +4886,18 @@ mod tests {
     fn attr_boolean_attribute() {
         let mut t = HtmlTokenizer::new("<input disabled>");
         // Skip to tag name done
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="i"
-        // 'n', 'p', 'u', 't'
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="i"
+                                    // 'n', 'p', 'u', 't'
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
         // ' ' → BeforeAttributeName
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 'd', 'i', 's', 'a', 'b', 'l', 'e', 'd' — 需要 9 次（BA reconsume + 'd' reconsume + 7 剩余字符）
-        for _ in 0..9 { assert_eq!(t.next_token(), None); }
+        for _ in 0..9 {
+            assert_eq!(t.step(), None);
+        }
         // '>' → AfterAttributeName → emit attr, emit tag
         let token = t.next_token();
         assert_eq!(
@@ -4624,19 +4915,19 @@ mod tests {
     fn attr_name_lowercases_ascii_upper() {
         // §13.2.5.33: ASCII uppercase → lowercase in attribute names
         let mut t = HtmlTokenizer::new("<div CLASS=\"x\">");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName 'd'
-        assert_eq!(t.next_token(), None); // 'i'
-        assert_eq!(t.next_token(), None); // 'v'
-        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
-        // 'C','L','A','S','S' — 6 calls (BA reconsume + 5 chars)
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName 'd'
+        assert_eq!(t.step(), None); // 'i'
+        assert_eq!(t.step(), None); // 'v'
+        assert_eq!(t.step(), None); // ' ' → BeforeAttributeName
+                                    // 'C','L','A','S','S' — 6 calls (BA reconsume + 5 chars)
         for _ in 0..6 {
-            assert_eq!(t.next_token(), None);
+            assert_eq!(t.step(), None);
         }
-        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
-        assert_eq!(t.next_token(), None); // '"' → AttributeValueDoubleQuoted
-        assert_eq!(t.next_token(), None); // 'x'
-        assert_eq!(t.next_token(), None); // '"' → AfterAttributeValueQuoted
+        assert_eq!(t.step(), None); // '=' → BeforeAttributeValue
+        assert_eq!(t.step(), None); // '"' → AttributeValueDoubleQuoted
+        assert_eq!(t.step(), None); // 'x'
+        assert_eq!(t.step(), None); // '"' → AfterAttributeValueQuoted
         let token = t.next_token(); // '>'
         assert_eq!(
             token,
@@ -4653,21 +4944,21 @@ mod tests {
     fn attr_name_preserves_non_ascii() {
         // Non-ASCII chars in attribute names should be preserved as-is
         let mut t = HtmlTokenizer::new("<div café=\"oui\">");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName 'd'
-        assert_eq!(t.next_token(), None); // 'i'
-        assert_eq!(t.next_token(), None); // 'v'
-        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
-        // 'c','a','f','é' — 5 calls (BA reconsume + 4 chars)
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName 'd'
+        assert_eq!(t.step(), None); // 'i'
+        assert_eq!(t.step(), None); // 'v'
+        assert_eq!(t.step(), None); // ' ' → BeforeAttributeName
+                                    // 'c','a','f','é' — 5 calls (BA reconsume + 4 chars)
         for _ in 0..5 {
-            assert_eq!(t.next_token(), None);
+            assert_eq!(t.step(), None);
         }
-        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
-        assert_eq!(t.next_token(), None); // '"' → AttributeValueDoubleQuoted
-        assert_eq!(t.next_token(), None); // 'o'
-        assert_eq!(t.next_token(), None); // 'u'
-        assert_eq!(t.next_token(), None); // 'i'
-        assert_eq!(t.next_token(), None); // '"' → AfterAttributeValueQuoted
+        assert_eq!(t.step(), None); // '=' → BeforeAttributeValue
+        assert_eq!(t.step(), None); // '"' → AttributeValueDoubleQuoted
+        assert_eq!(t.step(), None); // 'o'
+        assert_eq!(t.step(), None); // 'u'
+        assert_eq!(t.step(), None); // 'i'
+        assert_eq!(t.step(), None); // '"' → AfterAttributeValueQuoted
         let token = t.next_token(); // '>'
         assert_eq!(
             token,
@@ -4684,19 +4975,25 @@ mod tests {
     fn e2e_attr_and_self_closing() {
         // `<input type='text'/>` → attribute + self-closing
         let mut t = HtmlTokenizer::new("<input type='text'/>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → TagName, name="i"
-        // 'n', 'p', 'u', 't'
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // ' ' → BeforeAttributeName
-        // 't', 'y', 'p', 'e' — 需要 5 次（BA reconsume + 't' reconsume + 3 剩余字符）
-        for _ in 0..5 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // '=' → BeforeAttributeValue
-        assert_eq!(t.next_token(), None); // '\'' → AttributeValueSingleQuoted
-        // 't', 'e', 'x', 't'
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
-        assert_eq!(t.next_token(), None); // '\'' → AfterAttributeValueQuoted
-        assert_eq!(t.next_token(), None); // '/' → SelfClosingStartTag
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → TagName, name="i"
+                                    // 'n', 'p', 'u', 't'
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // ' ' → BeforeAttributeName
+                                    // 't', 'y', 'p', 'e' — 需要 5 次（BA reconsume + 't' reconsume + 3 剩余字符）
+        for _ in 0..5 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // '=' → BeforeAttributeValue
+        assert_eq!(t.step(), None); // '\'' → AttributeValueSingleQuoted
+                                    // 't', 'e', 'x', 't'
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
+        assert_eq!(t.step(), None); // '\'' → AfterAttributeValueQuoted
+        assert_eq!(t.step(), None); // '/' → SelfClosingStartTag
         assert_eq!(
             t.next_token(),
             Some(Token::Tag(TagToken {
@@ -4732,14 +5029,14 @@ mod tests {
     #[test]
     fn rcdata_lt_switches_to_less_than_sign() {
         let mut t = enter_content_model("<", State::RCDATA, Some("title"));
-        assert_eq!(t.next_token(), None); // '<' → RCDATALessThanSign
+        assert_eq!(t.step(), None); // '<' → RCDATALessThanSign
         assert_eq!(t.state(), State::RCDATALessThanSign);
     }
 
     #[test]
     fn rcdata_ampersand_switches_to_charref() {
         let mut t = enter_content_model("&", State::RCDATA, Some("title"));
-        assert_eq!(t.next_token(), None); // '&' → CharacterReference
+        assert_eq!(t.step(), None); // '&' → CharacterReference
         assert_eq!(t.state(), State::CharacterReference);
     }
 
@@ -4760,19 +5057,19 @@ mod tests {
         // `</title>` in RCDATA with appropriate_end_tag_name = "title"
         let mut t = enter_content_model("</title>", State::RCDATA, Some("title"));
         // '<' → RCDATALessThanSign
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '/' → RCDATAEndTagOpen
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 't' → RCDATAEndTagName (create end tag "t")
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 'i' → append to end tag "ti"
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 't' → append to end tag "tit"
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 'l' → append to end tag "titl"
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 'e' → append to end tag "title"
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '>' → matches appropriate end tag → emit tag, switch to Data
         assert_eq!(
             t.next_token(),
@@ -4791,18 +5088,18 @@ mod tests {
         // `</div>` in RCDATA with appropriate_end_tag_name = "title" — does not match
         let mut t = enter_content_model("</div>x", State::RCDATA, Some("title"));
         // '<' → RCDATALessThanSign
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '/' → RCDATAEndTagOpen
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 'd' → RCDATAEndTagName (create end tag, name="d", buf="d")
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 'i' → append
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 'v' → append
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '>' → not appropriate (name="div" != expected="title") → backout
         // Handler returns None but pushes pending tokens
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // Pending tokens drained: '<' '/' 'd' 'i' 'v' (forward order)
         assert_eq!(t.next_token(), Some(Token::Character('<')));
         assert_eq!(t.next_token(), Some(Token::Character('/')));
@@ -4840,7 +5137,7 @@ mod tests {
     #[test]
     fn rawtext_lt_switches_to_less_than_sign() {
         let mut t = enter_content_model("<", State::RAWTEXT, Some("style"));
-        assert_eq!(t.next_token(), None); // '<' → RAWTEXTLessThanSign
+        assert_eq!(t.step(), None); // '<' → RAWTEXTLessThanSign
         assert_eq!(t.state(), State::RAWTEXTLessThanSign);
     }
 
@@ -4849,11 +5146,13 @@ mod tests {
         // `</style>` in RAWTEXT with appropriate_end_tag_name = "style"
         let mut t = enter_content_model("</style>", State::RAWTEXT, Some("style"));
         // '<' → RAWTEXTLessThanSign
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '/' → RAWTEXTEndTagOpen
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 's','t','y','l','e' → RAWTEXTEndTagName
-        for _ in 0..5 { assert_eq!(t.next_token(), None); }
+        for _ in 0..5 {
+            assert_eq!(t.step(), None);
+        }
         // '>' → matches → emit tag, switch to Data
         assert_eq!(
             t.next_token(),
@@ -4872,13 +5171,15 @@ mod tests {
         // `</div>x` in RAWTEXT with expected "style" — should back out
         let mut t = enter_content_model("</div>x", State::RAWTEXT, Some("style"));
         // '<' → RAWTEXTLessThanSign
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '/' → RAWTEXTEndTagOpen
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 'd','i','v' → RAWTEXTEndTagName
-        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        for _ in 0..3 {
+            assert_eq!(t.step(), None);
+        }
         // '>' → not appropriate → backout (returns None, pushes pending)
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // Pending tokens drained
         assert_eq!(t.next_token(), Some(Token::Character('<')));
         assert_eq!(t.next_token(), Some(Token::Character('/')));
@@ -4896,13 +5197,15 @@ mod tests {
         // No appropriate_end_tag_name set — nothing matches
         let mut t = enter_content_model("</style>x", State::RAWTEXT, None);
         // '<' → RAWTEXTLessThanSign
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '/' → RAWTEXTEndTagOpen
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 's','t','y','l','e' → RAWTEXTEndTagName
-        for _ in 0..5 { assert_eq!(t.next_token(), None); }
+        for _ in 0..5 {
+            assert_eq!(t.step(), None);
+        }
         // '>' → not appropriate (None is not "style") → backout (returns None)
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // Pending tokens drained
         assert_eq!(t.next_token(), Some(Token::Character('<')));
         assert_eq!(t.next_token(), Some(Token::Character('/')));
@@ -4918,13 +5221,15 @@ mod tests {
         // RAWTEXT end tag name on EOF emits `</` + switch to Data
         let mut t = enter_content_model("</sty", State::RAWTEXT, Some("style"));
         // '<' → RAWTEXTLessThanSign
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '/' → RAWTEXTEndTagOpen
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 's','t','y' → RAWTEXTEndTagName
-        for _ in 0..3 { assert_eq!(t.next_token(), None); }
+        for _ in 0..3 {
+            assert_eq!(t.step(), None);
+        }
         // EOF → handler pushes pending '<' '/' and returns None
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // Pending tokens drained
         assert_eq!(t.next_token(), Some(Token::Character('<')));
         assert_eq!(t.next_token(), Some(Token::Character('/')));
@@ -4982,7 +5287,7 @@ mod tests {
     #[test]
     fn script_data_lt_switches_to_less_than_sign() {
         let mut t = enter_content_model("<", State::ScriptData, Some("script"));
-        assert_eq!(t.next_token(), None); // '<' → ScriptDataLessThanSign
+        assert_eq!(t.step(), None); // '<' → ScriptDataLessThanSign
         assert_eq!(t.state(), State::ScriptDataLessThanSign);
     }
 
@@ -4990,8 +5295,8 @@ mod tests {
     fn script_data_lt_excl_to_escape_start() {
         // `<!` in ScriptData: '<' → LessThanSign, '!' → EscapeStart
         let mut t = enter_content_model("<!", State::ScriptData, Some("script"));
-        assert_eq!(t.next_token(), None); // '<' → LessThanSign
-        assert_eq!(t.next_token(), None); // '!' → EscapeStart
+        assert_eq!(t.step(), None); // '<' → LessThanSign
+        assert_eq!(t.step(), None); // '!' → EscapeStart
         assert_eq!(t.state(), State::ScriptDataEscapeStart);
     }
 
@@ -4999,10 +5304,10 @@ mod tests {
     fn script_data_escape_start_dash_chain() {
         // `<!--` in ScriptData → escape start chain
         let mut t = enter_content_model("<!--", State::ScriptData, Some("script"));
-        assert_eq!(t.next_token(), None); // '<' → LessThanSign
-        assert_eq!(t.next_token(), None); // '!' → EscapeStart
-        assert_eq!(t.next_token(), None); // '-' → EscapeStartDash
-        assert_eq!(t.next_token(), None); // '-' → EscapedDashDash
+        assert_eq!(t.step(), None); // '<' → LessThanSign
+        assert_eq!(t.step(), None); // '!' → EscapeStart
+        assert_eq!(t.step(), None); // '-' → EscapeStartDash
+        assert_eq!(t.step(), None); // '-' → EscapedDashDash
         assert_eq!(t.state(), State::ScriptDataEscapedDashDash);
     }
 
@@ -5011,11 +5316,13 @@ mod tests {
         // `</script>` in ScriptData matches appropriate end tag
         let mut t = enter_content_model("</script>", State::ScriptData, Some("script"));
         // '<' → LessThanSign
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '/' → EndTagOpen
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // 's','c','r','i','p','t' → EndTagName
-        for _ in 0..6 { assert_eq!(t.next_token(), None); }
+        for _ in 0..6 {
+            assert_eq!(t.step(), None);
+        }
         // '>' → match → emit tag, Data
         assert_eq!(
             t.next_token(),
@@ -5033,11 +5340,13 @@ mod tests {
     fn script_data_end_tag_no_match_backout() {
         // `</div>x` in ScriptData — not appropriate, backout
         let mut t = enter_content_model("</div>x", State::ScriptData, Some("script"));
-        assert_eq!(t.next_token(), None); // '<' → LessThanSign
-        assert_eq!(t.next_token(), None); // '/' → EndTagOpen
-        for _ in 0..3 { assert_eq!(t.next_token(), None); } // 'd','i','v'
-        assert_eq!(t.next_token(), None); // '>' → not appropriate → backout
-        // Pending tokens drained
+        assert_eq!(t.step(), None); // '<' → LessThanSign
+        assert_eq!(t.step(), None); // '/' → EndTagOpen
+        for _ in 0..3 {
+            assert_eq!(t.step(), None);
+        } // 'd','i','v'
+        assert_eq!(t.step(), None); // '>' → not appropriate → backout
+                                    // Pending tokens drained
         assert_eq!(t.next_token(), Some(Token::Character('<')));
         assert_eq!(t.next_token(), Some(Token::Character('/')));
         assert_eq!(t.next_token(), Some(Token::Character('d')));
@@ -5058,8 +5367,8 @@ mod tests {
     fn script_data_escaped_dash_dash_gt_exits_escape() {
         // `-->` in escaped mode: dash dash dash → emit '>', back to ScriptData
         let mut t = enter_content_model("-->", State::ScriptDataEscaped, Some("script"));
-        assert_eq!(t.next_token(), None); // '-' → EscapedDash
-        assert_eq!(t.next_token(), None); // '-' → EscapedDashDash
+        assert_eq!(t.step(), None); // '-' → EscapedDash
+        assert_eq!(t.step(), None); // '-' → EscapedDashDash
         assert_eq!(t.next_token(), Some(Token::Character('>'))); // '>' → emit, back to ScriptData
         assert_eq!(t.state(), State::ScriptData);
     }
@@ -5068,17 +5377,23 @@ mod tests {
     fn script_data_escaped_lt_alpha_to_double_escape_start() {
         // `<s` in escaped: '<' → LessThanSign, 's' → DoubleEscapeStart
         let mut t = enter_content_model("<s", State::ScriptDataEscaped, Some("script"));
-        assert_eq!(t.next_token(), None); // '<' → EscapedLessThanSign
-        assert_eq!(t.next_token(), None); // 's' → DoubleEscapeStart (alpha)
+        assert_eq!(t.step(), None); // '<' → EscapedLessThanSign
+        assert_eq!(t.step(), None); // 's' → DoubleEscapeStart (alpha)
         assert_eq!(t.state(), State::ScriptDataDoubleEscapeStart);
     }
 
     #[test]
     fn script_data_double_escape_start_script_match() {
         // In DoubleEscapeStart, `script` + `/` → enter DoubleEscaped
-        let mut t = enter_content_model("script/", State::ScriptDataDoubleEscapeStart, Some("script"));
-        for _ in 0..6 { assert_eq!(t.next_token(), None); } // 's','c','r','i','p','t' → accumulate
-        assert_eq!(t.next_token(), None); // '/' → temp buffer is "script" → DoubleEscaped
+        let mut t = enter_content_model(
+            "script/",
+            State::ScriptDataDoubleEscapeStart,
+            Some("script"),
+        );
+        for _ in 0..6 {
+            assert_eq!(t.step(), None);
+        } // 's','c','r','i','p','t' → accumulate
+        assert_eq!(t.step(), None); // '/' → temp buffer is "script" → DoubleEscaped
         assert_eq!(t.state(), State::ScriptDataDoubleEscaped);
     }
 
@@ -5086,8 +5401,10 @@ mod tests {
     fn script_data_double_escape_start_not_script() {
         // In DoubleEscapeStart, `foo ` → not "script" → back to Escaped
         let mut t = enter_content_model("foo ", State::ScriptDataDoubleEscapeStart, Some("script"));
-        for _ in 0..3 { assert_eq!(t.next_token(), None); } // 'f','o','o'
-        assert_eq!(t.next_token(), None); // ' ' → not "script" → Escaped
+        for _ in 0..3 {
+            assert_eq!(t.step(), None);
+        } // 'f','o','o'
+        assert_eq!(t.step(), None); // ' ' → not "script" → Escaped
         assert_eq!(t.state(), State::ScriptDataEscaped);
     }
 
@@ -5123,20 +5440,23 @@ mod tests {
         // Then `script/` → temp buffer is "script" → exit to Escaped.
         // Since we entered via `/` path (no alpha tag creation),
         // no tag token is emitted — just state transition.
-        let mut t = enter_content_model("</script/", State::ScriptDataDoubleEscaped, Some("script"));
+        let mut t =
+            enter_content_model("</script/", State::ScriptDataDoubleEscaped, Some("script"));
         // '<' → emit '<', switch to DoubleEscapedLessThanSign
         assert_eq!(t.next_token(), Some(Token::Character('<')));
         assert_eq!(t.state(), State::ScriptDataDoubleEscapedLessThanSign);
         // '/' → push '/', switch to DoubleEscapeEnd
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // pending pops '/'
         assert_eq!(t.next_token(), Some(Token::Character('/')));
         assert_eq!(t.state(), State::ScriptDataDoubleEscapeEnd);
         // 's','c','r','i','p','t' → accumulate
-        for _ in 0..6 { assert_eq!(t.next_token(), None); }
+        for _ in 0..6 {
+            assert_eq!(t.step(), None);
+        }
         // '/' → temp buffer == "script" → no tag (entered via / path) →
         // just switch to Escaped
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::ScriptDataEscaped);
     }
 
@@ -5146,7 +5466,9 @@ mod tests {
     fn char_ref_named_amp() {
         // `&amp;` → `&`: '&' 'a' 'm' 'p' ';' (5 Nones → Some)
         let mut t = HtmlTokenizer::new("&amp;");
-        for _ in 0..5 { assert_eq!(t.next_token(), None); }
+        for _ in 0..5 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Character('&')));
     }
 
@@ -5154,7 +5476,9 @@ mod tests {
     fn char_ref_named_lt() {
         // `&lt;` → `<`: '&' 'l' 't' ';' (3 Nones → Some)
         let mut t = HtmlTokenizer::new("&lt;");
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Character('<')));
     }
 
@@ -5162,7 +5486,9 @@ mod tests {
     fn char_ref_named_gt() {
         // `&gt;` → `>`: '&' 'g' 't' ';' (4 Nones → Some)
         let mut t = HtmlTokenizer::new("&gt;");
-        for _ in 0..4 { assert_eq!(t.next_token(), None); }
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Character('>')));
     }
 
@@ -5170,21 +5496,27 @@ mod tests {
     fn char_ref_named_quot() {
         // `&quot;` → `"`: '&' 'q' 'u' 'o' 't' ';' (5 Nones → Some)
         let mut t = HtmlTokenizer::new("&quot;");
-        for _ in 0..6 { assert_eq!(t.next_token(), None); }
+        for _ in 0..6 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Character('"')));
     }
 
     #[test]
     fn char_ref_numeric_decimal() {
         let mut t = HtmlTokenizer::new("&#60;");
-        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        for _ in 0..7 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Character('<')));
     }
 
     #[test]
     fn char_ref_numeric_hex() {
         let mut t = HtmlTokenizer::new("&#x3C;");
-        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        for _ in 0..7 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Character('<')));
     }
 
@@ -5192,7 +5524,7 @@ mod tests {
     fn char_ref_not_a_ref_space() {
         // `& a` → emit `&`, then ` ` in Data
         let mut t = HtmlTokenizer::new("& a");
-        assert_eq!(t.next_token(), None);  // '&' → CharacterReference
+        assert_eq!(t.step(), None); // '&' → CharacterReference
         assert_eq!(t.next_token(), Some(Token::Character('&'))); // ' ' → fallback
         assert_eq!(t.next_token(), Some(Token::Character(' '))); // reconsume ' '
         assert_eq!(t.next_token(), Some(Token::Character('a')));
@@ -5202,9 +5534,9 @@ mod tests {
     fn char_ref_ampersand_not_ref() {
         // `&&` → emit `&`, reconsume `&`
         let mut t = HtmlTokenizer::new("&&");
-        assert_eq!(t.next_token(), None); // '&' → CharacterReference
+        assert_eq!(t.step(), None); // '&' → CharacterReference
         assert_eq!(t.next_token(), Some(Token::Character('&'))); // '&' → fallback
-        assert_eq!(t.next_token(), None); // reconsume '&' → CharacterReference
+        assert_eq!(t.step(), None); // reconsume '&' → CharacterReference
         assert_eq!(t.next_token(), Some(Token::Character('&'))); // at EOF → fallback
     }
 
@@ -5212,22 +5544,26 @@ mod tests {
     fn char_ref_numeric_null() {
         // `&#x00;` → U+FFFD: '&' '#' 'x' '0' '0' ';' (5 Nones → Some)
         let mut t = HtmlTokenizer::new("&#x00;");
-        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        for _ in 0..7 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Character('\u{FFFD}')));
     }
 
     #[test]
     fn char_ref_numeric_win1252() {
         let mut t = HtmlTokenizer::new("&#x80;");
-        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        for _ in 0..7 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Character('\u{20AC}')));
     }
 
     #[test]
     fn char_ref_unknown_entity_ambiguous() {
-        // `&unknownfoo;` — not in entity table → ambiguous ampersand
+        // `&unknownfoo;` — not in entity table → flush `&` + name as literal
         let mut t = HtmlTokenizer::new("&unknownfoo;");
-        // 8 Nones then pending tokens + AmbigAmpersand emit
+        assert_eq!(next_real_token(&mut t), Token::Character('&'));
         assert_eq!(next_real_token(&mut t), Token::Character('u'));
         assert_eq!(next_real_token(&mut t), Token::Character('n'));
         assert_eq!(next_real_token(&mut t), Token::Character('k'));
@@ -5245,7 +5581,9 @@ mod tests {
     fn char_ref_notin_entity() {
         // `&notin;` → ∉ (U+2209), now in full entity table
         let mut t = HtmlTokenizer::new("&notin;");
-        for _ in 0..7 { assert_eq!(t.next_token(), None); }
+        for _ in 0..7 {
+            assert_eq!(t.step(), None);
+        }
         assert_eq!(t.next_token(), Some(Token::Character('\u{2209}')));
     }
 
@@ -5253,10 +5591,14 @@ mod tests {
     fn char_ref_e2e_data_state() {
         // `&lt;a&gt;` → `<a>`
         let mut t = HtmlTokenizer::new("&lt;a&gt;");
-        for _ in 0..4 { assert_eq!(t.next_token(), None); } // &lt; resolved
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        } // &lt; resolved
         assert_eq!(t.next_token(), Some(Token::Character('<')));
         assert_eq!(t.next_token(), Some(Token::Character('a')));
-        for _ in 0..4 { assert_eq!(t.next_token(), None); } // &gt; resolved
+        for _ in 0..4 {
+            assert_eq!(t.step(), None);
+        } // &gt; resolved
         assert_eq!(t.next_token(), Some(Token::Character('>')));
         assert_eq!(t.next_token(), Some(Token::EOF));
     }
@@ -5267,20 +5609,20 @@ mod tests {
     fn cdata_emits_characters() {
         // `<![CDATA[hello]]>` via MarkupDeclarationOpen
         let mut t = HtmlTokenizer::new("<![CDATA[hello]]>");
-        assert_eq!(t.next_token(), None); // Data → TagOpen
-        assert_eq!(t.next_token(), None); // TagOpen → MarkupDeclarationOpen
-        assert_eq!(t.next_token(), None); // "[CDATA[" → CDATASection
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → MarkupDeclarationOpen
+        assert_eq!(t.step(), None); // "[CDATA[" → CDATASection
         assert_eq!(t.next_token(), Some(Token::Character('h')));
         assert_eq!(t.next_token(), Some(Token::Character('e')));
         assert_eq!(t.next_token(), Some(Token::Character('l')));
         assert_eq!(t.next_token(), Some(Token::Character('l')));
         assert_eq!(t.next_token(), Some(Token::Character('o')));
         // ']' → CDATASectionBracket
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // ']' → CDATASectionEnd
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         // '>' → Data (CDATA closed, no token emitted)
-        assert_eq!(t.next_token(), None);
+        assert_eq!(t.step(), None);
         assert_eq!(t.state(), State::Data);
     }
 
@@ -5295,7 +5637,7 @@ mod tests {
     fn cdata_bracket_not_followed_by_bracket() {
         // `]x` in CDATA: `]` → Bracket, `x` → emit `]` + reconsume
         let mut t = enter_content_model("]x", State::CDATASection, None);
-        assert_eq!(t.next_token(), None); // ']' → Bracket
+        assert_eq!(t.step(), None); // ']' → Bracket
         assert_eq!(t.next_token(), Some(Token::Character(']'))); // 'x' → emit ']'
         assert_eq!(t.next_token(), Some(Token::Character('x'))); // reconsume 'x' in CDATA
     }
@@ -5304,9 +5646,9 @@ mod tests {
     fn cdata_double_bracket_then_not_gt() {
         // `]]x` in CDATA: ']' → Bracket, ']' → End, 'x' → emit ']]' + reconsume
         let mut t = enter_content_model("]]x", State::CDATASection, None);
-        assert_eq!(t.next_token(), None); // ']' → Bracket
-        assert_eq!(t.next_token(), None); // ']' → End
-        assert_eq!(t.next_token(), None); // 'x' → emit ']]' (pending), reconsume
+        assert_eq!(t.step(), None); // ']' → Bracket
+        assert_eq!(t.step(), None); // ']' → End
+        assert_eq!(t.step(), None); // 'x' → emit ']]' (pending), reconsume
         assert_eq!(t.next_token(), Some(Token::Character(']'))); // pending ']'
         assert_eq!(t.next_token(), Some(Token::Character(']'))); // pending ']'
         assert_eq!(t.next_token(), Some(Token::Character('x'))); // reconsume 'x'
@@ -5316,8 +5658,94 @@ mod tests {
     fn cdata_end_extra_bracket() {
         // `]]]` → third bracket emitted, stays in End
         let mut t = enter_content_model("]]]", State::CDATASection, None);
-        assert_eq!(t.next_token(), None); // ']' → Bracket
-        assert_eq!(t.next_token(), None); // ']' → End
+        assert_eq!(t.step(), None); // ']' → Bracket
+        assert_eq!(t.step(), None); // ']' → End
         assert_eq!(t.next_token(), Some(Token::Character(']'))); // ']' → emit, stay in End
+    }
+
+    // ── Named character reference tests (§13.2.5.77) ──────────────
+
+    /// Helper: collect all tokens from a tokenizer into a Vec.
+    fn collect_tokens(input: &str) -> Vec<Token> {
+        let mut t = HtmlTokenizer::new(input);
+        let mut out = Vec::new();
+        while let Some(tok) = t.next_token() {
+            out.push(tok);
+        }
+        out
+    }
+
+    #[test]
+    fn named_entity_legacy_with_semi_resolves() {
+        // &amp; → & (legacy entity, both forms exist in table)
+        let tokens = collect_tokens("&amp;");
+        assert_eq!(tokens, vec![Token::Character('&'), Token::EOF]);
+    }
+
+    #[test]
+    fn named_entity_legacy_without_semi_resolves() {
+        // &amp → & (legacy entity, no semicolon needed)
+        let tokens = collect_tokens("&amp");
+        assert_eq!(tokens, vec![Token::Character('&'), Token::EOF]);
+    }
+
+    #[test]
+    fn non_legacy_entity_with_semi_resolves() {
+        // &Abreve; → Ă (non-legacy, REQUIRES semicolon)
+        let tokens = collect_tokens("&Abreve;");
+        assert_eq!(tokens, vec![Token::Character('\u{0102}'), Token::EOF]);
+    }
+
+    #[test]
+    fn non_legacy_entity_without_semi_is_literal() {
+        // &Abreve (no semicolon) → literal "&Abreve" (not in table without ;)
+        let tokens = collect_tokens("&Abreve");
+        let mut expected: Vec<Token> = "&Abreve".chars().map(Token::Character).collect();
+        expected.push(Token::EOF);
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn unknown_entity_with_semi_is_literal() {
+        // &rrrraannddom; → literal "&rrrraannddom;" (unknown entity)
+        let tokens = collect_tokens("&rrrraannddom;");
+        let mut expected: Vec<Token> = "&rrrraannddom;".chars().map(Token::Character).collect();
+        expected.push(Token::EOF);
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn attr_value_entity_no_extra_character_token() {
+        // <h a="&amp;"> → only StartTag, NO extra Character token emitted
+        // by the character reference resolution in attribute context.
+        let tokens = collect_tokens("<h a=\"&amp;\">");
+        assert_eq!(tokens.len(), 2);
+        match &tokens[0] {
+            Token::Tag(tg) => {
+                assert_eq!(tg.name, "h");
+                assert_eq!(tg.kind, TagKind::Start);
+                assert_eq!(tg.attrs.len(), 1);
+                assert_eq!(tg.attrs[0].0, "a");
+                assert_eq!(tg.attrs[0].1, "&");
+            }
+            other => panic!("expected StartTag, got {:?}", other),
+        }
+        assert_eq!(tokens[1], Token::EOF);
+    }
+
+    #[test]
+    fn attr_context_not_equals_is_literal() {
+        // <h a="&not="> → attr value is literal "&not="
+        // (attr-context rule: legacy `not` without `;` followed by `=`)
+        let tokens = collect_tokens("<h a=\"&not=\">");
+        assert_eq!(tokens.len(), 2);
+        match &tokens[0] {
+            Token::Tag(tg) => {
+                assert_eq!(tg.name, "h");
+                assert_eq!(tg.attrs[0].0, "a");
+                assert_eq!(tg.attrs[0].1, "&not=");
+            }
+            other => panic!("expected StartTag, got {:?}", other),
+        }
     }
 }
