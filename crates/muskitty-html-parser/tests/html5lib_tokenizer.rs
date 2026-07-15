@@ -129,7 +129,11 @@ impl ExpectedToken {
             "StartTag" => {
                 let name = req_string(arr.get(1), double_escaped)?;
                 let attrs = parse_attrs(arr.get(2));
-                let self_closing = arr.get(4).and_then(|v| v.as_bool()).unwrap_or(false);
+                // html5lib tokenizer fixture format: ["StartTag", name, attrs, selfClosing?]
+                // selfClosing is at index 3 (right after attrs). Reading index 4
+                // (the DOCTYPE correctness slot) was an off-by-one bug that caused
+                // self-closing flags to always be parsed as false.
+                let self_closing = arr.get(3).and_then(|v| v.as_bool()).unwrap_or(false);
                 Ok(ExpectedToken::StartTag {
                     name,
                     attrs,

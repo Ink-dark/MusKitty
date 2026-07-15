@@ -863,7 +863,7 @@ impl HtmlTokenizer {
     ///
     /// Consume the next input character:
     /// - U+002F SOLIDUS (/) → clear temporary buffer, ScriptDataEndTagOpen
-    /// - U+0021 EXCLAMATION MARK (!) → ScriptDataEscapeStart
+    /// - U+0021 EXCLAMATION MARK (!) → ScriptDataEscapeStart, emit `<`
     /// - Anything else → emit `<` character token, reconsume in ScriptData
     fn handle_script_data_less_than_sign_state(&mut self) -> Option<Token> {
         match self.next_char() {
@@ -873,8 +873,11 @@ impl HtmlTokenizer {
                 None
             }
             Some('!') => {
+                // §13.2.5.15: Switch to ScriptDataEscapeStart.
+                // Emit `<` and `!` character tokens (both consumed chars).
                 self.state = State::ScriptDataEscapeStart;
-                None
+                self.pending_tokens.push(Token::Character('!'));
+                Some(Token::Character('<'))
             }
             Some(_c) => {
                 self.state = State::ScriptData;
@@ -988,20 +991,25 @@ impl HtmlTokenizer {
     /// §13.2.5.18 Script data escape start state
     ///
     /// Consume the next input character:
-    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapeStartDash
-    /// - Anything else → reconsume in ScriptData
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapeStartDash, emit `-`
+    /// - Anything else → reconsume in ScriptData (no emit — `<!` already emitted)
     fn handle_script_data_escape_start_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('-') => {
+                // §13.2.5.18: Switch to ScriptDataEscapeStartDash.
+                // Emit a `-` character token.
                 self.state = State::ScriptDataEscapeStartDash;
-                None
+                Some(Token::Character('-'))
             }
             Some(_c) => {
+                // §13.2.5.18: Reconsume in ScriptData. (No emit — `<` and `!`
+                // were already emitted by §13.2.5.15.)
                 self.state = State::ScriptData;
                 self.reconsume = true;
                 None
             }
             None => {
+                // §13.2.5.18: EOF — reconsume in ScriptData. (No emit.)
                 self.state = State::ScriptData;
                 self.reconsume = true;
                 None
@@ -1012,20 +1020,25 @@ impl HtmlTokenizer {
     /// §13.2.5.19 Script data escape start dash state
     ///
     /// Consume the next input character:
-    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDashDash
-    /// - Anything else → reconsume in ScriptData
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDashDash, emit `-`
+    /// - Anything else → reconsume in ScriptData (no emit — `<!-` already emitted)
     fn handle_script_data_escape_start_dash_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('-') => {
+                // §13.2.5.19: Switch to ScriptDataEscapedDashDash.
+                // Emit a `-` character token.
                 self.state = State::ScriptDataEscapedDashDash;
-                None
+                Some(Token::Character('-'))
             }
             Some(_c) => {
+                // §13.2.5.19: Reconsume in ScriptData. (No emit — `<!-` was
+                // already emitted by §13.2.5.15/18.)
                 self.state = State::ScriptData;
                 self.reconsume = true;
                 None
             }
             None => {
+                // §13.2.5.19: EOF — reconsume in ScriptData. (No emit.)
                 self.state = State::ScriptData;
                 self.reconsume = true;
                 None
@@ -1038,18 +1051,23 @@ impl HtmlTokenizer {
     /// §13.2.5.20 Script data escaped state
     ///
     /// Consume the next input character:
-    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDash
-    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDash, emit `-`
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign (no emit)
     /// - U+0000 NULL → parse error; emit U+FFFD character token
     /// - EOF → parse error; emit end-of-file token
     /// - Anything else → emit character token
     fn handle_script_data_escaped_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('-') => {
+                // §13.2.5.20: Switch to ScriptDataEscapedDash.
+                // Emit a `-` character token.
                 self.state = State::ScriptDataEscapedDash;
-                None
+                Some(Token::Character('-'))
             }
             Some('<') => {
+                // §13.2.5.20: Switch to ScriptDataEscapedLessThanSign.
+                // (No emit — `<` will be emitted by the less-than-sign state's
+                // alpha or anything-else branch.)
                 self.state = State::ScriptDataEscapedLessThanSign;
                 None
             }
@@ -1069,29 +1087,36 @@ impl HtmlTokenizer {
     /// §13.2.5.21 Script data escaped dash state
     ///
     /// Consume the next input character:
-    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDashDash
-    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign
-    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDashDash, emit `-`
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign, emit `<`
+    /// - U+0000 NULL → parse error; switch to ScriptDataEscaped; emit U+FFFD
     /// - EOF → parse error; emit end-of-file token
-    /// - Anything else → emit `-`, reconsume in ScriptDataEscaped
+    /// - Anything else → switch to ScriptDataEscaped; emit current char
     fn handle_script_data_escaped_dash_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('-') => {
+                // §13.2.5.20: Switch to ScriptDataEscapedDashDash.
+                // Emit a `-` character token.
                 self.state = State::ScriptDataEscapedDashDash;
-                None
+                Some(Token::Character('-'))
             }
             Some('<') => {
+                // §13.2.5.20: Switch to ScriptDataEscapedLessThanSign.
+                // Emit a `<` character token.
                 self.state = State::ScriptDataEscapedLessThanSign;
-                None
+                Some(Token::Character('<'))
             }
             Some('\0') => {
                 // TODO: record parse error (unexpected-null-character)
+                // §13.2.5.20: Switch to ScriptDataEscaped; emit U+FFFD.
+                self.state = State::ScriptDataEscaped;
                 Some(Token::Character('\u{FFFD}'))
             }
-            Some(_c) => {
+            Some(c) => {
+                // §13.2.5.20: Switch to ScriptDataEscaped.
+                // Emit the current input character as a character token.
                 self.state = State::ScriptDataEscaped;
-                self.reconsume = true;
-                Some(Token::Character('-'))
+                Some(Token::Character(c))
             }
             None => {
                 // TODO: record parse error (eof-in-script-html-comment-like-text)
@@ -1107,15 +1132,17 @@ impl HtmlTokenizer {
     /// - U+002D HYPHEN-MINUS (-) → emit `-`
     /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign
     /// - U+003E GREATER-THAN SIGN (>) → emit `>`, switch to ScriptData
-    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - U+0000 NULL → parse error; switch to ScriptDataEscaped; emit U+FFFD
     /// - EOF → parse error; emit end-of-file token
-    /// - Anything else → emit `--`, reconsume in ScriptDataEscaped
+    /// - Anything else → switch to ScriptDataEscaped; emit current char
     fn handle_script_data_escaped_dash_dash_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('-') => Some(Token::Character('-')),
             Some('<') => {
+                // §13.2.5.22: Switch to ScriptDataEscapedLessThanSign.
+                // Emit a `<` character token.
                 self.state = State::ScriptDataEscapedLessThanSign;
-                None
+                Some(Token::Character('<'))
             }
             Some('>') => {
                 self.state = State::ScriptData;
@@ -1123,14 +1150,14 @@ impl HtmlTokenizer {
             }
             Some('\0') => {
                 // TODO: record parse error (unexpected-null-character)
+                // §13.2.5.21: Switch to ScriptDataEscaped; emit U+FFFD.
+                self.state = State::ScriptDataEscaped;
                 Some(Token::Character('\u{FFFD}'))
             }
             Some(c) => {
+                // §13.2.5.21: Switch to ScriptDataEscaped.
+                // Emit the current input character as a character token.
                 self.state = State::ScriptDataEscaped;
-                self.reconsume = true;
-                // Emit "--" via pending tokens
-                self.pending_tokens.push(Token::Character('-'));
-                self.pending_tokens.push(Token::Character('-'));
                 Some(Token::Character(c))
             }
             None => {
@@ -1145,9 +1172,14 @@ impl HtmlTokenizer {
     ///
     /// Consume the next input character:
     /// - U+002F SOLIDUS (/) → clear temporary buffer, ScriptDataEscapedEndTagOpen
-    /// - ASCII alpha → clear temporary buffer, create end tag, append
-    ///   lowercase + original to temp, ScriptDataDoubleEscapeStart
-    /// - Anything else → emit `<`, reconsume in ScriptDataEscaped
+    /// - ASCII alpha → clear temp buffer, append lowercase version to temp
+    ///   buffer, emit `<` + current input character, ScriptDataDoubleEscapeStart
+    /// - Anything else → emit `<` character token, reconsume in ScriptDataEscaped
+    /// - EOF → emit `<` character token, reconsume in ScriptDataEscaped
+    ///
+    /// NOTE: §13.2.5.20 `<` branch does NOT emit `<` ("Nothing emitted").
+    /// The `<` must be emitted by this state's alpha or anything-else branch,
+    /// otherwise test cases like `<!-- <test> -->` would lose the `<`.
     fn handle_script_data_escaped_less_than_sign_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('/') => {
@@ -1156,26 +1188,35 @@ impl HtmlTokenizer {
                 None
             }
             Some(c) if c.is_ascii_alphabetic() => {
+                // §13.2.5.23: Clear temp buffer. Append the lowercase version
+                // of the current input character to the temp buffer. Emit the
+                // current input character. Switch to ScriptDataDoubleEscapeStart.
+                // NOTE: no tag token is created — this is the double-escape
+                // detection mechanism, distinct from the `/` end-tag path.
+                //
+                // The `<` that consumed to reach this state was already
+                // emitted by the source state (§13.2.5.20 `<` branch emits
+                // nothing, but `<` only reaches §13.2.5.23 via §13.2.5.21 or
+                // §13.2.5.22 dash states, both of which emit `<`). So here we
+                // emit ONLY the alpha char. Verified by html5lib:
+                // `<!--<script>` → Character "<!--<script>" (single `<` before s).
                 self.temporary_buffer.clear();
-                let mut name = String::new();
-                name.push(c.to_ascii_lowercase());
-                self.temporary_buffer.push(c);
-                self.current_tag = Some(TagToken {
-                    kind: TagKind::End,
-                    name,
-                    attrs: Vec::new(),
-                    self_closing: false,
-                });
+                self.temporary_buffer.push(c.to_ascii_lowercase());
                 self.state = State::ScriptDataDoubleEscapeStart;
-                None
+                Some(Token::Character(c))
             }
             Some(_c) => {
+                // §13.2.5.23: Anything else — Emit `<` character token.
+                // Reconsume in ScriptDataEscaped.
                 self.state = State::ScriptDataEscaped;
                 self.reconsume = true;
                 Some(Token::Character('<'))
             }
             None => {
+                // §13.2.5.23: EOF — falls under "anything else": emit `<`,
+                // reconsume in ScriptDataEscaped (which will emit EOF).
                 self.state = State::ScriptDataEscaped;
+                self.reconsume = true;
                 Some(Token::Character('<'))
             }
         }
@@ -1278,51 +1319,44 @@ impl HtmlTokenizer {
     /// If so, enters double-escaped mode. Otherwise returns to escaped.
     ///
     /// - TAB/LF/FF/SPACE, `/`, or `>` → if temp buffer is "script",
-    ///   ScriptDataDoubleEscaped; else ScriptDataEscaped
-    /// - ASCII upper alpha → append lowercase to tag name, append original
-    ///   to temp buffer
-    /// - ASCII lower alpha → append to tag name, append to temp buffer
+    ///   ScriptDataDoubleEscaped; else ScriptDataEscaped. Emit current char.
+    /// - ASCII upper alpha → append lowercase to temp buffer, emit current char
+    /// - ASCII lower alpha → append to temp buffer, emit current char
     /// - Anything else → reconsume in ScriptDataEscaped
     fn handle_script_data_double_escape_start_state(&mut self) -> Option<Token> {
         match self.next_char() {
-            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') | Some('/') | Some('>') => {
-                // Check if temp buffer is exactly "script"
+            Some(c) if matches!(c, '\t' | '\n' | '\u{000C}' | ' ' | '/' | '>') => {
+                // §13.2.5.26: If temp buffer is "script", switch to
+                // ScriptDataDoubleEscaped; otherwise switch to ScriptDataEscaped.
+                // Emit the current input character.
                 if self.temporary_buffer == "script" {
-                    // Tag persists into DoubleEscaped for later emission in
-                    // DoubleEscapeEnd (§13.2.5.31).
-                    self.temporary_buffer.clear();
                     self.state = State::ScriptDataDoubleEscaped;
                 } else {
-                    self.current_tag = None;
-                    self.temporary_buffer.clear();
                     self.state = State::ScriptDataEscaped;
                 }
-                None
+                Some(Token::Character(c))
             }
             Some(c) if c.is_ascii_uppercase() => {
-                if let Some(ref mut tag) = self.current_tag {
-                    tag.name.push(c.to_ascii_lowercase());
-                }
-                self.temporary_buffer.push(c);
-                None
+                // §13.2.5.26: Append lowercase version to temp buffer.
+                // Emit the current input character.
+                self.temporary_buffer.push(c.to_ascii_lowercase());
+                Some(Token::Character(c))
             }
             Some(c) if c.is_ascii_lowercase() => {
-                if let Some(ref mut tag) = self.current_tag {
-                    tag.name.push(c);
-                }
+                // §13.2.5.26: Append current input character to temp buffer.
+                // Emit the current input character.
                 self.temporary_buffer.push(c);
-                None
+                Some(Token::Character(c))
             }
             Some(_c) => {
-                self.current_tag = None;
-                self.temporary_buffer.clear();
+                // §13.2.5.26: Reconsume in the script data escaped state.
                 self.state = State::ScriptDataEscaped;
                 self.reconsume = true;
                 None
             }
             None => {
-                self.current_tag = None;
-                self.temporary_buffer.clear();
+                // EOF: "anything else" → reconsume in ScriptDataEscaped, which
+                // will emit EOF on the next step.
                 self.state = State::ScriptDataEscaped;
                 self.reconsume = true;
                 None
@@ -1368,9 +1402,9 @@ impl HtmlTokenizer {
     /// - U+002D HYPHEN-MINUS (-) → ScriptDataDoubleEscapedDashDash, emit `-`
     /// - U+003C LESS-THAN SIGN (<) → ScriptDataDoubleEscapedLessThanSign,
     ///   emit `<`
-    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - U+0000 NULL → parse error; switch to ScriptDataDoubleEscaped; emit U+FFFD
     /// - EOF → parse error; emit end-of-file token
-    /// - Anything else → emit `-`, reconsume in ScriptDataDoubleEscaped
+    /// - Anything else → switch to ScriptDataDoubleEscaped; emit current char
     fn handle_script_data_double_escaped_dash_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('-') => {
@@ -1383,12 +1417,15 @@ impl HtmlTokenizer {
             }
             Some('\0') => {
                 // TODO: record parse error (unexpected-null-character)
+                // §13.2.5.28: Switch to ScriptDataDoubleEscaped; emit U+FFFD.
+                self.state = State::ScriptDataDoubleEscaped;
                 Some(Token::Character('\u{FFFD}'))
             }
-            Some(_c) => {
+            Some(c) => {
+                // §13.2.5.28: Switch to ScriptDataDoubleEscaped.
+                // Emit the current input character as a character token.
                 self.state = State::ScriptDataDoubleEscaped;
-                self.reconsume = true;
-                Some(Token::Character('-'))
+                Some(Token::Character(c))
             }
             None => {
                 // TODO: record parse error (eof-in-script-html-comment-like-text)
@@ -1405,9 +1442,9 @@ impl HtmlTokenizer {
     /// - U+003C LESS-THAN SIGN (<) → ScriptDataDoubleEscapedLessThanSign,
     ///   emit `<`
     /// - U+003E GREATER-THAN SIGN (>) → emit `>`, switch to ScriptData
-    /// - U+0000 NULL → parse error; emit U+FFFD character token
+    /// - U+0000 NULL → parse error; switch to ScriptDataDoubleEscaped; emit U+FFFD
     /// - EOF → parse error; emit end-of-file token
-    /// - Anything else → emit `--`, reconsume in ScriptDataDoubleEscaped
+    /// - Anything else → switch to ScriptDataDoubleEscaped; emit current char
     fn handle_script_data_double_escaped_dash_dash_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('-') => Some(Token::Character('-')),
@@ -1421,13 +1458,14 @@ impl HtmlTokenizer {
             }
             Some('\0') => {
                 // TODO: record parse error (unexpected-null-character)
+                // §13.2.5.29: Switch to ScriptDataDoubleEscaped; emit U+FFFD.
+                self.state = State::ScriptDataDoubleEscaped;
                 Some(Token::Character('\u{FFFD}'))
             }
             Some(c) => {
+                // §13.2.5.29: Switch to ScriptDataDoubleEscaped.
+                // Emit the current input character as a character token.
                 self.state = State::ScriptDataDoubleEscaped;
-                self.reconsume = true;
-                self.pending_tokens.push(Token::Character('-'));
-                self.pending_tokens.push(Token::Character('-'));
                 Some(Token::Character(c))
             }
             None => {
@@ -1469,50 +1507,52 @@ impl HtmlTokenizer {
     /// §13.2.5.31 Script data double escape end state
     ///
     /// Checks whether the accumulated temporary buffer matches "script".
-    /// If so, exits double-escaped mode back to escaped. Otherwise backout.
+    /// If so, exits double-escaped mode back to escaped. Otherwise stays
+    /// in double-escaped mode.
     ///
-    /// - TAB/LF/FF/SPACE, `/`, or `>` → if temp buffer is "script", emit the
-    ///   current tag token, switch to ScriptDataEscaped; else emit `<` + `/` +
-    ///   temp buffer chars, reconsume in ScriptDataDoubleEscaped
-    /// - ASCII upper alpha → append lowercase to tag name, append original
-    ///   to temp buffer
-    /// - ASCII lower alpha → append to tag name, append to temp buffer
-    /// - Anything else → emit `<` + `/` + temp buffer chars, reconsume in
-    ///   ScriptDataDoubleEscaped
+    /// - TAB/LF/FF/SPACE, `/`, or `>` → if temp buffer is "script",
+    ///   ScriptDataEscaped; else ScriptDataDoubleEscaped. Emit current char.
+    /// - ASCII upper alpha → append lowercase to temp buffer, emit current char
+    /// - ASCII lower alpha → append to temp buffer, emit current char
+    /// - Anything else → reconsume in ScriptDataDoubleEscaped
     fn handle_script_data_double_escape_end_state(&mut self) -> Option<Token> {
         match self.next_char() {
-            Some('\t') | Some('\n') | Some('\u{000C}') | Some(' ') | Some('/') | Some('>') => {
+            Some(c) if matches!(c, '\t' | '\n' | '\u{000C}' | ' ' | '/' | '>') => {
+                // §13.2.5.31: If temp buffer is "script", switch to
+                // ScriptDataEscaped; otherwise switch to ScriptDataDoubleEscaped.
+                // Emit the current input character.
                 if self.temporary_buffer == "script" {
-                    // Exit double-escaped: emit the tag token, return to escaped
-                    if let Some(tag) = self.current_tag.take() {
-                        self.temporary_buffer.clear();
-                        self.state = State::ScriptDataEscaped;
-                        Some(Token::Tag(tag))
-                    } else {
-                        self.temporary_buffer.clear();
-                        self.state = State::ScriptDataEscaped;
-                        None
-                    }
+                    self.state = State::ScriptDataEscaped;
                 } else {
-                    self.script_data_double_escaped_end_tag_name_backout()
+                    self.state = State::ScriptDataDoubleEscaped;
                 }
+                Some(Token::Character(c))
             }
             Some(c) if c.is_ascii_uppercase() => {
-                if let Some(ref mut tag) = self.current_tag {
-                    tag.name.push(c.to_ascii_lowercase());
-                }
-                self.temporary_buffer.push(c);
-                None
+                // §13.2.5.31: Append lowercase version to temp buffer.
+                // Emit the current input character.
+                self.temporary_buffer.push(c.to_ascii_lowercase());
+                Some(Token::Character(c))
             }
             Some(c) if c.is_ascii_lowercase() => {
-                if let Some(ref mut tag) = self.current_tag {
-                    tag.name.push(c);
-                }
+                // §13.2.5.31: Append current input character to temp buffer.
+                // Emit the current input character.
                 self.temporary_buffer.push(c);
+                Some(Token::Character(c))
+            }
+            Some(_c) => {
+                // §13.2.5.31: Reconsume in the script data double escaped state.
+                self.state = State::ScriptDataDoubleEscaped;
+                self.reconsume = true;
                 None
             }
-            Some(_c) => self.script_data_double_escaped_end_tag_name_backout(),
-            None => self.script_data_double_escaped_end_tag_name_backout(),
+            None => {
+                // EOF: "anything else" → reconsume in ScriptDataDoubleEscaped,
+                // which will emit EOF on the next step.
+                self.state = State::ScriptDataDoubleEscaped;
+                self.reconsume = true;
+                None
+            }
         }
     }
 
@@ -1542,20 +1582,6 @@ impl HtmlTokenizer {
         self.current_tag = None;
         self.temporary_buffer.clear();
         self.state = State::ScriptDataEscaped;
-        self.reconsume = true;
-        None
-    }
-
-    /// Helper: "anything else" backout for ScriptDataDoubleEscapeEnd.
-    fn script_data_double_escaped_end_tag_name_backout(&mut self) -> Option<Token> {
-        for ch in self.temporary_buffer.chars().rev() {
-            self.pending_tokens.push(Token::Character(ch));
-        }
-        self.pending_tokens.push(Token::Character('/'));
-        self.pending_tokens.push(Token::Character('<'));
-        self.current_tag = None;
-        self.temporary_buffer.clear();
-        self.state = State::ScriptDataDoubleEscaped;
         self.reconsume = true;
         None
     }
@@ -1614,11 +1640,10 @@ impl HtmlTokenizer {
 
     /// §13.2.5.7 End tag open state
     ///
-    /// Consume the next input character:
-    /// - ASCII alpha → create a new end tag token, set tag name to empty string,
-    ///   append lowercased char to name, switch to tag name state
-    /// - Anything else → switch to data state (don't emit, don't reconsume)
-    /// - EOF → emit `<` character token + EOF, switch to data state
+    /// - ASCII alpha → create end tag token, append lowercased char to name, switch to TagName
+    /// - `>` → parse error, switch to Data (no emit)
+    /// - EOF → parse error, emit `<` + EOF
+    /// - Anything else → parse error, emit `<` and `/`, reconsume in Data
     fn handle_end_tag_open_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some(c) if c.is_ascii_alphabetic() => {
@@ -1634,13 +1659,30 @@ impl HtmlTokenizer {
                 None
             }
             None => {
-                // EOF: emit `<` then return to Data (next call emits EOF)
+                // §13.2.5.7: Parse error (eof-before-tag-name). Emit `<` and
+                // `/` character tokens. Reconsume in the data state (which
+                // emits EOF next). Verified by html5lib: `</` → Character "</".
+                // TODO: parse error (eof-before-tag-name)
                 self.state = State::Data;
-                Some(Token::Character('<'))
+                self.reconsume = true;
+                self.pending_tokens.push(Token::Character('/'));
+                self.pending_tokens.push(Token::Character('<'));
+                None
+            }
+            Some('>') => {
+                // §13.2.5.7: Parse error (missing-end-tag-name). Switch to Data.
+                self.state = State::Data;
+                None
             }
             Some(_c) => {
-                // Consume the character, switch to Data, don't emit anything.
-                self.state = State::Data;
+                // §13.2.5.7: Parse error. Create a comment token whose data is
+                // the empty string. Switch to the bogus comment state. Reconsume
+                // the current input character. Verified by html5lib:
+                // `</\t` (EOF) → Comment "\t"; `</x` (EOF) → Comment "x".
+                // TODO: parse error (invalid-first-character-of-tag-name)
+                self.current_comment.clear();
+                self.state = State::BogusComment;
+                self.reconsume = true;
                 None
             }
         }
@@ -2241,6 +2283,13 @@ impl HtmlTokenizer {
         if let Some(ref mut tag) = self.current_tag {
             let name = std::mem::take(&mut self.current_attr_name);
             let value = std::mem::take(&mut self.current_attr_value);
+            // §13.2.5.32 / §13.2.6.3: duplicate attribute names are a parse
+            // error; the new (duplicate) attribute is dropped, keeping the
+            // first. Verified by html5lib: `<h a='b' a='d'>` → one attr a="b".
+            if tag.attrs.iter().any(|(n, _)| *n == name) {
+                // TODO: parse error (duplicate-attribute)
+                return;
+            }
             tag.attrs.push((name, value));
         }
     }
@@ -2334,8 +2383,11 @@ impl HtmlTokenizer {
                 Some(Token::Character(']'))
             }
             None => {
-                // TODO: record parse error (eof-in-cdata)
-                self.eof_emitted = true;
+                // §13.2.5.70: Parse error (eof-in-cdata). Emit `]` character
+                // token. Reconsume in the CDATA section state (which will then
+                // emit EOF on the next step).
+                self.state = State::CDATASection;
+                self.reconsume = true;
                 Some(Token::Character(']'))
             }
         }
@@ -2572,8 +2624,25 @@ impl HtmlTokenizer {
                 self.state = State::BeforeDoctypePublicId;
                 None
             }
-            Some('"') | Some('\'') | Some('>') => {
-                // TODO: parse error
+            Some('"') => {
+                // §13.2.5.57: Parse error (missing-whitespace-after-doctype-public-keyword).
+                // Set public_id to empty string, switch to DOCTYPE public ID
+                // (double-quoted) state. Do NOT set force_quirks or emit.
+                // Verified by html5lib: `<!DOCTYPE a PUBLIC"` → public_id="".
+                // TODO: parse error (missing-whitespace-after-doctype-public-keyword)
+                self.current_doctype.public_id = Some(String::new());
+                self.state = State::DoctypePublicIdDoubleQuoted;
+                None
+            }
+            Some('\'') => {
+                // §13.2.5.57: Same as `"` but single-quoted.
+                // TODO: parse error (missing-whitespace-after-doctype-public-keyword)
+                self.current_doctype.public_id = Some(String::new());
+                self.state = State::DoctypePublicIdSingleQuoted;
+                None
+            }
+            Some('>') => {
+                // TODO: parse error (missing-doctype-public-identifier)
                 self.current_doctype.force_quirks = true;
                 let token = self.emit_current_doctype();
                 Some(token)
@@ -2690,10 +2759,18 @@ impl HtmlTokenizer {
                 let token = self.emit_current_doctype();
                 Some(token)
             }
-            Some('"') | Some('\'') => {
-                // TODO: parse error (unexpected-quote-before-doctype-system-id)
-                self.current_doctype.force_quirks = true;
-                self.state = State::BogusDoctype;
+            Some('"') => {
+                // §13.2.5.61: Parse error. Set system identifier to empty string.
+                // Switch to DOCTYPE system identifier (double-quoted) state.
+                self.current_doctype.system_id = Some(String::new());
+                self.state = State::DoctypeSystemIdDoubleQuoted;
+                None
+            }
+            Some('\'') => {
+                // §13.2.5.61: Parse error. Set system identifier to empty string.
+                // Switch to DOCTYPE system identifier (single-quoted) state.
+                self.current_doctype.system_id = Some(String::new());
+                self.state = State::DoctypeSystemIdSingleQuoted;
                 None
             }
             None => {
@@ -2733,19 +2810,10 @@ impl HtmlTokenizer {
                 Some(token)
             }
             Some(_c) => {
-                // 尝试匹配 "SYSTEM"
-                if self.pos + 5 <= self.input.len() {
-                    let start = self.pos - 1;
-                    let slice: String = self.input[start..start + 6].iter().collect();
-                    if slice.eq_ignore_ascii_case("SYSTEM") {
-                        self.pos = start + 6;
-                        self.state = State::AfterDoctypeSystemKeyword;
-                        return None;
-                    }
-                }
+                // §13.2.5.62: Parse error. Set force-quirks. Switch to bogus DOCTYPE state.
+                // (No SYSTEM keyword matching in this state — that's §13.2.5.55/57's job.)
                 self.current_doctype.force_quirks = true;
                 self.state = State::BogusDoctype;
-                self.reconsume = true;
                 None
             }
         }
@@ -2760,12 +2828,31 @@ impl HtmlTokenizer {
                 self.state = State::BeforeDoctypeSystemId;
                 None
             }
-            Some('"') | Some('\'') | Some('>') => {
+            Some('"') => {
+                // §13.2.5.63: Parse error (missing-whitespace-after-doctype-system-keyword).
+                // Set system_id to empty string, switch to DOCTYPE system ID
+                // (double-quoted) state. Do NOT set force_quirks or emit.
+                // Verified by html5lib: `<!DOCTYPE a SYSTEM"` → system_id="".
+                // TODO: parse error (missing-whitespace-after-doctype-system-keyword)
+                self.current_doctype.system_id = Some(String::new());
+                self.state = State::DoctypeSystemIdDoubleQuoted;
+                None
+            }
+            Some('\'') => {
+                // §13.2.5.63: Same as `"` but single-quoted.
+                // TODO: parse error (missing-whitespace-after-doctype-system-keyword)
+                self.current_doctype.system_id = Some(String::new());
+                self.state = State::DoctypeSystemIdSingleQuoted;
+                None
+            }
+            Some('>') => {
+                // TODO: parse error (missing-doctype-system-identifier)
                 self.current_doctype.force_quirks = true;
                 let token = self.emit_current_doctype();
                 Some(token)
             }
             None => {
+                // TODO: parse error (eof-in-doctype)
                 self.current_doctype.force_quirks = true;
                 let token = self.emit_current_doctype();
                 Some(token)
@@ -2927,6 +3014,9 @@ impl HtmlTokenizer {
                 Some(Token::Comment(String::new()))
             }
             Some('<') => {
+                // §13.2.5.43: Append `<` to comment data.
+                // Switch to CommentLessThanSign.
+                self.current_comment.push('<');
                 self.state = State::CommentLessThanSign;
                 None
             }
@@ -2969,9 +3059,13 @@ impl HtmlTokenizer {
                 self.state = State::Data;
                 Some(Token::Comment(String::new()))
             }
-            Some(c) => {
+            // §13.2.5.44: `<` has no independent branch — falls through to
+            // anything else (append `-`, reconsume in Comment where `<` is
+            // appended and switches to CommentLessThanSign). Verified by
+            // html5lib: `<!---<` → Comment "-<".
+            Some(_c) => {
                 self.current_comment.push('-');
-                self.current_comment.push(c);
+                self.reconsume = true;
                 self.state = State::Comment;
                 None
             }
@@ -2982,6 +3076,9 @@ impl HtmlTokenizer {
     fn handle_comment_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('<') => {
+                // §13.2.5.45: Append the current input character to the comment
+                // token's data. Switch to the comment less-than sign state.
+                self.current_comment.push('<');
                 self.state = State::CommentLessThanSign;
                 None
             }
@@ -3013,6 +3110,11 @@ impl HtmlTokenizer {
     fn handle_comment_less_than_sign_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('!') => {
+                // §13.2.5.46: Append `!` to comment data (`<` was already
+                // appended by the state that switched here). Switch to
+                // CommentLessThanSignBang. Verified by html5lib:
+                // `<!-- <!--` → Comment " <!" (EOF exposes the missing `!`).
+                self.current_comment.push('!');
                 self.state = State::CommentLessThanSignBang;
                 None
             }
@@ -3042,6 +3144,9 @@ impl HtmlTokenizer {
                 None
             }
             Some(_c) => {
+                // §13.2.5.47: `!` was already appended by §13.2.5.46 `!`
+                // branch. Just reconsume in Comment. Verified by html5lib:
+                // `<!-- <!test-->` → Comment " <!test" (only one `!`).
                 self.reconsume = true;
                 self.state = State::Comment;
                 None
@@ -3063,6 +3168,11 @@ impl HtmlTokenizer {
                 None
             }
             Some(_c) => {
+                // §13.2.5.48: `!` was appended by §13.2.5.46, `-` consumed
+                // by §13.2.5.47 `-` branch needs catching up. Append `-`,
+                // reconsume in Comment. Verified by html5lib:
+                // `<!-- <!-test-->` → Comment " <!-test".
+                self.current_comment.push('-');
                 self.reconsume = true;
                 self.state = State::Comment;
                 None
@@ -3080,16 +3190,29 @@ impl HtmlTokenizer {
     fn handle_comment_less_than_sign_bang_dash_dash_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('>') => {
-                self.state = State::Comment;
-                None
+                // §13.2.5.49: Parse error. Switch to Data. Emit comment.
+                // No append — `!` was already appended by §13.2.5.46, and
+                // the two `-`s consumed to reach this state are discarded
+                // (consistent with `>` closing the comment). Verified by
+                // html5lib: `<!--<!-->` → Comment "<!".
+                let comment = std::mem::take(&mut self.current_comment);
+                self.state = State::Data;
+                Some(Token::Comment(comment))
             }
             Some(_c) => {
+                // §13.2.5.49: `!` appended by §13.2.5.46, two `-`s consumed
+                // by §13.2.5.47/.48 `-` branches need catching up. Append
+                // `--`, reconsume in Comment. Verified by html5lib:
+                // `<!-- <!--test-->` → Comment " <!--test".
+                self.current_comment.push_str("--");
                 self.reconsume = true;
                 self.state = State::Comment;
                 None
             }
             None => {
-                // TODO: parse error (eof-in-comment)
+                // §13.2.5.49: Parse error (eof-in-comment). Switch to Data.
+                // Emit comment. No append (same as `>` branch).
+                // Verified by html5lib: `<!-- <!--` → Comment " <!".
                 let comment = std::mem::take(&mut self.current_comment);
                 self.state = State::Data;
                 Some(Token::Comment(comment))
@@ -3157,8 +3280,9 @@ impl HtmlTokenizer {
     fn handle_comment_end_bang_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some('-') => {
+                // §13.2.5.52: Append "--!" to comment. Switch to comment end dash state.
                 self.current_comment.push_str("--!");
-                self.state = State::CommentEnd;
+                self.state = State::CommentEndDash;
                 None
             }
             Some('>') => {
@@ -3204,6 +3328,16 @@ impl HtmlTokenizer {
                 self.eof_emitted = true;
                 Some(Token::EOF)
             }
+            Some('=') => {
+                // §13.2.5.32: Parse error (unexpected-equals-sign-before-attribute-name).
+                // Start a new attribute with name `=`, value empty. Switch to
+                // AttributeName (so a following `=` ends the name and opens value).
+                // Verified by html5lib: `<z =>` → attr {"=": ""}.
+                // TODO: parse error (unexpected-equals-sign-before-attribute-name)
+                self.current_attr_name.push('=');
+                self.state = State::AttributeName;
+                None
+            }
             Some(_c) => {
                 self.state = State::AttributeName;
                 self.reconsume = true;
@@ -3235,18 +3369,6 @@ impl HtmlTokenizer {
                 self.state = State::Data;
                 Some(Token::Tag(tag))
             }
-            Some('"') => {
-                self.emit_current_attribute();
-                self.current_attr_value.clear();
-                self.state = State::AttributeValueDoubleQuoted;
-                None
-            }
-            Some('\'') => {
-                self.emit_current_attribute();
-                self.current_attr_value.clear();
-                self.state = State::AttributeValueSingleQuoted;
-                None
-            }
             Some('\0') => {
                 self.current_attr_name.push('\u{FFFD}');
                 self.state = State::AttributeName;
@@ -3258,7 +3380,8 @@ impl HtmlTokenizer {
                 Some(Token::EOF)
             }
             Some(c) => {
-                // §13.2.5.33: ASCII upper-alpha → lowercase
+                // §13.2.5.33: U+0022/U+0027/U+003C → parse error, fall through to append.
+                // ASCII upper-alpha → append lowercase; anything else → append as-is.
                 if c.is_ascii_uppercase() {
                     self.current_attr_name.push(c.to_ascii_lowercase());
                 } else {
@@ -3299,7 +3422,9 @@ impl HtmlTokenizer {
                 Some(Token::EOF)
             }
             Some(_c) => {
-                // Unexpected-character-after-attribute-name parse error
+                // §13.2.5.34: Parse error. Start a new attribute in the current tag token.
+                // Set name to current char, value to empty. Switch to AttributeName.
+                self.emit_current_attribute();
                 self.state = State::AttributeName;
                 self.reconsume = true;
                 None
@@ -3608,21 +3733,23 @@ mod tests {
 
     #[test]
     fn doctype_public_id_ampersand_then_eof_terminates() {
-        // `<!DOCTYPE a PUBLIC"&`: after the PUBLIC keyword, a `"` is an
-        // unexpected quote → force_quirks and emit the doctype immediately
-        // (before a public id is opened). The trailing `&` is then a Data
-        // character reference at EOF, which must terminate cleanly rather
-        // than loop forever (the original OOM bug).
+        // §13.2.5.57 After DOCTYPE public keyword state: `"` (without
+        // preceding whitespace) is a parse error but still opens the public
+        // identifier (double-quoted) state — it does NOT set force_quirks or
+        // emit immediately. `<!DOCTYPE a PUBLIC"&`: `"` opens public_id,
+        // `&` is appended to the id, EOF sets force_quirks and emits the
+        // doctype. This also guards against the original OOM loop bug.
+        // Verified against html5lib: `<!DOCTYPE a PUBLIC"&` → public_id="&".
         let mut t = HtmlTokenizer::new("<!DOCTYPE a PUBLIC\"&");
         let tok = t.next_token();
         match tok {
             Some(Token::Doctype(d)) => {
                 assert_eq!(d.force_quirks, true);
                 assert_eq!(d.name.as_deref(), Some("a"));
+                assert_eq!(d.public_id.as_deref(), Some("&"));
             }
             other => panic!("expected Doctype, got {other:?}"),
         }
-        assert_eq!(t.next_token(), Some(Token::Character('&')));
         assert_eq!(t.next_token(), Some(Token::EOF));
         assert_eq!(t.next_token(), None);
     }
@@ -3819,16 +3946,33 @@ mod tests {
     }
 
     #[test]
+    fn end_tag_open_non_alpha_emits_lt_and_solidus() {
+        // §13.2.5.7 End tag open state — anything else branch.
+        // `</5` is not alpha, not `>`, not EOF: create an empty comment,
+        // switch to BogusComment, reconsume `5`. `5` is appended to the
+        // comment, then EOF emits the comment. Verified by html5lib:
+        // `</\t` (EOF) → Comment "\t" (same bogus-comment path).
+        let mut t = HtmlTokenizer::new("</5");
+        assert_eq!(t.step(), None); // Data → TagOpen
+        assert_eq!(t.step(), None); // TagOpen → EndTagOpen
+                                    // EndTagOpen sees `5`: bogus comment, reconsume
+        assert_eq!(t.next_token(), Some(Token::Comment("5".to_string())));
+        assert_eq!(t.next_token(), Some(Token::EOF));
+        assert_eq!(t.state(), State::Data);
+        assert_eq!(t.next_token(), None); // stream done
+    }
+
+    #[test]
     fn end_tag_open_eof_emits_lt_then_eof() {
-        // `</` + EOF → emit `<`, return to Data, then emit EOF
+        // `</` + EOF → §13.2.5.7 EOF branch: emit `<` and `/` character
+        // tokens, reconsume EOF in Data (which emits EOF next).
         let mut t = HtmlTokenizer::new("</");
         assert_eq!(t.step(), None); // Data → TagOpen
         assert_eq!(t.step(), None); // TagOpen → EndTagOpen
-        let token = t.next_token();
-        assert_eq!(token, Some(Token::Character('<')));
+        assert_eq!(t.next_token(), Some(Token::Character('<')));
+        assert_eq!(t.next_token(), Some(Token::Character('/')));
         assert_eq!(t.state(), State::Data);
-        let token2 = t.next_token();
-        assert_eq!(token2, Some(Token::EOF));
+        assert_eq!(t.next_token(), Some(Token::EOF));
     }
 
     // ── End-to-end integration tests ─────────────────────────────
@@ -4571,31 +4715,23 @@ mod tests {
 
     #[test]
     fn comment_nested_open_not_close() {
-        // `<!-- a<!--> b -->` → comment 内容为 " a<!--> b "
+        // `<!-- a<!--> b -->` → §13.2.5.49: `>` in CommentLessThanSignBangDashDash
+        // appends "!" and EMITS the comment (not silently consumed).
+        // `<` was appended by Comment state (§13.2.5.45), so comment = " a<!".
+        // html5lib evidence: `<!--<!-->` → ["Comment", "<!"]
         let mut t = HtmlTokenizer::new("<!-- a<!--> b -->");
         enter_markup_declaration(&mut t);
         assert_eq!(t.step(), None); // MarkupDeclarationOpen → CommentStart
         assert_eq!(t.step(), None); // ' ' → Comment
         assert_eq!(t.step(), None); // 'a'
                                     // '<', '!', '-', '-' → LessThanSign → Bang → BangDash → BangDashDash
-        assert_eq!(t.step(), None); // '<' → LessThanSign
+        assert_eq!(t.step(), None); // '<' → LessThanSign (appended '<')
         assert_eq!(t.step(), None); // '!' → Bang
         assert_eq!(t.step(), None); // '-' → BangDash
         assert_eq!(t.step(), None); // '-' → BangDashDash
-        assert_eq!(t.step(), None); // '>' → back to Comment
-        assert_eq!(t.state(), State::Comment);
-        // ' b '
-        assert_eq!(t.step(), None); // ' '
-        assert_eq!(t.step(), None); // 'b'
-        assert_eq!(t.step(), None); // ' '
-                                    // '-->' closing
-        assert_eq!(t.step(), None); // '-' → CommentEndDash
-        assert_eq!(t.step(), None); // '-' → CommentEnd
-        assert_eq!(
-            t.next_token(),
-            // 注：`<!-->` 在注释内部被 silently consumed（规范 §13.2.5.46–49），不追加到内容
-            Some(Token::Comment(" a b ".into()))
-        );
+                                    // `>` → §13.2.5.49: append "!", emit comment " a<!", switch to Data
+        assert_eq!(t.next_token(), Some(Token::Comment(" a<!".into())));
+        assert_eq!(t.state(), State::Data);
     }
 
     // ── CommentEnd 系列测试 (§13.2.5.50–§13.2.5.52) ────────────
@@ -4629,7 +4765,10 @@ mod tests {
 
     #[test]
     fn comment_end_bang_dash_to_end() {
-        // `<!--hello--!->` → CommentEndBang appends '--!', '-' → CommentEnd
+        // `<!--hello--!->` → §13.2.5.52 CommentEndBang `-`: append "--!", switch to
+        // CommentEndDash. §13.2.5.50 CommentEndDash `>`: "anything else" — append "-",
+        // reconsume in Comment. Comment `>`: "anything else" — append ">".
+        // html5lib evidence: `<!----! >` → ["Comment", "--! >"]
         let mut t = HtmlTokenizer::new("<!--hello--!->");
         enter_markup_declaration(&mut t);
         for _ in 0..6 {
@@ -4638,8 +4777,10 @@ mod tests {
         assert_eq!(t.step(), None); // '-' → CommentEndDash
         assert_eq!(t.step(), None); // '-' → CommentEnd
         assert_eq!(t.step(), None); // '!' → CommentEndBang
-        assert_eq!(t.step(), None); // '-' → CommentEnd (appended '--!')
-        assert_eq!(t.next_token(), Some(Token::Comment("hello--!".into()))); // '>' emit
+        assert_eq!(t.step(), None); // '-' → CommentEndDash (appended '--!')
+        assert_eq!(t.step(), None); // '>' → Comment (appended '-', reconsume)
+        assert_eq!(t.step(), None); // '>' in Comment → append '>'
+        assert_eq!(t.next_token(), Some(Token::Comment("hello--!->".into()))); // EOF emit
     }
 
     #[test]
@@ -4716,9 +4857,14 @@ mod tests {
     #[test]
     fn comment_e2e_nested() {
         // `<!-- <!-- nested --> -->`
-        // 内部 `<!--` 按规范 silently consumed，内容仅为 " nested "
+        // §13.2.5.45: `<` appended to comment. §13.2.5.49 "anything else": appends "!--".
+        // So `<!--` inside comment becomes part of content: "<" + "!--" = "<!--".
+        // html5lib evidence: `<!-- <!--test-->` → ["Comment", " <!--test"]
         let mut t = HtmlTokenizer::new("<!-- <!-- nested --> -->");
-        assert_eq!(next_real_token(&mut t), Token::Comment("  nested ".into()));
+        assert_eq!(
+            next_real_token(&mut t),
+            Token::Comment(" <!-- nested ".into())
+        );
     }
 
     // ── Attribute tests (§13.2.5.32–§13.2.5.39) ──────────────────
@@ -5293,21 +5439,27 @@ mod tests {
 
     #[test]
     fn script_data_lt_excl_to_escape_start() {
-        // `<!` in ScriptData: '<' → LessThanSign, '!' → EscapeStart
+        // `<!` in ScriptData: '<' → LessThanSign (no emit per §13.2.5.4),
+        // '!' → EscapeStart. §13.2.5.15: `!` emits `<` then `!` (via pending_tokens).
         let mut t = enter_content_model("<!", State::ScriptData, Some("script"));
-        assert_eq!(t.step(), None); // '<' → LessThanSign
-        assert_eq!(t.step(), None); // '!' → EscapeStart
+        assert_eq!(t.step(), None); // '<' → LessThanSign (§13.2.5.4: no emit)
+        assert_eq!(t.step(), Some(Token::Character('<'))); // '!' → EscapeStart, emit `<`, push `!`
+        assert_eq!(t.step(), Some(Token::Character('!'))); // drain `!` from pending_tokens
         assert_eq!(t.state(), State::ScriptDataEscapeStart);
     }
 
     #[test]
     fn script_data_escape_start_dash_chain() {
-        // `<!--` in ScriptData → escape start chain
+        // `<!--` in ScriptData → escape start chain.
+        // §13.2.5.15: `!` emits `<` then `!` (via pending_tokens).
+        // §13.2.5.18: `-` emits `-`.
+        // §13.2.5.19: `-` emits `-`.
         let mut t = enter_content_model("<!--", State::ScriptData, Some("script"));
-        assert_eq!(t.step(), None); // '<' → LessThanSign
-        assert_eq!(t.step(), None); // '!' → EscapeStart
-        assert_eq!(t.step(), None); // '-' → EscapeStartDash
-        assert_eq!(t.step(), None); // '-' → EscapedDashDash
+        assert_eq!(t.step(), None); // '<' → LessThanSign (§13.2.5.4: no emit)
+        assert_eq!(t.step(), Some(Token::Character('<'))); // '!' → EscapeStart, emit `<`, push `!`
+        assert_eq!(t.step(), Some(Token::Character('!'))); // drain `!` from pending_tokens
+        assert_eq!(t.step(), Some(Token::Character('-'))); // '-' → EscapeStartDash, emit '-'
+        assert_eq!(t.step(), Some(Token::Character('-'))); // '-' → EscapedDashDash, emit '-'
         assert_eq!(t.state(), State::ScriptDataEscapedDashDash);
     }
 
@@ -5365,46 +5517,54 @@ mod tests {
 
     #[test]
     fn script_data_escaped_dash_dash_gt_exits_escape() {
-        // `-->` in escaped mode: dash dash dash → emit '>', back to ScriptData
+        // `-->` in escaped mode. §13.2.5.20: `-` emits `-`.
+        // §13.2.5.21: `-` emits `-`. §13.2.5.22: `>` emits `>` → ScriptData.
         let mut t = enter_content_model("-->", State::ScriptDataEscaped, Some("script"));
-        assert_eq!(t.step(), None); // '-' → EscapedDash
-        assert_eq!(t.step(), None); // '-' → EscapedDashDash
+        assert_eq!(t.next_token(), Some(Token::Character('-'))); // '-' → EscapedDash, emit '-'
+        assert_eq!(t.next_token(), Some(Token::Character('-'))); // '-' → EscapedDashDash, emit '-'
         assert_eq!(t.next_token(), Some(Token::Character('>'))); // '>' → emit, back to ScriptData
         assert_eq!(t.state(), State::ScriptData);
     }
 
     #[test]
     fn script_data_escaped_lt_alpha_to_double_escape_start() {
-        // `<s` in escaped: '<' → LessThanSign, 's' → DoubleEscapeStart
+        // `<s` in escaped. §13.2.5.20: `<` does NOT emit (Nothing emitted),
+        // switches to EscapedLessThanSign. §13.2.5.23: alpha emits ONLY the
+        // current char `s` (the `<` is emitted by the dash/dash-dash state
+        // that precedes ScriptDataEscaped in a real stream — here we enter
+        // ScriptDataEscaped directly so the `<` is spec-correctly dropped).
         let mut t = enter_content_model("<s", State::ScriptDataEscaped, Some("script"));
-        assert_eq!(t.step(), None); // '<' → EscapedLessThanSign
-        assert_eq!(t.step(), None); // 's' → DoubleEscapeStart (alpha)
+        assert_eq!(t.step(), None); // '<' → EscapedLessThanSign (no emit)
+        assert_eq!(t.step(), Some(Token::Character('s'))); // 's' → alpha, emit `s`
         assert_eq!(t.state(), State::ScriptDataDoubleEscapeStart);
     }
 
     #[test]
     fn script_data_double_escape_start_script_match() {
-        // In DoubleEscapeStart, `script` + `/` → enter DoubleEscaped
+        // In DoubleEscapeStart, `script` + `/` → enter DoubleEscaped.
+        // §13.2.5.26: each alpha emits the current input character;
+        // `/` emits the current input character too.
         let mut t = enter_content_model(
             "script/",
             State::ScriptDataDoubleEscapeStart,
             Some("script"),
         );
-        for _ in 0..6 {
-            assert_eq!(t.step(), None);
-        } // 's','c','r','i','p','t' → accumulate
-        assert_eq!(t.step(), None); // '/' → temp buffer is "script" → DoubleEscaped
+        for ch in "script".chars() {
+            assert_eq!(t.next_token(), Some(Token::Character(ch)));
+        }
+        assert_eq!(t.next_token(), Some(Token::Character('/'))); // '/' → DoubleEscaped
         assert_eq!(t.state(), State::ScriptDataDoubleEscaped);
     }
 
     #[test]
     fn script_data_double_escape_start_not_script() {
-        // In DoubleEscapeStart, `foo ` → not "script" → back to Escaped
+        // In DoubleEscapeStart, `foo ` → not "script" → back to Escaped.
+        // §13.2.5.26: each alpha and the space emit the current input character.
         let mut t = enter_content_model("foo ", State::ScriptDataDoubleEscapeStart, Some("script"));
-        for _ in 0..3 {
-            assert_eq!(t.step(), None);
-        } // 'f','o','o'
-        assert_eq!(t.step(), None); // ' ' → not "script" → Escaped
+        for ch in "foo".chars() {
+            assert_eq!(t.next_token(), Some(Token::Character(ch)));
+        }
+        assert_eq!(t.next_token(), Some(Token::Character(' '))); // ' ' → not "script" → Escaped
         assert_eq!(t.state(), State::ScriptDataEscaped);
     }
 
@@ -5435,11 +5595,10 @@ mod tests {
 
     #[test]
     fn script_data_double_escape_end_script_match() {
-        // Simulate entering DoubleEscapeEnd with `/` path.
-        // In DoubleEscaped, `</` → pend `/`, switch to DoubleEscapeEnd.
-        // Then `script/` → temp buffer is "script" → exit to Escaped.
-        // Since we entered via `/` path (no alpha tag creation),
-        // no tag token is emitted — just state transition.
+        // `</script/` in DoubleEscaped. `<` emits (§13.2.5.27), `/` switches
+        // to DoubleEscapeEnd and emits `/` (§13.2.5.30). Then `script` chars
+        // each emit (§13.2.5.31), and the final `/` emits and exits to Escaped.
+        // No tag token is emitted — double-escape is state-only.
         let mut t =
             enter_content_model("</script/", State::ScriptDataDoubleEscaped, Some("script"));
         // '<' → emit '<', switch to DoubleEscapedLessThanSign
@@ -5450,13 +5609,12 @@ mod tests {
         // pending pops '/'
         assert_eq!(t.next_token(), Some(Token::Character('/')));
         assert_eq!(t.state(), State::ScriptDataDoubleEscapeEnd);
-        // 's','c','r','i','p','t' → accumulate
-        for _ in 0..6 {
-            assert_eq!(t.step(), None);
+        // 's','c','r','i','p','t' → each emits (§13.2.5.31)
+        for ch in "script".chars() {
+            assert_eq!(t.next_token(), Some(Token::Character(ch)));
         }
-        // '/' → temp buffer == "script" → no tag (entered via / path) →
-        // just switch to Escaped
-        assert_eq!(t.step(), None);
+        // '/' → temp buffer == "script" → switch to Escaped, emit '/'
+        assert_eq!(t.next_token(), Some(Token::Character('/')));
         assert_eq!(t.state(), State::ScriptDataEscaped);
     }
 
