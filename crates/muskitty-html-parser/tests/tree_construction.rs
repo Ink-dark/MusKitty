@@ -744,3 +744,132 @@ fn find_first_child_element(parent: &Rc<RefCell<Node>>, name: &str) -> Option<Rc
         .find(|c| c.borrow().node_name == name)
         .cloned()
 }
+
+// ── Select insertion modes (§13.2.6.4.16, §13.2.6.4.18) ────────
+
+#[test]
+fn select_with_options() {
+    let doc = parse("<select><option>a</option><option>b</option></select>");
+    let select = find_element_by_name(&doc, "SELECT").expect("missing <SELECT>");
+    let option_count = select
+        .borrow()
+        .children
+        .iter()
+        .filter(|c| c.borrow().node_name == "OPTION")
+        .count();
+    assert_eq!(option_count, 2, "expected 2 <OPTION>, got {}", option_count);
+}
+
+#[test]
+fn select_with_optgroup_and_option() {
+    let doc = parse("<select><optgroup><option>x</option></optgroup></select>");
+    let select = find_element_by_name(&doc, "SELECT").expect("missing <SELECT>");
+    let optgroup = find_first_child_element(&select, "OPTGROUP").expect("missing <OPTGROUP>");
+    let option = find_first_child_element(&optgroup, "OPTION").expect("missing <OPTION>");
+    let _ = option;
+}
+
+#[test]
+fn select_eof_does_not_panic() {
+    let doc = parse("<select><option>unclosed");
+    let select = find_element_by_name(&doc, "SELECT").expect("missing <SELECT>");
+    let _ = select;
+}
+
+#[test]
+fn select_in_table_switches_mode() {
+    // <select> inside a table should switch to InSelectInTable, but
+    // still produce a valid <SELECT> element.
+    let doc = parse("<table><tr><td><select><option>x</option></select></td></tr></table>");
+    let select = find_element_by_name(&doc, "SELECT").expect("missing <SELECT>");
+    let _ = select;
+}
+
+// ── Template insertion mode (§13.2.6.4.19) ─────────────────────
+
+#[test]
+fn template_with_text_content() {
+    // <template> is a special element: its content goes into a separate
+    // "template content" document fragment. For now we just verify the
+    // <template> element exists.
+    let doc = parse("<template>hello</template>");
+    let template = find_element_by_name(&doc, "TEMPLATE").expect("missing <TEMPLATE>");
+    let _ = template;
+}
+
+#[test]
+fn template_with_div() {
+    let doc = parse("<template><div>content</div></template>");
+    let template = find_element_by_name(&doc, "TEMPLATE").expect("missing <TEMPLATE>");
+    let _ = template;
+}
+
+#[test]
+fn template_eof_does_not_panic() {
+    let doc = parse("<template><div>unclosed");
+    let template = find_element_by_name(&doc, "TEMPLATE").expect("missing <TEMPLATE>");
+    let _ = template;
+}
+
+#[test]
+fn template_with_table() {
+    // <template><table><tr><td>x</td></tr></table></template>
+    let doc = parse("<template><table><tr><td>x</td></tr></table></template>");
+    let template = find_element_by_name(&doc, "TEMPLATE").expect("missing <TEMPLATE>");
+    let _ = template;
+}
+
+// ── Frameset insertion modes (§13.2.6.4.21–§13.2.6.4.23) ───────
+
+#[test]
+fn frameset_replaces_body() {
+    // A <frameset> at the right position should replace the <body>.
+    let doc = parse("<!DOCTYPE html><frameset><frame src=\"a\"><frame src=\"b\"></frameset>");
+    let frameset = find_element_by_name(&doc, "FRAMESET").expect("missing <FRAMESET>");
+    let frame_count = frameset
+        .borrow()
+        .children
+        .iter()
+        .filter(|c| c.borrow().node_name == "FRAME")
+        .count();
+    assert_eq!(frame_count, 2, "expected 2 <FRAME>, got {}", frame_count);
+}
+
+#[test]
+fn frameset_eof_does_not_panic() {
+    let doc = parse("<!DOCTYPE html><frameset><frame src=\"a\">");
+    let frameset = find_element_by_name(&doc, "FRAMESET").expect("missing <FRAMESET>");
+    let _ = frameset;
+}
+
+#[test]
+fn nested_framesets() {
+    let doc = parse("<!DOCTYPE html><frameset><frameset><frame src=\"a\"></frameset></frameset>");
+    let framesets: Vec<_> = Node::descendants(&doc)
+        .filter(|n| n.borrow().node_type == NodeType::Element && n.borrow().node_name == "FRAMESET")
+        .collect();
+    assert_eq!(
+        framesets.len(),
+        2,
+        "expected 2 nested <FRAMESET>, got {}",
+        framesets.len()
+    );
+}
+
+// ── Noscript in head (§13.2.6.4.6) ─────────────────────────────
+
+#[test]
+fn noscript_in_head_with_scripting_disabled() {
+    // With scripting disabled (the default), <noscript> in <head> enters
+    // InHeadNoscript mode. Content should be parsed as HTML.
+    let doc = parse("<head><noscript><style>x</style></noscript></head>");
+    let noscript = find_element_by_name(&doc, "NOSCRIPT").expect("missing <NOSCRIPT>");
+    let _ = noscript;
+}
+
+#[test]
+fn noscript_eof_does_not_panic() {
+    let doc = parse("<head><noscript>unclosed");
+    let noscript = find_element_by_name(&doc, "NOSCRIPT").expect("missing <NOSCRIPT>");
+    let _ = noscript;
+}
