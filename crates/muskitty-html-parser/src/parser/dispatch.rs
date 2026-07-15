@@ -20,7 +20,7 @@ use crate::tokenizer::{State, TagKind, Token, Tokenizer};
 
 use super::helpers;
 use super::insertion_mode::InsertionMode;
-use super::HtmlTreeConstructor;
+use super::{ActiveFormattingEntry, HtmlTreeConstructor};
 
 /// Result of a tree construction step.
 pub enum Step {
@@ -83,7 +83,8 @@ fn handle_initial(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             // system ID must be absent or "about:legacy-compat".
             if dt.name.as_deref() != Some("html")
                 || dt.public_id.is_some()
-                || (dt.system_id.is_some() && dt.system_id.as_deref() != Some("about:legacy-compat"))
+                || (dt.system_id.is_some()
+                    && dt.system_id.as_deref() != Some("about:legacy-compat"))
             {
                 parser.errors.push(ParseError::InvalidDoctype);
             }
@@ -126,7 +127,8 @@ fn handle_before_html(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             Step::Done
         }
         Token::Tag(tag)
-            if tag.kind == TagKind::End && matches!(tag.name.as_str(), "head" | "body" | "html" | "br") =>
+            if tag.kind == TagKind::End
+                && matches!(tag.name.as_str(), "head" | "body" | "html" | "br") =>
         {
             // Act as anything-else: create html, switch to BeforeHead, reprocess.
             create_and_push(parser, "html");
@@ -170,7 +172,8 @@ fn handle_before_head(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             Step::Done
         }
         Token::Tag(tag)
-            if tag.kind == TagKind::End && matches!(tag.name.as_str(), "head" | "body" | "html" | "br") =>
+            if tag.kind == TagKind::End
+                && matches!(tag.name.as_str(), "head" | "body" | "html" | "br") =>
         {
             // Act as anything-else: create head, switch to InHead, reprocess.
             create_and_push(parser, "head");
@@ -278,20 +281,18 @@ fn handle_in_head(
         }
         // template: complex (active formatting elements + template content
         // stack). Deferred to Phase 3.5.
-        Token::Tag(tag)
-            if tag.kind == TagKind::Start && tag.name == "template" =>
-        {
+        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "template" => {
             let _ = tag;
-            parser
-                .errors
-                .push(ParseError::Generic("template not yet supported (Phase 3.5)"));
+            parser.errors.push(ParseError::Generic(
+                "template not yet supported (Phase 3.5)",
+            ));
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "template" => {
             let _ = tag;
-            parser
-                .errors
-                .push(ParseError::Generic("template end tag not yet supported (Phase 3.5)"));
+            parser.errors.push(ParseError::Generic(
+                "template end tag not yet supported (Phase 3.5)",
+            ));
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "head" => {
@@ -388,8 +389,16 @@ fn handle_after_head(
             if tag.kind == TagKind::Start
                 && matches!(
                     tag.name.as_str(),
-                    "base" | "basefont" | "bgsound" | "link" | "meta" | "noframes"
-                        | "script" | "style" | "template" | "title"
+                    "base"
+                        | "basefont"
+                        | "bgsound"
+                        | "link"
+                        | "meta"
+                        | "noframes"
+                        | "script"
+                        | "style"
+                        | "template"
+                        | "title"
                 ) =>
         {
             parser
@@ -427,9 +436,9 @@ fn handle_after_head(
         // template end tag: process using in head rules.
         Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "template" => {
             let _ = (tag, tokenizer);
-            parser
-                .errors
-                .push(ParseError::Generic("template end tag not yet supported (Phase 3.5)"));
+            parser.errors.push(ParseError::Generic(
+                "template end tag not yet supported (Phase 3.5)",
+            ));
             Step::Done
         }
         _ => {
@@ -504,22 +513,67 @@ fn handle_text(
 /// Tag names that the spec groups under "address/article/aside/...":
 /// close a `<p>` if open, then insert a fresh HTML element.
 const BLOCK_LEVEL_START_TAGS: &[&str] = &[
-    "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div",
-    "dl", "fieldset", "figcaption", "figure", "footer", "header", "hgroup", "main", "menu",
-    "nav", "ol", "p", "search", "section", "summary", "ul",
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "center",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "header",
+    "hgroup",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "search",
+    "section",
+    "summary",
+    "ul",
 ];
 
 /// Same as BLOCK_LEVEL_START_TAGS, used by the "any other end tag" branch.
 const BLOCK_LEVEL_END_TAGS: &[&str] = &[
-    "address", "article", "aside", "blockquote", "button", "center", "details", "dialog", "dir",
-    "div", "dl", "fieldset", "figcaption", "figure", "footer", "header", "hgroup", "main", "menu",
-    "nav", "ol", "p", "search", "section", "summary", "ul",
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "button",
+    "center",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "header",
+    "hgroup",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "search",
+    "section",
+    "summary",
+    "ul",
 ];
 
 /// HTML void elements (§13.2.6.2) — inserted and immediately popped.
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "keygen", "link", "meta",
-    "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "keygen", "link", "meta", "param",
+    "source", "track", "wbr",
 ];
 
 fn handle_in_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
@@ -552,7 +606,10 @@ fn handle_in_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
     }
 }
 
-fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::tokenizer::TagToken) -> Step {
+fn handle_in_body_start_tag(
+    parser: &mut HtmlTreeConstructor,
+    tag: &crate::tokenizer::TagToken,
+) -> Step {
     let name = tag.name.as_str();
 
     // "html" — merge attributes onto the existing <html> element.
@@ -571,8 +628,16 @@ fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::token
     // Head-element start tags: process using the rules for "in head".
     if matches!(
         name,
-        "base" | "basefont" | "bgsound" | "link" | "meta" | "noframes" | "script" | "style"
-        | "template" | "title"
+        "base"
+            | "basefont"
+            | "bgsound"
+            | "link"
+            | "meta"
+            | "noframes"
+            | "script"
+            | "style"
+            | "template"
+            | "title"
     ) {
         // Defer to the InHead handler. We cannot call it directly (it's a
         // private fn), so switch modes transiently. Simpler: replicate the
@@ -585,9 +650,9 @@ fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::token
             // callback by signalling that this tag is not yet supported
             // inline. For Phase 3.2 we mark it as a parse error so callers
             // know it was ignored.
-            parser
-                .errors
-                .push(ParseError::Generic("head element in body not yet inline-handled"));
+            parser.errors.push(ParseError::Generic(
+                "head element in body not yet inline-handled",
+            ));
         }
         return Step::Done;
     }
@@ -609,9 +674,9 @@ fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::token
 
     // "frameset" — deferred to Phase 3.5.
     if name == "frameset" {
-        parser
-            .errors
-            .push(ParseError::Generic("frameset in body not yet supported (Phase 3.5)"));
+        parser.errors.push(ParseError::Generic(
+            "frameset in body not yet supported (Phase 3.5)",
+        ));
         return Step::Done;
     }
 
@@ -632,7 +697,10 @@ fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::token
         // If current node is a heading, parse error: close it.
         if let Some(top) = parser.open_elements.last() {
             let top_name = top.borrow().kind.as_element().map(|e| e.local_name.clone());
-            if matches!(top_name.as_deref(), Some("h1" | "h2" | "h3" | "h4" | "h5" | "h6")) {
+            if matches!(
+                top_name.as_deref(),
+                Some("h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+            ) {
                 parser
                     .errors
                     .push(ParseError::Generic("heading nested in heading"));
@@ -687,7 +755,11 @@ fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::token
             helpers::generate_implied_end_tags(parser, Some("li"));
             // Pop until li is popped.
             while let Some(top) = parser.open_elements.last() {
-                let is_li = top.borrow().kind.as_element().map(|e| e.local_name.as_str())
+                let is_li = top
+                    .borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| e.local_name.as_str())
                     == Some("li");
                 parser.open_elements.pop();
                 if is_li {
@@ -713,11 +785,7 @@ fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::token
             helpers::generate_implied_end_tags(parser, Some(name));
             // Pop until dd/dt popped.
             while let Some(top) = parser.open_elements.last() {
-                let top_name = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name.clone());
+                let top_name = top.borrow().kind.as_element().map(|e| e.local_name.clone());
                 let is_target = matches!(top_name.as_deref(), Some("dd") | Some("dt"));
                 parser.open_elements.pop();
                 if is_target {
@@ -737,18 +805,16 @@ fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::token
         // Tokenizer state switch is done by the caller; mark it via a
         // side-channel for now. For Phase 3.2 we don't have access here;
         // left as a parse error.
-        parser
-            .errors
-            .push(ParseError::Generic("plaintext tokenizer switch not yet supported"));
+        parser.errors.push(ParseError::Generic(
+            "plaintext tokenizer switch not yet supported",
+        ));
         return Step::Done;
     }
 
     // button: if button in scope, parse error, pop until button, reprocess.
     if name == "button" {
         if helpers::has_element_in_scope(parser, "button") {
-            parser
-                .errors
-                .push(ParseError::Generic("nested button"));
+            parser.errors.push(ParseError::Generic("nested button"));
             helpers::generate_implied_end_tags(parser, None);
             while let Some(top) = parser.open_elements.last() {
                 let is_button = top
@@ -830,17 +896,57 @@ fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::token
     }
 
     // Formatting elements (a/b/big/code/em/font/i/nobr/s/small/strike/
-    // strong/tt/u) — deferred to Phase 3.3 with adoption agency.
+    // strong/tt/u) — full active formatting bookkeeping + adoption agency.
     if matches!(
         name,
-        "a" | "b" | "big" | "code" | "em" | "font" | "i" | "nobr" | "s" | "small" | "strike"
-        | "strong" | "tt" | "u"
+        "a" | "b"
+            | "big"
+            | "code"
+            | "em"
+            | "font"
+            | "i"
+            | "nobr"
+            | "s"
+            | "small"
+            | "strike"
+            | "strong"
+            | "tt"
+            | "u"
     ) {
-        // Skeleton: insert the element without active-formatting bookkeeping.
-        // This is not spec-compliant for nested formatting; Phase 3.3 fixes it.
         helpers::reconstruct_active_formatting_elements(parser);
-        helpers::insert_element(parser, tag);
-        // Note: not pushing to active_formatting_elements yet — Phase 3.3.
+        // Special case for <a>: if there is an <a> in the active formatting
+        // elements list, run adoption agency for "a", then remove any <a>
+        // from the list (§13.2.6.4.7).
+        if name == "a" {
+            let has_a_in_afe = parser.active_formatting_elements.iter().any(|e| {
+                matches!(e, ActiveFormattingEntry::Element(el) if {
+                    let l = el.borrow();
+                    l.kind.as_element().map(|e| e.local_name.as_str()) == Some("a")
+                })
+            });
+            if has_a_in_afe {
+                helpers::adoption_agency(parser, "a");
+                // Remove any <a> elements from the active formatting list
+                // and the open elements stack.
+                parser.active_formatting_elements.retain(|e| {
+                    !matches!(e, ActiveFormattingEntry::Element(el) if {
+                        let l = el.borrow();
+                        l.kind.as_element().map(|e| e.local_name.as_str()) == Some("a")
+                    })
+                });
+                if let Some(pos) = parser.open_elements.iter().position(|n| {
+                    let l = n.borrow();
+                    l.kind.as_element().map(|e| e.local_name.as_str()) == Some("a")
+                }) {
+                    parser.open_elements.truncate(pos);
+                }
+            }
+        }
+        helpers::reconstruct_active_formatting_elements(parser);
+        let element = helpers::create_element_for_token(parser, tag);
+        helpers::insert_node(parser, &element);
+        parser.open_elements.push(element.clone());
+        helpers::push_formatting_element(parser, element);
         return Step::Done;
     }
 
@@ -850,7 +956,10 @@ fn handle_in_body_start_tag(parser: &mut HtmlTreeConstructor, tag: &crate::token
     Step::Done
 }
 
-fn handle_in_body_end_tag(parser: &mut HtmlTreeConstructor, tag: &crate::tokenizer::TagToken) -> Step {
+fn handle_in_body_end_tag(
+    parser: &mut HtmlTreeConstructor,
+    tag: &crate::tokenizer::TagToken,
+) -> Step {
     let name = tag.name.as_str();
 
     // </p>: if no p in button scope, parse error, insert <p>, reprocess.
@@ -907,11 +1016,7 @@ fn handle_in_body_end_tag(parser: &mut HtmlTreeConstructor, tag: &crate::tokeniz
         helpers::generate_implied_end_tags(parser, None);
         // Pop until target.
         while let Some(top) = parser.open_elements.last() {
-            let top_name = top
-                .borrow()
-                .kind
-                .as_element()
-                .map(|e| e.local_name.clone());
+            let top_name = top.borrow().kind.as_element().map(|e| e.local_name.clone());
             let is_target = top_name.as_deref() == Some(name);
             parser.open_elements.pop();
             if is_target {
@@ -991,11 +1096,7 @@ fn handle_in_body_end_tag(parser: &mut HtmlTreeConstructor, tag: &crate::tokeniz
         }
         helpers::generate_implied_end_tags(parser, Some(name));
         while let Some(top) = parser.open_elements.last() {
-            let top_name = top
-                .borrow()
-                .kind
-                .as_element()
-                .map(|e| e.local_name.clone());
+            let top_name = top.borrow().kind.as_element().map(|e| e.local_name.clone());
             let is_target = top_name.as_deref() == Some(name);
             parser.open_elements.pop();
             if is_target {
@@ -1020,12 +1121,11 @@ fn handle_in_body_end_tag(parser: &mut HtmlTreeConstructor, tag: &crate::tokeniz
         }
         helpers::generate_implied_end_tags(parser, None);
         while let Some(top) = parser.open_elements.last() {
-            let top_name = top
-                .borrow()
-                .kind
-                .as_element()
-                .map(|e| e.local_name.clone());
-            let is_heading = matches!(top_name.as_deref(), Some("h1" | "h2" | "h3" | "h4" | "h5" | "h6"));
+            let top_name = top.borrow().kind.as_element().map(|e| e.local_name.clone());
+            let is_heading = matches!(
+                top_name.as_deref(),
+                Some("h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+            );
             parser.open_elements.pop();
             if is_heading {
                 break;
@@ -1034,14 +1134,26 @@ fn handle_in_body_end_tag(parser: &mut HtmlTreeConstructor, tag: &crate::tokeniz
         return Step::Done;
     }
 
-    // Formatting end tags (a/b/i/em/strong/code/etc.) — adoption agency
-    // is deferred to Phase 3.3. For now, fall through to generic handling.
+    // Formatting end tags (a/b/i/em/strong/code/etc.) — run the adoption
+    // agency algorithm (§13.2.6.4.7).
     if matches!(
         name,
-        "a" | "b" | "big" | "code" | "em" | "font" | "i" | "nobr" | "s" | "small" | "strike"
-        | "strong" | "tt" | "u"
+        "a" | "b"
+            | "big"
+            | "code"
+            | "em"
+            | "font"
+            | "i"
+            | "nobr"
+            | "s"
+            | "small"
+            | "strike"
+            | "strong"
+            | "tt"
+            | "u"
     ) {
-        // Fall through to generic.
+        helpers::adoption_agency(parser, name);
+        return Step::Done;
     }
 
     // Any other end tag: walk the stack from top to bottom.
@@ -1084,15 +1196,89 @@ fn handle_in_body_end_tag(parser: &mut HtmlTreeConstructor, tag: &crate::tokeniz
 /// (§13.2.6.4.7): if a special element is encountered while walking the
 /// stack looking for a matching element, the end tag is ignored.
 const DEFAULT_SPECIAL_ELEMENTS: &[&str] = &[
-    "address", "applet", "area", "article", "aside", "base", "basefont", "bgsound", "blockquote",
-    "body", "br", "button", "caption", "center", "col", "colgroup", "dd", "details", "dir", "div",
-    "dl", "dt", "embed", "fieldset", "figcaption", "figure", "footer", "form", "frame",
-    "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html",
-    "iframe", "img", "input", "keygen", "li", "link", "listing", "main", "marquee", "menu",
-    "meta", "nav", "noembed", "noframes", "noscript", "object", "ol", "p", "param", "plaintext",
-    "pre", "search", "script", "section", "select", "source", "style", "summary", "table",
-    "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "title", "tr", "track", "ul",
-    "wbr", "xmp",
+    "address",
+    "applet",
+    "area",
+    "article",
+    "aside",
+    "base",
+    "basefont",
+    "bgsound",
+    "blockquote",
+    "body",
+    "br",
+    "button",
+    "caption",
+    "center",
+    "col",
+    "colgroup",
+    "dd",
+    "details",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "embed",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "frame",
+    "frameset",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "header",
+    "hgroup",
+    "hr",
+    "html",
+    "iframe",
+    "img",
+    "input",
+    "keygen",
+    "li",
+    "link",
+    "listing",
+    "main",
+    "marquee",
+    "menu",
+    "meta",
+    "nav",
+    "noembed",
+    "noframes",
+    "noscript",
+    "object",
+    "ol",
+    "p",
+    "param",
+    "plaintext",
+    "pre",
+    "search",
+    "script",
+    "section",
+    "select",
+    "source",
+    "style",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "template",
+    "textarea",
+    "tfoot",
+    "th",
+    "thead",
+    "title",
+    "tr",
+    "track",
+    "ul",
+    "wbr",
+    "xmp",
 ];
 
 /// Merge the attributes from `tag` onto `element`, skipping any whose name
@@ -1106,8 +1292,7 @@ fn merge_attributes(element: &Rc<RefCell<muskitty_dom::Node>>, tag: &crate::toke
                 .iter()
                 .any(|a| a.local_name.eq_ignore_ascii_case(name));
             if !exists {
-                data.attributes
-                    .push(Attribute::new(name, value));
+                data.attributes.push(Attribute::new(name, value));
             }
         }
     }
