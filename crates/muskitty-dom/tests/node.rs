@@ -110,13 +110,7 @@ fn new_document_fragment_node() {
 #[test]
 fn new_element_ns_svg() {
     let doc = Node::new_document();
-    let el = Node::new_element_ns(
-        "svg".to_string(),
-        Namespace::Svg,
-        None,
-        vec![],
-        &doc,
-    );
+    let el = Node::new_element_ns("svg".to_string(), Namespace::Svg, None, vec![], &doc);
     let e = el.borrow();
     // SVG namespace: node_name 保持原样（不大写）
     assert_eq!(e.node_name, "svg");
@@ -137,10 +131,7 @@ fn append_child_basic() {
     assert!(Rc::ptr_eq(&doc.borrow().first_child().unwrap(), &html));
     assert!(Rc::ptr_eq(&doc.borrow().last_child().unwrap(), &html));
     // 子节点的 parent 指向 doc
-    assert!(Rc::ptr_eq(
-        &html.borrow().parent_node().unwrap(),
-        &doc
-    ));
+    assert!(Rc::ptr_eq(&html.borrow().parent_node().unwrap(), &doc));
 }
 
 #[test]
@@ -225,7 +216,11 @@ fn insert_before_invalid_reference_errors() {
     let not_a_child = Node::new_element_html("x", vec![], &doc);
 
     append_child(&doc, a.clone()).unwrap();
-    let result = insert_before(&doc, Node::new_element_html("b", vec![], &doc), Some(&not_a_child));
+    let result = insert_before(
+        &doc,
+        Node::new_element_html("b", vec![], &doc),
+        Some(&not_a_child),
+    );
     assert!(matches!(result, Err(DomError::NotFound(_))));
 }
 
@@ -309,9 +304,15 @@ fn moving_node_between_parents_detaches_from_old() {
     assert_eq!(parent_a.borrow().child_count(), 0);
     // parent_b 有 child
     assert_eq!(parent_b.borrow().child_count(), 1);
-    assert!(Rc::ptr_eq(&parent_b.borrow().first_child().unwrap(), &child));
+    assert!(Rc::ptr_eq(
+        &parent_b.borrow().first_child().unwrap(),
+        &child
+    ));
     // child 的 parent 指向 parent_b
-    assert!(Rc::ptr_eq(&child.borrow().parent_node().unwrap(), &parent_b));
+    assert!(Rc::ptr_eq(
+        &child.borrow().parent_node().unwrap(),
+        &parent_b
+    ));
 }
 
 // —— 遍历 API ——
@@ -419,10 +420,7 @@ fn text_content_element_aggregates_descendants() {
     append_child(&div, span.clone()).unwrap();
     append_child(&span, text2).unwrap();
 
-    assert_eq!(
-        div.borrow().text_content(),
-        Some("Hello World".to_string())
-    );
+    assert_eq!(div.borrow().text_content(), Some("Hello World".to_string()));
 }
 
 #[test]

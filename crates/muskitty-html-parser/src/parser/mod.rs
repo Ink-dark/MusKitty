@@ -27,6 +27,19 @@ use muskitty_dom::Node;
 use crate::error::ParseError;
 use crate::tokenizer::{Token, Tokenizer};
 
+/// An entry in the list of active formatting elements (§13.2.6.2).
+///
+/// The list holds either a reference to an element on the open elements
+/// stack, or a marker that delimits a section (pushed when entering table
+/// contexts, template content, etc.).
+#[derive(Clone)]
+pub enum ActiveFormattingEntry {
+    /// A marker entry, used to delimit sections of the list.
+    Marker,
+    /// An element entry, holding a reference to the formatting element.
+    Element(Rc<RefCell<Node>>),
+}
+
 /// The HTML tree construction stage.
 ///
 /// Holds the state of the insertion mode state machine (§13.2.6) and the
@@ -40,7 +53,7 @@ pub struct HtmlTreeConstructor {
     pub open_elements: Vec<Rc<RefCell<Node>>>,
     /// The list of active formatting elements (§13.2.6.2). Used by the
     /// adoption agency algorithm; populated in Phase 3.3.
-    pub active_formatting_elements: Vec<Rc<RefCell<Node>>>,
+    pub active_formatting_elements: Vec<ActiveFormattingEntry>,
     /// The current insertion mode (§13.2.6.1).
     pub insertion_mode: InsertionMode,
     /// The original insertion mode, saved when entering Text mode or

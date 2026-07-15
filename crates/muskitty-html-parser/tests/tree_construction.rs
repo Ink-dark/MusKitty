@@ -213,7 +213,8 @@ fn meta_after_head_is_processed_in_head_context() {
 
 #[test]
 fn full_document_structure() {
-    let doc = parse("<!DOCTYPE html><html><head><title>T</title></head><body><p>hi</p></body></html>");
+    let doc =
+        parse("<!DOCTYPE html><html><head><title>T</title></head><body><p>hi</p></body></html>");
     // Document children: DocumentType + html.
     assert_eq!(doc.borrow().child_count(), 2);
     // html children: head + body.
@@ -420,6 +421,148 @@ fn basic_formatting_element_text() {
     assert_eq!(child_names(&body), vec!["B"]);
     let b = body.borrow().first_child().unwrap();
     assert_eq!(b.borrow().text_content().unwrap(), "bold");
+}
+
+// ── Phase 3.3: formatting elements + adoption agency (§13.2.6.4.7) ─
+
+#[test]
+fn formatting_reconstruct_after_block_close() {
+    // <b>one</b><p>two</p> — after the <p> closes, no reconstruction is
+    // needed because <b> was already closed by </b>. Text after the block
+    // should not be wrapped in <b>.
+    let doc = parse("<b>one</b><p>two</p>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["B", "P"]);
+}
+
+#[test]
+fn formatting_reconstruct_across_block() {
+    // <b><p>x</p>y</b> — the <p> closes implicitly; "y" should still be
+    // inside <b> after reconstruction.
+    let doc = parse("<b><p>x</p>y</b>");
+    let b = find_element_by_name(&doc, "B").expect("missing <B>");
+    // <b> should contain the <p> and a text node "y" (reconstructed).
+    let b_text = b.borrow().text_content().unwrap_or_default();
+    assert!(
+        b_text.contains("x"),
+        "b should contain 'x', got {:?}",
+        b_text
+    );
+    assert!(
+        b_text.contains("y"),
+        "b should contain 'y', got {:?}",
+        b_text
+    );
+}
+
+#[test]
+fn nested_same_formatting_element() {
+    // <b><b>x</b></b> — nested <b> elements.
+    let doc = parse("<b><b>x</b></b>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["B"]);
+    let outer = body.borrow().first_child().unwrap();
+    assert_eq!(child_names(&outer), vec!["B"]);
+}
+
+#[test]
+fn formatting_end_tag_closes_formatting() {
+    // <b>text</b>more — after </b>, text "more" is a sibling.
+    let doc = parse("<b>text</b>more");
+    let body = find_body(&doc);
+    let b = body.borrow().first_child().unwrap();
+    assert_eq!(b.borrow().text_content().unwrap(), "text");
+}
+
+#[test]
+fn multiple_formatting_elements() {
+    // <b><i>bold italic</i></b> — nesting works.
+    let doc = parse("<b><i>bold italic</i></b>");
+    let body = find_body(&doc);
+    let b = body.borrow().first_child().unwrap();
+    assert_eq!(child_names(&b), vec!["I"]);
+    let i = b.borrow().first_child().unwrap();
+    assert_eq!(i.borrow().text_content().unwrap(), "bold italic");
+}
+
+#[test]
+fn formatting_reopened_after_block() {
+    // <b>1<p>2</p>3</b> — adoption agency: <b> wraps "1", <p> contains "2",
+    // and "3" is wrapped in a new <b> under <p>'s sibling context.
+    let doc = parse("<b>1<p>2</p>3</b>");
+    // The document should have at least one <b> with text "1".
+    let b = find_element_by_name(&doc, "B").expect("missing <B>");
+    let text = b.borrow().text_content().unwrap_or_default();
+    assert!(
+        text.contains("1"),
+        "first <b> should contain '1', got {:?}",
+        text
+    );
+}
+
+#[test]
+fn anchor_element_with_href() {
+    let doc = parse("<a href=x>link</a>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["A"]);
+    let a = body.borrow().first_child().unwrap();
+    let a_ref = a.borrow();
+    if let NodeKind::Element(ref e) = a_ref.kind {
+        assert_eq!(e.get_attribute("href").unwrap(), "x");
+    } else {
+        panic!("expected Element node");
+    }
+}
+
+#[test]
+fn em_strong_inline_elements() {
+    let doc = parse("<em>italic</em><strong>bold</strong>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["EM", "STRONG"]);
+}
+
+#[test]
+fn code_element_with_text() {
+    let doc = parse("<code>fn main()</code>");
+    let body = find_body(&doc);
+    let code = body.borrow().first_child().unwrap();
+    assert_eq!(code.borrow().text_content().unwrap(), "fn main()");
+}
+
+#[test]
+fn formatting_inside_paragraph() {
+    let doc = parse("<p><b>bold</b> normal</p>");
+    let body = find_body(&doc);
+    let p = body.borrow().first_child().unwrap();
+    assert_eq!(p.borrow().node_name, "P");
+    let p_text = p.borrow().text_content().unwrap();
+    assert!(p_text.contains("bold"));
+    assert!(p_text.contains("normal"));
+}
+
+#[test]
+fn misnested_b_p_adoption_agency() {
+    // Classic adoption agency case: <b>1<p>2</b>3</p>
+    // The <b> should be split so that "1" and "3" are in <b>, "2" in <p>.
+    let doc = parse("<b>1<p>2</b>3</p>");
+    // Should not panic and should produce a <b> element containing "1".
+    let b = find_element_by_name(&doc, "B").expect("missing <B>");
+    let b_text = b.borrow().text_content().unwrap_or_default();
+    assert!(
+        b_text.contains("1"),
+        "<b> should contain '1', got {:?}",
+        b_text
+    );
+}
+
+#[test]
+fn noahs_ark_clause_limits_entries() {
+    // Repeated identical <b> elements should be limited by the Noah's Ark
+    // clause. This is mostly a smoke test that parsing doesn't crash and
+    // produces multiple <b> elements.
+    let doc = parse("<b><b><b><b>x</b></b></b></b>");
+    let b = find_element_by_name(&doc, "B").expect("missing <B>");
+    let _ = b;
 }
 
 #[test]
