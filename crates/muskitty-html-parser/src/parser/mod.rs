@@ -25,7 +25,7 @@ use std::rc::Rc;
 use muskitty_dom::Node;
 
 use crate::error::ParseError;
-use crate::tokenizer::Token;
+use crate::tokenizer::{Token, Tokenizer};
 
 /// The HTML tree construction stage.
 ///
@@ -102,9 +102,12 @@ impl HtmlTreeConstructor {
     /// If the handler returns `Step::Reprocess`, the same token is fed again
     /// to the (now switched) insertion mode. This loop terminates because
     /// every reprocess step must change `insertion_mode` or return `Done`.
-    pub fn run(&mut self, token: &Token) {
+    ///
+    /// The `tokenizer` is passed so handlers can switch the tokenizer's
+    /// content model (e.g. to RCDATA for `<title>`, per §13.2.6.4.4).
+    pub fn run(&mut self, token: &Token, tokenizer: &mut dyn Tokenizer) {
         loop {
-            match dispatch::dispatch(self, token) {
+            match dispatch::dispatch(self, token, tokenizer) {
                 dispatch::Step::Done => return,
                 dispatch::Step::Reprocess => continue,
             }

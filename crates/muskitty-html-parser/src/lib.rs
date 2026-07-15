@@ -40,7 +40,7 @@ pub fn parse(input: &str) -> Rc<RefCell<Node>> {
     let mut tokenizer = HtmlTokenizer::new(input);
     let mut constructor = HtmlTreeConstructor::new(document.clone());
     while let Some(token) = tokenizer.next_token() {
-        constructor.run(&token);
+        constructor.run(&token, &mut tokenizer);
         if matches!(token, Token::EOF) {
             break;
         }

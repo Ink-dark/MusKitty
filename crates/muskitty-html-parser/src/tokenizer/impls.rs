@@ -165,23 +165,6 @@ impl HtmlTokenizer {
             self.consume()
         }
     }
-
-    /// Set the appropriate end tag name for RCDATA/RAWTEXT content.
-    ///
-    /// The tree construction stage calls this before switching the tokenizer
-    /// to [`State::RCDATA`] or [`State::RAWTEXT`]. In these content models,
-    /// `</` followed by the appropriate end tag name closes the section and
-    /// returns to [`State::Data`].
-    ///
-    /// Pass `None` to clear (e.g. when leaving RCDATA/RAWTEXT).
-    ///
-    /// # Examples
-    ///
-    /// - `<title>` → `set_appropriate_end_tag_name(Some("title"))`, then `set_state(State::RCDATA)`
-    /// - `<style>` → `set_appropriate_end_tag_name(Some("style"))`, then `set_state(State::RAWTEXT)`
-    pub fn set_appropriate_end_tag_name(&mut self, name: Option<&str>) {
-        self.appropriate_end_tag_name = name.map(|s| s.to_string());
-    }
 }
 
 impl HtmlTokenizer {
@@ -384,6 +367,10 @@ impl Tokenizer for HtmlTokenizer {
         self.pending_tokens.clear();
         self.return_state = None;
         self.character_reference_code = 0;
+    }
+
+    fn set_appropriate_end_tag_name(&mut self, name: Option<&str>) {
+        self.appropriate_end_tag_name = name.map(|s| s.to_string());
     }
 }
 

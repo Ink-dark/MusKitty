@@ -54,4 +54,15 @@ pub trait Tokenizer {
     /// tokenizer must be reset to process the new fragment from a known
     /// starting state without artifacts from the previous stream.
     fn reset(&mut self);
+
+    /// Set the "appropriate end tag name" used by RCDATA/RAWTEXT/ScriptData
+    /// end tag matching (§13.2.5.9–§13.2.5.14).
+    ///
+    /// The tree construction stage sets this when switching the tokenizer to
+    /// a content model that can contain end tags. For example, when entering
+    /// `<title>`, tree construction sets the appropriate end tag name to
+    /// `"title"` so that the tokenizer recognises `</title>` as an end tag
+    /// token rather than literal text. Pass `None` to clear when leaving the
+    /// content model.
+    fn set_appropriate_end_tag_name(&mut self, name: Option<&str>);
 }
