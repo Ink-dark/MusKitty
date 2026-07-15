@@ -238,6 +238,16 @@ pub fn has_element_in_select_scope(parser: &HtmlTreeConstructor, name: &str) -> 
     false
 }
 
+/// Check whether an element with the given tag name is on the stack of
+/// open elements (no scope boundaries — just a plain stack search).
+/// Used by `</template>` handling per §13.2.6.4.5.
+pub fn has_element_in_stack(parser: &HtmlTreeConstructor, name: &str) -> bool {
+    parser
+        .open_elements
+        .iter()
+        .any(|n| html_local_name(n).as_deref() == Some(name))
+}
+
 fn has_element_in_scope_with(
     parser: &HtmlTreeConstructor,
     name: &str,
