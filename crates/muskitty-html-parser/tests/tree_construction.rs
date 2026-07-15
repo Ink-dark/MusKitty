@@ -245,3 +245,197 @@ fn attributes_are_preserved_on_html_element() {
         panic!("expected Element node");
     }
 }
+
+// ── InBody: block-level elements (§13.2.6.4.7) ────────────────
+
+/// Locate the <body> element under the document's <html>.
+fn find_body(doc: &Rc<RefCell<Node>>) -> Rc<RefCell<Node>> {
+    find_element_by_name(doc, "BODY").expect("missing <BODY> element")
+}
+
+#[test]
+fn div_element_with_text_content() {
+    let doc = parse("<div>hello</div>");
+    let body = find_body(&doc);
+    let children = child_names(&body);
+    assert_eq!(children, vec!["DIV"]);
+    let div = body.borrow().first_child().unwrap();
+    assert_eq!(div.borrow().text_content().unwrap(), "hello");
+}
+
+#[test]
+fn paragraph_element_with_text() {
+    let doc = parse("<p>hi</p>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["P"]);
+    let p = body.borrow().first_child().unwrap();
+    assert_eq!(p.borrow().text_content().unwrap(), "hi");
+}
+
+#[test]
+fn heading_h1_with_text() {
+    let doc = parse("<h1>Title</h1>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["H1"]);
+    let h1 = body.borrow().first_child().unwrap();
+    assert_eq!(h1.borrow().text_content().unwrap(), "Title");
+}
+
+#[test]
+fn nested_block_elements() {
+    let doc = parse("<div><p>text</p></div>");
+    let body = find_body(&doc);
+    let div = body.borrow().first_child().unwrap();
+    assert_eq!(div.borrow().node_name, "DIV");
+    assert_eq!(child_names(&div), vec!["P"]);
+    let p = div.borrow().first_child().unwrap();
+    assert_eq!(p.borrow().text_content().unwrap(), "text");
+}
+
+#[test]
+fn void_element_br_not_on_stack() {
+    let doc = parse("<br>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["BR"]);
+    // <br> is void: it should be the only child, with no children of its own.
+    let br = body.borrow().first_child().unwrap();
+    assert_eq!(br.borrow().child_count(), 0);
+}
+
+#[test]
+fn void_element_hr_not_on_stack() {
+    let doc = parse("<hr>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["HR"]);
+    let hr = body.borrow().first_child().unwrap();
+    assert_eq!(hr.borrow().child_count(), 0);
+}
+
+#[test]
+fn img_element_preserves_attributes() {
+    let doc = parse("<img src=x alt=y>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["IMG"]);
+    let img = body.borrow().first_child().unwrap();
+    let img_ref = img.borrow();
+    if let NodeKind::Element(ref e) = img_ref.kind {
+        assert_eq!(e.get_attribute("src").unwrap(), "x");
+        assert_eq!(e.get_attribute("alt").unwrap(), "y");
+    } else {
+        panic!("expected Element node");
+    }
+}
+
+#[test]
+fn unordered_list_with_items() {
+    let doc = parse("<ul><li>a</li><li>b</li></ul>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["UL"]);
+    let ul = body.borrow().first_child().unwrap();
+    assert_eq!(child_names(&ul), vec!["LI", "LI"]);
+    let items: Vec<String> = ul
+        .borrow()
+        .children
+        .iter()
+        .map(|c| c.borrow().text_content().unwrap_or_default())
+        .collect();
+    assert_eq!(items, vec!["a", "b"]);
+}
+
+#[test]
+fn form_element_sets_form_pointer() {
+    // <form> should be inserted and remain open until </form>.
+    let doc = parse("<form></form>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["FORM"]);
+    let form = body.borrow().first_child().unwrap();
+    assert_eq!(form.borrow().child_count(), 0);
+}
+
+#[test]
+fn multiple_siblings_in_body() {
+    let doc = parse("<div></div><span></span>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["DIV", "SPAN"]);
+}
+
+#[test]
+fn implicit_p_close_on_next_p() {
+    // <p>one<p>two — the second <p> implicitly closes the first (§13.2.6.4.7).
+    let doc = parse("<p>one<p>two");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["P", "P"]);
+    let texts: Vec<String> = body
+        .borrow()
+        .children
+        .iter()
+        .map(|c| c.borrow().text_content().unwrap_or_default())
+        .collect();
+    assert_eq!(texts, vec!["one", "two"]);
+}
+
+#[test]
+fn block_element_closes_open_p() {
+    // A block-level start tag closes an open <p> per §13.2.6.4.7.
+    let doc = parse("<p>text<div>x</div>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["P", "DIV"]);
+}
+
+#[test]
+fn end_tag_div_closes_div() {
+    let doc = parse("<div><span>inner</span></div>");
+    let body = find_body(&doc);
+    let div = body.borrow().first_child().unwrap();
+    assert_eq!(child_names(&div), vec!["SPAN"]);
+    let span = div.borrow().first_child().unwrap();
+    assert_eq!(span.borrow().text_content().unwrap(), "inner");
+    // After </div>, the div should be closed; body has only the div.
+    assert_eq!(body.borrow().child_count(), 1);
+}
+
+#[test]
+fn dl_with_dd_and_dt() {
+    let doc = parse("<dl><dt>term</dt><dd>def</dd></dl>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["DL"]);
+    let dl = body.borrow().first_child().unwrap();
+    assert_eq!(child_names(&dl), vec!["DT", "DD"]);
+}
+
+#[test]
+fn heading_end_tag_closes_heading() {
+    let doc = parse("<h1>Title</h1><p>after</p>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["H1", "P"]);
+}
+
+#[test]
+fn basic_formatting_element_text() {
+    // <b>text</b> — b is inserted and text goes inside it. (Active formatting
+    // reconstruction is deferred to Phase 3.3, but the simple open/close
+    // case works.)
+    let doc = parse("<b>bold</b>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["B"]);
+    let b = body.borrow().first_child().unwrap();
+    assert_eq!(b.borrow().text_content().unwrap(), "bold");
+}
+
+#[test]
+fn comment_in_body_attaches_to_current_node() {
+    let doc = parse("<div><!-- comment --></div>");
+    let body = find_body(&doc);
+    let div = body.borrow().first_child().unwrap();
+    // The comment should be a child of div.
+    let comment = div.borrow().first_child().unwrap();
+    assert_eq!(comment.borrow().node_type, NodeType::Comment);
+}
+
+#[test]
+fn end_tag_body_switches_to_after_body() {
+    // </body> should switch to AfterBody; subsequent EOF is handled cleanly.
+    let doc = parse("<body><p>x</p></body>");
+    let body = find_body(&doc);
+    assert_eq!(child_names(&body), vec!["P"]);
+}
