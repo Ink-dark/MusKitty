@@ -1176,7 +1176,7 @@ fn handle_in_body_end_tag(
         }
         // Special element (in default scope list) blocks the search.
         if let Some(n) = node_name.as_deref() {
-            if DEFAULT_SPECIAL_ELEMENTS.contains(&n) {
+            if helpers::SPECIAL_ELEMENTS.contains(&n) {
                 parser
                     .errors
                     .push(ParseError::UnexpectedEndTag(name.to_string()));
@@ -1191,95 +1191,6 @@ fn handle_in_body_end_tag(
         .push(ParseError::UnexpectedEndTag(name.to_string()));
     Step::Done
 }
-
-/// Special elements used by the "any other end tag" branch of InBody
-/// (§13.2.6.4.7): if a special element is encountered while walking the
-/// stack looking for a matching element, the end tag is ignored.
-const DEFAULT_SPECIAL_ELEMENTS: &[&str] = &[
-    "address",
-    "applet",
-    "area",
-    "article",
-    "aside",
-    "base",
-    "basefont",
-    "bgsound",
-    "blockquote",
-    "body",
-    "br",
-    "button",
-    "caption",
-    "center",
-    "col",
-    "colgroup",
-    "dd",
-    "details",
-    "dir",
-    "div",
-    "dl",
-    "dt",
-    "embed",
-    "fieldset",
-    "figcaption",
-    "figure",
-    "footer",
-    "form",
-    "frame",
-    "frameset",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "head",
-    "header",
-    "hgroup",
-    "hr",
-    "html",
-    "iframe",
-    "img",
-    "input",
-    "keygen",
-    "li",
-    "link",
-    "listing",
-    "main",
-    "marquee",
-    "menu",
-    "meta",
-    "nav",
-    "noembed",
-    "noframes",
-    "noscript",
-    "object",
-    "ol",
-    "p",
-    "param",
-    "plaintext",
-    "pre",
-    "search",
-    "script",
-    "section",
-    "select",
-    "source",
-    "style",
-    "summary",
-    "table",
-    "tbody",
-    "td",
-    "template",
-    "textarea",
-    "tfoot",
-    "th",
-    "thead",
-    "title",
-    "tr",
-    "track",
-    "ul",
-    "wbr",
-    "xmp",
-];
 
 /// Merge the attributes from `tag` onto `element`, skipping any whose name
 /// already exists on the element (per "adjust the attributes" §13.2.6.2).

@@ -393,8 +393,9 @@ pub fn reconstruct_active_formatting_elements(parser: &mut HtmlTreeConstructor) 
 // ── Adoption agency algorithm (§13.2.6.4.7) ───────────────────
 
 /// The "special" elements per §13.2.6.3 (HTML-namespace subset). Used by
-/// the adoption agency algorithm to find the furthest block.
-const SPECIAL_ELEMENTS: &[&str] = &[
+/// the adoption agency algorithm to find the furthest block, and by the
+/// "any other end tag" branch to decide when to ignore an end tag.
+pub const SPECIAL_ELEMENTS: &[&str] = &[
     "address",
     "applet",
     "area",
