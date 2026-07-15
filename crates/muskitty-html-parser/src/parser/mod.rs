@@ -66,6 +66,12 @@ pub struct HtmlTreeConstructor {
     /// Whether foster parenting is active (§13.2.6.3). Used by table
     /// insertion modes; deferred to Phase 3.4.
     pub foster_parenting: bool,
+    /// Pending character tokens accumulated in InTableText mode
+    /// (§13.2.6.4.10). Flushed when a non-character token is seen.
+    pub pending_table_text: String,
+    /// The stack of template insertion modes (§13.2.6.4.19). Pushed when
+    /// entering `<template>` content, popped when leaving.
+    pub template_insertion_modes: Vec<InsertionMode>,
     /// The "frameset-ok" flag (§13.2.6.1). Initially true; set to false by
     /// certain tokens that prevent subsequent `<frameset>`.
     pub frameset_ok: bool,
@@ -91,6 +97,8 @@ impl HtmlTreeConstructor {
             head_element: None,
             form_element: None,
             foster_parenting: false,
+            pending_table_text: String::new(),
+            template_insertion_modes: Vec::new(),
             frameset_ok: true,
             scripting_flag: false,
             errors: Vec::new(),

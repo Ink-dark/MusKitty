@@ -582,3 +582,294 @@ fn end_tag_body_switches_to_after_body() {
     let body = find_body(&doc);
     assert_eq!(child_names(&body), vec!["P"]);
 }
+
+// ── Table insertion modes (§13.2.6.4.9–§13.2.6.4.15) ──────────
+
+#[test]
+fn simple_table_with_tbody_tr_td() {
+    // <table><tbody><tr><td>cell</td></tr></tbody></table>
+    let doc = parse("<table><tbody><tr><td>cell</td></tr></tbody></table>");
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    // <table> should contain a <TBODY>
+    let tbody = find_first_child_element(&table, "TBODY").expect("missing <TBODY>");
+    let tr = find_first_child_element(&tbody, "TR").expect("missing <TR>");
+    let td = find_first_child_element(&tr, "TD").expect("missing <TD>");
+    let text = td.borrow().text_content().unwrap_or_default();
+    assert!(
+        text.contains("cell"),
+        "td should contain 'cell', got {:?}",
+        text
+    );
+}
+
+#[test]
+fn table_implicit_tbody_for_tr() {
+    // <table><tr><td>x</td></tr></table> — <tbody> is auto-inserted.
+    let doc = parse("<table><tr><td>x</td></tr></table>");
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    let tbody = find_first_child_element(&table, "TBODY").expect("missing implicit <TBODY>");
+    let _ = tbody;
+}
+
+#[test]
+fn table_implicit_tbody_for_td() {
+    // <table><td>x</td></table> — <tbody> and <tr> are auto-inserted.
+    let doc = parse("<table><td>x</td></table>");
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    let tbody = find_first_child_element(&table, "TBODY").expect("missing implicit <TBODY>");
+    let tr = find_first_child_element(&tbody, "TR").expect("missing implicit <TR>");
+    let td = find_first_child_element(&tr, "TD").expect("missing <TD>");
+    let _ = td;
+}
+
+#[test]
+fn table_with_caption() {
+    // <table><caption>Title</caption><tr><td>1</td></tr></table>
+    let doc = parse("<table><caption>Title</caption><tr><td>1</td></tr></table>");
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    let caption = find_first_child_element(&table, "CAPTION").expect("missing <CAPTION>");
+    let text = caption.borrow().text_content().unwrap_or_default();
+    assert!(text.contains("Title"), "caption text, got {:?}", text);
+}
+
+#[test]
+fn table_with_colgroup_and_col() {
+    // <table><colgroup><col></colgroup><tr><td>x</td></tr></table>
+    let doc = parse("<table><colgroup><col></colgroup><tr><td>x</td></tr></table>");
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    let colgroup = find_first_child_element(&table, "COLGROUP").expect("missing <COLGROUP>");
+    let col = find_first_child_element(&colgroup, "COL").expect("missing <COL>");
+    let _ = col;
+}
+
+#[test]
+fn table_with_thead_tbody_tfoot() {
+    // <table><thead><tr><th>H</th></tr></thead><tbody><tr><td>D</td></tr></tbody></table>
+    let doc = parse(
+        "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>D</td></tr></tbody></table>",
+    );
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    let thead = find_first_child_element(&table, "THEAD").expect("missing <THEAD>");
+    let tbody = find_first_child_element(&table, "TBODY").expect("missing <TBODY>");
+    let _ = (thead, tbody);
+}
+
+#[test]
+fn table_end_tag_closes_table() {
+    // After </table>, parsing should resume in InBody.
+    let doc = parse("<table><tr><td>x</td></tr></table><p>after</p>");
+    let body = find_body(&doc);
+    let names = child_names(&body);
+    assert!(
+        names.contains(&"TABLE".to_string()),
+        "body should contain <TABLE>, got {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"P".to_string()),
+        "body should contain <P> after table, got {:?}",
+        names
+    );
+}
+
+#[test]
+fn table_with_multiple_rows() {
+    // <table><tr><td>1</td></tr><tr><td>2</td></tr></table>
+    let doc = parse("<table><tr><td>1</td></tr><tr><td>2</td></tr></table>");
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    let tbody = find_first_child_element(&table, "TBODY").expect("missing <TBODY>");
+    // Should have two <TR> children
+    let tr_count = tbody
+        .borrow()
+        .children
+        .iter()
+        .filter(|c| c.borrow().node_name == "TR")
+        .count();
+    assert_eq!(tr_count, 2, "expected 2 <TR>, got {}", tr_count);
+}
+
+#[test]
+fn table_with_multiple_cells_in_row() {
+    // <table><tr><td>1</td><td>2</td></tr></table>
+    let doc = parse("<table><tr><td>1</td><td>2</td></tr></table>");
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    let tbody = find_first_child_element(&table, "TBODY").expect("missing <TBODY>");
+    let tr = find_first_child_element(&tbody, "TR").expect("missing <TR>");
+    let td_count = tr
+        .borrow()
+        .children
+        .iter()
+        .filter(|c| c.borrow().node_name == "TD")
+        .count();
+    assert_eq!(td_count, 2, "expected 2 <TD>, got {}", td_count);
+}
+
+#[test]
+fn table_eof_does_not_panic() {
+    // Unclosed table at EOF should not panic.
+    let doc = parse("<table><tr><td>unclosed");
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    let _ = table;
+}
+
+#[test]
+fn table_whitespace_between_elements() {
+    // Whitespace between table elements should not crash (goes to InTableText).
+    let doc = parse("<table> <tr><td>x</td></tr> </table>");
+    let table = find_element_by_name(&doc, "TABLE").expect("missing <TABLE>");
+    let _ = table;
+}
+
+#[test]
+fn nested_tables() {
+    // <table><tr><td><table><tr><td>inner</td></tr></table></td></tr></table>
+    let doc = parse("<table><tr><td><table><tr><td>inner</td></tr></table></td></tr></table>");
+    let tables: Vec<_> = Node::descendants(&doc)
+        .filter(|n| n.borrow().node_type == NodeType::Element && n.borrow().node_name == "TABLE")
+        .collect();
+    assert_eq!(
+        tables.len(),
+        2,
+        "expected 2 nested <TABLE>, got {}",
+        tables.len()
+    );
+}
+
+/// Find the first direct child element with the given node name.
+fn find_first_child_element(parent: &Rc<RefCell<Node>>, name: &str) -> Option<Rc<RefCell<Node>>> {
+    parent
+        .borrow()
+        .children
+        .iter()
+        .find(|c| c.borrow().node_name == name)
+        .cloned()
+}
+
+// ── Select insertion modes (§13.2.6.4.16, §13.2.6.4.18) ────────
+
+#[test]
+fn select_with_options() {
+    let doc = parse("<select><option>a</option><option>b</option></select>");
+    let select = find_element_by_name(&doc, "SELECT").expect("missing <SELECT>");
+    let option_count = select
+        .borrow()
+        .children
+        .iter()
+        .filter(|c| c.borrow().node_name == "OPTION")
+        .count();
+    assert_eq!(option_count, 2, "expected 2 <OPTION>, got {}", option_count);
+}
+
+#[test]
+fn select_with_optgroup_and_option() {
+    let doc = parse("<select><optgroup><option>x</option></optgroup></select>");
+    let select = find_element_by_name(&doc, "SELECT").expect("missing <SELECT>");
+    let optgroup = find_first_child_element(&select, "OPTGROUP").expect("missing <OPTGROUP>");
+    let option = find_first_child_element(&optgroup, "OPTION").expect("missing <OPTION>");
+    let _ = option;
+}
+
+#[test]
+fn select_eof_does_not_panic() {
+    let doc = parse("<select><option>unclosed");
+    let select = find_element_by_name(&doc, "SELECT").expect("missing <SELECT>");
+    let _ = select;
+}
+
+#[test]
+fn select_in_table_switches_mode() {
+    // <select> inside a table should switch to InSelectInTable, but
+    // still produce a valid <SELECT> element.
+    let doc = parse("<table><tr><td><select><option>x</option></select></td></tr></table>");
+    let select = find_element_by_name(&doc, "SELECT").expect("missing <SELECT>");
+    let _ = select;
+}
+
+// ── Template insertion mode (§13.2.6.4.19) ─────────────────────
+
+#[test]
+fn template_with_text_content() {
+    // <template> is a special element: its content goes into a separate
+    // "template content" document fragment. For now we just verify the
+    // <template> element exists.
+    let doc = parse("<template>hello</template>");
+    let template = find_element_by_name(&doc, "TEMPLATE").expect("missing <TEMPLATE>");
+    let _ = template;
+}
+
+#[test]
+fn template_with_div() {
+    let doc = parse("<template><div>content</div></template>");
+    let template = find_element_by_name(&doc, "TEMPLATE").expect("missing <TEMPLATE>");
+    let _ = template;
+}
+
+#[test]
+fn template_eof_does_not_panic() {
+    let doc = parse("<template><div>unclosed");
+    let template = find_element_by_name(&doc, "TEMPLATE").expect("missing <TEMPLATE>");
+    let _ = template;
+}
+
+#[test]
+fn template_with_table() {
+    // <template><table><tr><td>x</td></tr></table></template>
+    let doc = parse("<template><table><tr><td>x</td></tr></table></template>");
+    let template = find_element_by_name(&doc, "TEMPLATE").expect("missing <TEMPLATE>");
+    let _ = template;
+}
+
+// ── Frameset insertion modes (§13.2.6.4.21–§13.2.6.4.23) ───────
+
+#[test]
+fn frameset_replaces_body() {
+    // A <frameset> at the right position should replace the <body>.
+    let doc = parse("<!DOCTYPE html><frameset><frame src=\"a\"><frame src=\"b\"></frameset>");
+    let frameset = find_element_by_name(&doc, "FRAMESET").expect("missing <FRAMESET>");
+    let frame_count = frameset
+        .borrow()
+        .children
+        .iter()
+        .filter(|c| c.borrow().node_name == "FRAME")
+        .count();
+    assert_eq!(frame_count, 2, "expected 2 <FRAME>, got {}", frame_count);
+}
+
+#[test]
+fn frameset_eof_does_not_panic() {
+    let doc = parse("<!DOCTYPE html><frameset><frame src=\"a\">");
+    let frameset = find_element_by_name(&doc, "FRAMESET").expect("missing <FRAMESET>");
+    let _ = frameset;
+}
+
+#[test]
+fn nested_framesets() {
+    let doc = parse("<!DOCTYPE html><frameset><frameset><frame src=\"a\"></frameset></frameset>");
+    let framesets: Vec<_> = Node::descendants(&doc)
+        .filter(|n| n.borrow().node_type == NodeType::Element && n.borrow().node_name == "FRAMESET")
+        .collect();
+    assert_eq!(
+        framesets.len(),
+        2,
+        "expected 2 nested <FRAMESET>, got {}",
+        framesets.len()
+    );
+}
+
+// ── Noscript in head (§13.2.6.4.6) ─────────────────────────────
+
+#[test]
+fn noscript_in_head_with_scripting_disabled() {
+    // With scripting disabled (the default), <noscript> in <head> enters
+    // InHeadNoscript mode. Content should be parsed as HTML.
+    let doc = parse("<head><noscript><style>x</style></noscript></head>");
+    let noscript = find_element_by_name(&doc, "NOSCRIPT").expect("missing <NOSCRIPT>");
+    let _ = noscript;
+}
+
+#[test]
+fn noscript_eof_does_not_panic() {
+    let doc = parse("<head><noscript>unclosed");
+    let noscript = find_element_by_name(&doc, "NOSCRIPT").expect("missing <NOSCRIPT>");
+    let _ = noscript;
+}
