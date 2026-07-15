@@ -50,6 +50,13 @@ pub fn dispatch(
         InsertionMode::Text => handle_text(parser, token, tokenizer),
         InsertionMode::AfterBody => handle_after_body(parser, token),
         InsertionMode::AfterAfterBody => handle_after_after_body(parser, token),
+        InsertionMode::InTable => handle_in_table(parser, token, tokenizer),
+        InsertionMode::InTableText => handle_in_table_text(parser, token),
+        InsertionMode::InCaption => handle_in_caption(parser, token),
+        InsertionMode::InColumnGroup => handle_in_column_group(parser, token, tokenizer),
+        InsertionMode::InTableBody => handle_in_table_body(parser, token),
+        InsertionMode::InRow => handle_in_row(parser, token),
+        InsertionMode::InCell => handle_in_cell(parser, token),
         // All other modes are stubs until later phases.
         _ => handle_stub(parser, token),
     }
@@ -950,6 +957,18 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
+    // table (§13.2.6.4.7): close <p> if in button scope, insert <table>,
+    // switch to InTable, set frameset_ok=false.
+    if name == "table" {
+        if helpers::has_element_in_button_scope(parser, "p") {
+            helpers::close_p_element(parser);
+        }
+        helpers::insert_element(parser, tag);
+        parser.insertion_mode = InsertionMode::InTable;
+        parser.frameset_ok = false;
+        return Step::Done;
+    }
+
     // Anything else (start tag): reconstruct active formatting, insert.
     helpers::reconstruct_active_formatting_elements(parser);
     helpers::insert_element(parser, tag);
@@ -1300,6 +1319,586 @@ fn handle_after_after_body(parser: &mut HtmlTreeConstructor, token: &Token) -> S
                 .push(ParseError::Generic("unexpected token after after body"));
             parser.insertion_mode = InsertionMode::InBody;
             Step::Reprocess
+        }
+    }
+}
+
+// ── Table insertion modes (§13.2.6.4.9–§13.2.6.4.15) ──────────
+
+/// Pop elements from the open elements stack until a table-context
+/// element is current. The table-context elements are: `table`,
+/// `tbody`, `tfoot`, `thead`, `tr`, `caption`, `colgroup`, `html`,
+/// `template` (§13.2.6.4.9 "clear the stack back to a table context").
+fn clear_stack_to_table_context(parser: &mut HtmlTreeConstructor) {
+    const TABLE_CONTEXT: &[&str] = &[
+        "table", "tbody", "tfoot", "thead", "tr", "caption", "colgroup", "html", "template",
+    ];
+    while let Some(top) = parser.open_elements.last() {
+        let is_ctx = top
+            .borrow()
+            .kind
+            .as_element()
+            .map(|e| TABLE_CONTEXT.contains(&e.local_name.as_str()))
+            .unwrap_or(false);
+        if is_ctx {
+            break;
+        }
+        parser.open_elements.pop();
+    }
+}
+
+/// Pop elements from the open elements stack until a table row context
+/// element is current (§13.2.6.4.13 "clear the stack back to a table
+/// body context"). Row-context elements: `tbody`, `tfoot`, `thead`,
+/// `html`, `template`.
+fn clear_stack_to_table_body_context(parser: &mut HtmlTreeConstructor) {
+    const BODY_CONTEXT: &[&str] = &["tbody", "tfoot", "thead", "html", "template"];
+    while let Some(top) = parser.open_elements.last() {
+        let is_ctx = top
+            .borrow()
+            .kind
+            .as_element()
+            .map(|e| BODY_CONTEXT.contains(&e.local_name.as_str()))
+            .unwrap_or(false);
+        if is_ctx {
+            break;
+        }
+        parser.open_elements.pop();
+    }
+}
+
+/// Pop elements from the open elements stack until a table row element
+/// is current (§13.2.6.4.14 "clear the stack back to a table row
+/// context"). Row elements: `tr`, `html`, `template`.
+fn clear_stack_to_row_context(parser: &mut HtmlTreeConstructor) {
+    const ROW_CONTEXT: &[&str] = &["tr", "html", "template"];
+    while let Some(top) = parser.open_elements.last() {
+        let is_ctx = top
+            .borrow()
+            .kind
+            .as_element()
+            .map(|e| ROW_CONTEXT.contains(&e.local_name.as_str()))
+            .unwrap_or(false);
+        if is_ctx {
+            break;
+        }
+        parser.open_elements.pop();
+    }
+}
+
+// ── InTable insertion mode (§13.2.6.4.9) ────────────────────────
+
+fn handle_in_table(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
+    match token {
+        Token::Character(c) if is_whitespace(*c) => {
+            // Per §13.2.6.4.9, whitespace in InTable goes to InTableText.
+            parser.pending_table_text.push(*c);
+            parser.insertion_mode = InsertionMode::InTableText;
+            parser.original_insertion_mode = Some(InsertionMode::InTable);
+            Step::Done
+        }
+        Token::Comment(data) => {
+            helpers::insert_comment(parser, data);
+            Step::Done
+        }
+        Token::Doctype(_) => {
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected DOCTYPE in table"));
+            Step::Done
+        }
+        Token::Tag(tag) if tag.kind == TagKind::Start => {
+            let name = tag.name.as_str();
+            match name {
+                "caption" => {
+                    clear_stack_to_table_context(parser);
+                    helpers::add_formatting_marker(parser);
+                    helpers::insert_element(parser, tag);
+                    parser.insertion_mode = InsertionMode::InCaption;
+                    Step::Done
+                }
+                "colgroup" => {
+                    clear_stack_to_table_context(parser);
+                    helpers::insert_element(parser, tag);
+                    parser.insertion_mode = InsertionMode::InColumnGroup;
+                    Step::Done
+                }
+                "col" => {
+                    clear_stack_to_table_context(parser);
+                    create_and_push(parser, "colgroup");
+                    parser.insertion_mode = InsertionMode::InColumnGroup;
+                    Step::Reprocess
+                }
+                "tbody" | "tfoot" | "thead" => {
+                    clear_stack_to_table_context(parser);
+                    helpers::insert_element(parser, tag);
+                    parser.insertion_mode = InsertionMode::InTableBody;
+                    Step::Done
+                }
+                "td" | "th" | "tr" => {
+                    clear_stack_to_table_context(parser);
+                    create_and_push(parser, "tbody");
+                    parser.insertion_mode = InsertionMode::InTableBody;
+                    Step::Reprocess
+                }
+                "style" | "script" | "template" => {
+                    // Process using the rules for "in head" (§13.2.6.4.9).
+                    handle_in_head(parser, token, tokenizer)
+                }
+                _ => foster_parent_in_body(parser, token),
+            }
+        }
+        Token::Tag(tag) if tag.kind == TagKind::End => match tag.name.as_str() {
+            "table" => {
+                // Pop until a table element is popped (§13.2.6.4.9).
+                while let Some(top) = parser.open_elements.pop() {
+                    let is_table = top
+                        .borrow()
+                        .kind
+                        .as_element()
+                        .map(|e| e.local_name == "table")
+                        .unwrap_or(false);
+                    if is_table {
+                        break;
+                    }
+                }
+                parser.insertion_mode = InsertionMode::InBody;
+                Step::Done
+            }
+            "body" | "caption" | "col" | "colgroup" | "html" | "tbody" | "td" | "tfoot" | "th"
+            | "thead" | "tr" => {
+                parser
+                    .errors
+                    .push(ParseError::Generic("unexpected end tag in table"));
+                Step::Done
+            }
+            "template" => handle_in_head(parser, token, tokenizer),
+            _ => foster_parent_in_body(parser, token),
+        },
+        Token::EOF => {
+            // Reprocess in InBody for EOF handling (template/fragment checks).
+            parser.insertion_mode = InsertionMode::InBody;
+            Step::Reprocess
+        }
+        _ => foster_parent_in_body(parser, token),
+    }
+}
+
+/// Foster-parent a token by enabling foster parenting, processing it as
+/// InBody, then disabling foster parenting (§13.2.6.4.9 "anything else").
+fn foster_parent_in_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+    parser
+        .errors
+        .push(ParseError::Generic("foster parenting in table"));
+    parser.foster_parenting = true;
+    let step = handle_in_body(parser, token);
+    parser.foster_parenting = false;
+    step
+}
+
+// ── InTableText insertion mode (§13.2.6.4.10) ───────────────────
+
+fn handle_in_table_text(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+    match token {
+        Token::Character('\0') => {
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected null in table text"));
+            Step::Done
+        }
+        Token::Character(c) => {
+            parser.pending_table_text.push(*c);
+            Step::Done
+        }
+        _ => {
+            // Process the pending table character tokens: if any is
+            // non-whitespace, foster-parent the whole run as InBody
+            // characters; otherwise discard them (§13.2.6.4.10).
+            let pending = std::mem::take(&mut parser.pending_table_text);
+            let has_non_ws = pending.chars().any(|c| !is_whitespace(c));
+            if has_non_ws {
+                parser.foster_parenting = true;
+                for c in pending.chars() {
+                    handle_in_body(parser, &Token::Character(c));
+                }
+                parser.foster_parenting = false;
+            }
+            // Restore original insertion mode (InTable) and reprocess.
+            parser.insertion_mode = parser
+                .original_insertion_mode
+                .take()
+                .unwrap_or(InsertionMode::InTable);
+            Step::Reprocess
+        }
+    }
+}
+
+// ── InCaption insertion mode (§13.2.6.4.11) ─────────────────────
+
+fn handle_in_caption(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+    match token {
+        Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "caption" => {
+            if !helpers::has_element_in_scope(parser, "caption") {
+                parser
+                    .errors
+                    .push(ParseError::Generic("end caption without caption in scope"));
+                return Step::Done;
+            }
+            helpers::generate_implied_end_tags(parser, None);
+            // Pop until a caption element is popped.
+            while let Some(top) = parser.open_elements.pop() {
+                let is_caption = top
+                    .borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| e.local_name == "caption")
+                    .unwrap_or(false);
+                if is_caption {
+                    break;
+                }
+            }
+            helpers::clear_active_formatting_to_last_marker(parser);
+            parser.insertion_mode = InsertionMode::InTable;
+            Step::Done
+        }
+        Token::Tag(tag)
+            if tag.kind == TagKind::Start
+                && matches!(
+                    tag.name.as_str(),
+                    "caption"
+                        | "col"
+                        | "colgroup"
+                        | "tbody"
+                        | "td"
+                        | "tfoot"
+                        | "th"
+                        | "thead"
+                        | "tr"
+                ) =>
+        {
+            // Parse error; act as if </caption> was seen, then reprocess.
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected table start tag in caption"));
+            close_caption(parser);
+            Step::Reprocess
+        }
+        Token::Tag(tag)
+            if tag.kind == TagKind::End
+                && matches!(
+                    tag.name.as_str(),
+                    "table" | "tbody" | "tfoot" | "thead" | "tr" | "td" | "th"
+                ) =>
+        {
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected table end tag in caption"));
+            close_caption(parser);
+            Step::Reprocess
+        }
+        _ => {
+            // Anything else: process using the rules for InBody.
+            handle_in_body(parser, token)
+        }
+    }
+}
+
+/// Close the current caption (used by InCaption's "act as </caption>").
+fn close_caption(parser: &mut HtmlTreeConstructor) {
+    if helpers::has_element_in_scope(parser, "caption") {
+        helpers::generate_implied_end_tags(parser, None);
+        while let Some(top) = parser.open_elements.pop() {
+            let is_caption = top
+                .borrow()
+                .kind
+                .as_element()
+                .map(|e| e.local_name == "caption")
+                .unwrap_or(false);
+            if is_caption {
+                break;
+            }
+        }
+        helpers::clear_active_formatting_to_last_marker(parser);
+        parser.insertion_mode = InsertionMode::InTable;
+    }
+}
+
+// ── InColumnGroup insertion mode (§13.2.6.4.12) ─────────────────
+
+fn handle_in_column_group(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
+    match token {
+        Token::Character(c) if is_whitespace(*c) => {
+            helpers::insert_character(parser, *c);
+            Step::Done
+        }
+        Token::Comment(data) => {
+            helpers::insert_comment(parser, data);
+            Step::Done
+        }
+        Token::Doctype(_) => {
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected DOCTYPE in colgroup"));
+            Step::Done
+        }
+        Token::Tag(tag) if tag.kind == TagKind::Start => match tag.name.as_str() {
+            "html" => handle_in_body(parser, token),
+            "col" => {
+                helpers::insert_element(parser, tag);
+                parser.open_elements.pop();
+                Step::Done
+            }
+            "template" => handle_in_head(parser, token, tokenizer),
+            _ => close_colgroup_and_reprocess(parser),
+        },
+        Token::Tag(tag) if tag.kind == TagKind::End => match tag.name.as_str() {
+            "colgroup" => {
+                if !helpers::has_element_in_scope(parser, "colgroup") {
+                    parser.errors.push(ParseError::Generic(
+                        "end colgroup without colgroup in scope",
+                    ));
+                    return Step::Done;
+                }
+                parser.open_elements.pop();
+                parser.insertion_mode = InsertionMode::InTable;
+                Step::Done
+            }
+            "col" => {
+                parser.errors.push(ParseError::Generic("end col; ignored"));
+                Step::Done
+            }
+            "template" => handle_in_head(parser, token, tokenizer),
+            _ => close_colgroup_and_reprocess(parser),
+        },
+        Token::EOF => handle_in_head(parser, token, tokenizer),
+        _ => close_colgroup_and_reprocess(parser),
+    }
+}
+
+/// Close the colgroup (if present) and reprocess in InTable.
+fn close_colgroup_and_reprocess(parser: &mut HtmlTreeConstructor) -> Step {
+    if helpers::has_element_in_scope(parser, "colgroup") {
+        parser.open_elements.pop();
+        parser.insertion_mode = InsertionMode::InTable;
+        Step::Reprocess
+    } else {
+        // No colgroup in scope: parse error, ignore the token.
+        parser.errors.push(ParseError::Generic(
+            "unexpected token; no colgroup in scope",
+        ));
+        Step::Done
+    }
+}
+
+// ── InTableBody insertion mode (§13.2.6.4.13) ───────────────────
+
+fn handle_in_table_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+    match token {
+        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "tr" => {
+            clear_stack_to_table_body_context(parser);
+            helpers::insert_element(parser, tag);
+            parser.insertion_mode = InsertionMode::InRow;
+            Step::Done
+        }
+        Token::Tag(tag)
+            if tag.kind == TagKind::Start && matches!(tag.name.as_str(), "td" | "th") =>
+        {
+            clear_stack_to_table_body_context(parser);
+            create_and_push(parser, "tr");
+            parser.insertion_mode = InsertionMode::InRow;
+            Step::Reprocess
+        }
+        Token::Tag(tag)
+            if tag.kind == TagKind::End
+                && matches!(tag.name.as_str(), "tbody" | "tfoot" | "thead") =>
+        {
+            let name = tag.name.clone();
+            if !helpers::has_element_in_table_scope(parser, &name) {
+                parser.errors.push(ParseError::Generic(
+                    "end tag without element in table scope",
+                ));
+                return Step::Done;
+            }
+            clear_stack_to_table_body_context(parser);
+            parser.open_elements.pop();
+            parser.insertion_mode = InsertionMode::InTable;
+            Step::Done
+        }
+        Token::Tag(tag)
+            if (tag.kind == TagKind::Start
+                && matches!(
+                    tag.name.as_str(),
+                    "caption" | "col" | "colgroup" | "tbody" | "tfoot" | "thead"
+                ))
+                || (tag.kind == TagKind::End
+                    && matches!(tag.name.as_str(), "table" | "tbody" | "tfoot" | "thead")) =>
+        {
+            // Act as if </tbody> (or </tfoot>/</thead>) was seen, then
+            // reprocess. If no tbody/tfoot/thead is in table scope, ignore.
+            if !helpers::has_element_in_table_scope(parser, "tbody")
+                && !helpers::has_element_in_table_scope(parser, "tfoot")
+                && !helpers::has_element_in_table_scope(parser, "thead")
+            {
+                parser.errors.push(ParseError::Generic(
+                    "unexpected token; no table body in scope",
+                ));
+                return Step::Done;
+            }
+            clear_stack_to_table_body_context(parser);
+            parser.open_elements.pop();
+            parser.insertion_mode = InsertionMode::InTable;
+            Step::Reprocess
+        }
+        _ => {
+            // Anything else: process using the rules for InTable.
+            parser.insertion_mode = InsertionMode::InTable;
+            Step::Reprocess
+        }
+    }
+}
+
+// ── InRow insertion mode (§13.2.6.4.14) ─────────────────────────
+
+fn handle_in_row(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+    match token {
+        Token::Tag(tag)
+            if tag.kind == TagKind::Start && matches!(tag.name.as_str(), "td" | "th") =>
+        {
+            clear_stack_to_row_context(parser);
+            helpers::insert_element(parser, tag);
+            parser.insertion_mode = InsertionMode::InCell;
+            helpers::add_formatting_marker(parser);
+            Step::Done
+        }
+        Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "tr" => {
+            if !helpers::has_element_in_table_scope(parser, "tr") {
+                parser
+                    .errors
+                    .push(ParseError::Generic("end tr without tr in table scope"));
+                return Step::Done;
+            }
+            clear_stack_to_row_context(parser);
+            parser.open_elements.pop();
+            parser.insertion_mode = InsertionMode::InTableBody;
+            Step::Done
+        }
+        Token::Tag(tag)
+            if (tag.kind == TagKind::Start
+                && matches!(
+                    tag.name.as_str(),
+                    "caption" | "col" | "colgroup" | "tbody" | "tfoot" | "thead" | "tr"
+                ))
+                || (tag.kind == TagKind::End
+                    && matches!(tag.name.as_str(), "tbody" | "tfoot" | "thead")) =>
+        {
+            // Act as if </tr> was seen, then reprocess.
+            if !helpers::has_element_in_table_scope(parser, "tr") {
+                parser.errors.push(ParseError::Generic(
+                    "unexpected token; no tr in table scope",
+                ));
+                return Step::Done;
+            }
+            clear_stack_to_row_context(parser);
+            parser.open_elements.pop();
+            parser.insertion_mode = InsertionMode::InTableBody;
+            Step::Reprocess
+        }
+        _ => {
+            // Anything else: process using the rules for InTable.
+            parser.insertion_mode = InsertionMode::InTable;
+            Step::Reprocess
+        }
+    }
+}
+
+// ── InCell insertion mode (§13.2.6.4.15) ────────────────────────
+
+fn handle_in_cell(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+    match token {
+        Token::Tag(tag) if tag.kind == TagKind::End && matches!(tag.name.as_str(), "td" | "th") => {
+            let name = tag.name.clone();
+            if !helpers::has_element_in_table_scope(parser, &name) {
+                parser
+                    .errors
+                    .push(ParseError::Generic("end cell without cell in table scope"));
+                return Step::Done;
+            }
+            helpers::generate_implied_end_tags(parser, None);
+            // Pop until the target cell is popped.
+            while let Some(top) = parser.open_elements.pop() {
+                let is_target = top
+                    .borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| e.local_name == name)
+                    .unwrap_or(false);
+                if is_target {
+                    break;
+                }
+            }
+            helpers::clear_active_formatting_to_last_marker(parser);
+            parser.insertion_mode = InsertionMode::InRow;
+            Step::Done
+        }
+        Token::Tag(tag)
+            if (tag.kind == TagKind::Start
+                && matches!(
+                    tag.name.as_str(),
+                    "caption"
+                        | "col"
+                        | "colgroup"
+                        | "tbody"
+                        | "td"
+                        | "tfoot"
+                        | "th"
+                        | "thead"
+                        | "tr"
+                ))
+                || (tag.kind == TagKind::End
+                    && matches!(tag.name.as_str(), "tbody" | "tfoot" | "thead" | "tr")) =>
+        {
+            // If a td or th is in table scope, close the cell and reprocess.
+            if helpers::has_element_in_table_scope(parser, "td")
+                || helpers::has_element_in_table_scope(parser, "th")
+            {
+                let target = if helpers::has_element_in_table_scope(parser, "td") {
+                    "td"
+                } else {
+                    "th"
+                };
+                helpers::generate_implied_end_tags(parser, None);
+                while let Some(top) = parser.open_elements.pop() {
+                    let is_target = top
+                        .borrow()
+                        .kind
+                        .as_element()
+                        .map(|e| e.local_name == target)
+                        .unwrap_or(false);
+                    if is_target {
+                        break;
+                    }
+                }
+                helpers::clear_active_formatting_to_last_marker(parser);
+                parser.insertion_mode = InsertionMode::InRow;
+                Step::Reprocess
+            } else {
+                parser.errors.push(ParseError::Generic(
+                    "unexpected token; no cell in table scope",
+                ));
+                Step::Done
+            }
+        }
+        _ => {
+            // Anything else: process using the rules for InBody.
+            handle_in_body(parser, token)
         }
     }
 }
