@@ -39,7 +39,16 @@ pub fn parse(input: &str) -> Rc<RefCell<Node>> {
     let document = Node::new_document();
     let mut tokenizer = HtmlTokenizer::new(input);
     let mut constructor = HtmlTreeConstructor::new(document.clone());
-    while let Some(token) = tokenizer.next_token() {
+    loop {
+        // §13.2.5.42: The markup declaration open state needs to know
+        // whether the adjusted current node is in foreign content to decide
+        // between CDATA section state (foreign) and bogus comment state
+        // (HTML) when encountering `<![CDATA[`. Sync the flag before each
+        // token is produced so the tokenizer sees the post-previous-token
+        // open elements stack state.
+        let in_foreign = constructor.current_node_in_foreign_content();
+        tokenizer.set_foreign_content(in_foreign);
+        let Some(token) = tokenizer.next_token() else { break };
         constructor.run(&token, &mut tokenizer);
         if matches!(token, Token::EOF) {
             break;
