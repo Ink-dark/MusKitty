@@ -82,6 +82,11 @@ pub struct HtmlTokenizer {
     /// Accumulator for numeric character reference value
     /// (§13.2.5.78–§13.2.5.79).
     character_reference_code: u32,
+    /// The `x` or `X` character consumed when entering a hexadecimal
+    /// character reference (§13.2.5.75). Preserved so that "flush code
+    /// points consumed as a character reference" (§13.2.5.81 anything-else)
+    /// can replay the original case rather than always emitting lowercase.
+    char_ref_hex_prefix: char,
 }
 
 impl HtmlTokenizer {
@@ -112,6 +117,7 @@ impl HtmlTokenizer {
             pending_tokens: Vec::new(),
             return_state: None,
             character_reference_code: 0,
+            char_ref_hex_prefix: 'x',
         }
     }
 
@@ -306,18 +312,12 @@ impl HtmlTokenizer {
             State::CDATASection => self.handle_cdata_section_state(),
             State::CDATASectionBracket => self.handle_cdata_section_bracket_state(),
             State::CDATASectionEnd => self.handle_cdata_section_end_state(),
-            State::ProcessingInstructionOpen => {
-                self.handle_processing_instruction_open_state()
-            }
-            State::ProcessingInstructionTarget => {
-                self.handle_processing_instruction_target_state()
-            }
+            State::ProcessingInstructionOpen => self.handle_processing_instruction_open_state(),
+            State::ProcessingInstructionTarget => self.handle_processing_instruction_target_state(),
             State::AfterProcessingInstructionTarget => {
                 self.handle_after_processing_instruction_target_state()
             }
-            State::ProcessingInstructionData => {
-                self.handle_processing_instruction_data_state()
-            }
+            State::ProcessingInstructionData => self.handle_processing_instruction_data_state(),
             State::ProcessingInstructionQuestionable => {
                 self.handle_processing_instruction_questionable_state()
             }
@@ -388,6 +388,7 @@ impl Tokenizer for HtmlTokenizer {
         self.pending_tokens.clear();
         self.return_state = None;
         self.character_reference_code = 0;
+        self.char_ref_hex_prefix = 'x';
     }
 
     fn set_appropriate_end_tag_name(&mut self, name: Option<&str>) {
@@ -806,17 +807,10 @@ impl HtmlTokenizer {
             }
             Some(_c) => self.rawtext_end_tag_name_backout(),
             None => {
-                // §13.2.5.14: EOF → parse error; switch to Data; emit `<` + `/`;
-                // reconsume the EOF token. Since we're at EOF, don't set
-                // `reconsume` here — the next `next_char()` call will
-                // naturally return `None`, and Data will emit EOF.
-                // TODO: record parse error (eof-in-tag)
-                self.pending_tokens.push(Token::Character('/'));
-                self.pending_tokens.push(Token::Character('<'));
-                self.current_tag = None;
-                self.temporary_buffer.clear();
-                self.state = State::Data;
-                None
+                // §13.2.5.14: 规范没有 EOF arm — EOF 走 "Anything else"：
+                // emit `<` + `/` + temp buffer 全部字符，reconsume in RAWTEXT。
+                // 与 RCDATA/ScriptData 同名状态一致，调用 backout 即可。
+                self.rawtext_end_tag_name_backout()
             }
         }
     }
@@ -1096,7 +1090,7 @@ impl HtmlTokenizer {
     ///
     /// Consume the next input character:
     /// - U+002D HYPHEN-MINUS (-) → ScriptDataEscapedDashDash, emit `-`
-    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign, emit `<`
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign (no emit)
     /// - U+0000 NULL → parse error; switch to ScriptDataEscaped; emit U+FFFD
     /// - EOF → parse error; emit end-of-file token
     /// - Anything else → switch to ScriptDataEscaped; emit current char
@@ -1109,10 +1103,11 @@ impl HtmlTokenizer {
                 Some(Token::Character('-'))
             }
             Some('<') => {
-                // §13.2.5.20: Switch to ScriptDataEscapedLessThanSign.
-                // Emit a `<` character token.
+                // §13.2.5.21: Switch to ScriptDataEscapedLessThanSign.
+                // (No emit — `<` is emitted by the less-than-sign state's
+                // alpha or anything-else branch, per §13.2.5.23.)
                 self.state = State::ScriptDataEscapedLessThanSign;
-                Some(Token::Character('<'))
+                None
             }
             Some('\0') => {
                 // TODO: record parse error (unexpected-null-character)
@@ -1138,7 +1133,7 @@ impl HtmlTokenizer {
     ///
     /// Consume the next input character:
     /// - U+002D HYPHEN-MINUS (-) → emit `-`
-    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign
+    /// - U+003C LESS-THAN SIGN (<) → ScriptDataEscapedLessThanSign (no emit)
     /// - U+003E GREATER-THAN SIGN (>) → emit `>`, switch to ScriptData
     /// - U+0000 NULL → parse error; switch to ScriptDataEscaped; emit U+FFFD
     /// - EOF → parse error; emit end-of-file token
@@ -1148,9 +1143,10 @@ impl HtmlTokenizer {
             Some('-') => Some(Token::Character('-')),
             Some('<') => {
                 // §13.2.5.22: Switch to ScriptDataEscapedLessThanSign.
-                // Emit a `<` character token.
+                // (No emit — `<` is emitted by the less-than-sign state's
+                // alpha or anything-else branch, per §13.2.5.23.)
                 self.state = State::ScriptDataEscapedLessThanSign;
-                Some(Token::Character('<'))
+                None
             }
             Some('>') => {
                 self.state = State::ScriptData;
@@ -1195,23 +1191,20 @@ impl HtmlTokenizer {
                 self.state = State::ScriptDataEscapedEndTagOpen;
                 None
             }
-            Some(c) if c.is_ascii_alphabetic() => {
-                // §13.2.5.23: Clear temp buffer. Append the lowercase version
-                // of the current input character to the temp buffer. Emit the
-                // current input character. Switch to ScriptDataDoubleEscapeStart.
-                // NOTE: no tag token is created — this is the double-escape
-                // detection mechanism, distinct from the `/` end-tag path.
+            Some(_c) if _c.is_ascii_alphabetic() => {
+                // §13.2.5.23: Set the temporary buffer to the empty string.
+                // Emit a U+003C LESS-THAN SIGN character token. Reconsume in
+                // the script data double escape start state.
                 //
-                // The `<` that consumed to reach this state was already
-                // emitted by the source state (§13.2.5.20 `<` branch emits
-                // nothing, but `<` only reaches §13.2.5.23 via §13.2.5.21 or
-                // §13.2.5.22 dash states, both of which emit `<`). So here we
-                // emit ONLY the alpha char. Verified by html5lib:
-                // `<!--<script>` → Character "<!--<script>" (single `<` before s).
+                // The `<` that led here was NOT emitted by the source state
+                // (§13.2.5.20/§13.2.5.21/§13.2.5.22 `<` branches all switch
+                // without emitting). The alpha char is reconsumed by
+                // ScriptDataDoubleEscapeStart, which appends it to the temp
+                // buffer and emits it.
                 self.temporary_buffer.clear();
-                self.temporary_buffer.push(c.to_ascii_lowercase());
                 self.state = State::ScriptDataDoubleEscapeStart;
-                Some(Token::Character(c))
+                self.reconsume = true;
+                Some(Token::Character('<'))
             }
             Some(_c) => {
                 // §13.2.5.23: Anything else — Emit `<` character token.
@@ -1501,13 +1494,19 @@ impl HtmlTokenizer {
                 None
             }
             Some(_c) => {
+                // §13.2.5.30: Anything else — Reconsume in the script data
+                // double escaped state. (No emit — the `<` was already emitted
+                // by §13.2.5.27's `<` branch.)
                 self.state = State::ScriptDataDoubleEscaped;
                 self.reconsume = true;
-                Some(Token::Character('<'))
+                None
             }
             None => {
+                // §13.2.5.30: EOF falls under "anything else" — reconsume in
+                // ScriptDataDoubleEscaped (which will emit EOF). No `<` emit.
                 self.state = State::ScriptDataDoubleEscaped;
-                Some(Token::Character('<'))
+                self.reconsume = true;
+                None
             }
         }
     }
@@ -1838,8 +1837,9 @@ impl HtmlTokenizer {
     /// - Anything else → parse error; emit `&#`, reconsume
     fn handle_numeric_character_reference_state(&mut self) -> Option<Token> {
         match self.next_char() {
-            Some('x') | Some('X') => {
+            Some(c) if c == 'x' || c == 'X' => {
                 self.character_reference_code = 0;
+                self.char_ref_hex_prefix = c;
                 self.state = State::HexCharacterReferenceStart;
                 None
             }
@@ -1917,8 +1917,8 @@ impl HtmlTokenizer {
                 };
                 self.character_reference_code = self
                     .character_reference_code
-                    .wrapping_mul(16)
-                    .wrapping_add(digit);
+                    .saturating_mul(16)
+                    .saturating_add(digit);
                 None
             }
             Some(';') => {
@@ -1952,8 +1952,8 @@ impl HtmlTokenizer {
                 let digit = c as u32 - '0' as u32;
                 self.character_reference_code = self
                     .character_reference_code
-                    .wrapping_mul(10)
-                    .wrapping_add(digit);
+                    .saturating_mul(10)
+                    .saturating_add(digit);
                 None
             }
             Some(';') => {
@@ -2037,17 +2037,18 @@ impl HtmlTokenizer {
         };
 
         let state = self.return_state.take().unwrap_or(State::Data);
-        // If returning to an attribute value state, append to attr value
+        self.state = state;
+        // §13.2.5.85 + §13.2.5 flush 定义：在属性值上下文下，flush 只 append
+        // 到 current_attr_value，不 emit character token。
         match state {
             State::AttributeValueDoubleQuoted
             | State::AttributeValueSingleQuoted
             | State::AttributeValueUnquoted => {
                 self.current_attr_value.push(ch);
+                None
             }
-            _ => {}
+            _ => Some(Token::Character(ch)),
         }
-        self.state = state;
-        Some(Token::Character(ch))
     }
 
     // ── Named entity table ────────────────────────────────────
@@ -2061,101 +2062,129 @@ impl HtmlTokenizer {
         crate::tokenizer::entities::resolve_named_entity(name)
     }
 
-    /// §13.2.5.73 Named character reference state
+    /// §13.2.5.78 Named character reference state
     ///
-    /// Consumes ASCII alphanumeric characters to build an entity name in
-    /// `temporary_buffer`, then looks it up in the entity table.
+    /// "Consume the maximum number of characters possible, where the consumed
+    /// characters are one of the identifiers in the first column of the named
+    /// character references table. Append each character to the temporary
+    /// buffer when it's consumed."
     ///
-    /// - On `;` → lookup `buffer + ";"`: if found → emit resolved char(s);
-    ///   else → flush `&` + buffer as literal, reconsume `;` in return state.
-    /// - On ASCII alphanum → append to buffer, stay.
-    /// - On anything else → lookup `buffer` (legacy entities only): if found
-    ///   → check attr-context rule, emit resolved or flush literal, reconsume
-    ///   in return state; else → flush `&` + buffer as literal, reconsume.
-    /// - EOF → lookup `buffer`: if found → emit; else → flush literal.
+    /// Strategy: greedily consume ASCII alphanumeric chars into the buffer,
+    /// then find the longest prefix that matches an entity name. If the next
+    /// input char is `;` and `prefix + ";"` matches, prefer that form (it is
+    /// one char longer and avoids the missing-semicolon parse error).
+    ///
+    /// Match examples (§13.2.5.78):
+    ///   `&notit;` → match `not` (legacy), emit `¬`, reconsume `it;` in
+    ///   return state. `&notin;` → match `notin;`, emit `∉`, no parse error.
     ///
     /// In attribute value context, resolved chars and literal flushes go ONLY
     /// to `current_attr_value` — no Character tokens are emitted. In body
     /// context, they go ONLY to the token stream.
     fn handle_named_character_reference_state(&mut self) -> Option<Token> {
-        match self.next_char() {
-            Some(';') => {
-                // Try to resolve as entity with `;` appended.
-                let name_with_semi = format!("{};", self.temporary_buffer);
-                match Self::resolve_named_entity(&name_with_semi) {
-                    Some(s) => {
-                        self.temporary_buffer.clear();
-                        let state = self.return_state.take().unwrap_or(State::Data);
-                        self.state = state;
-                        self.emit_resolved(s, state)
-                    }
-                    None => {
-                        // No match: flush `&` + buffer as literal, reconsume
-                        // `;` in return state (which emits `;` as literal).
-                        let state = self.return_state.take().unwrap_or(State::Data);
-                        self.flush_literal_ampersand_and_name(state);
-                        self.state = state;
-                        self.reconsume = true;
-                        None
-                    }
+        // The first alphanumeric was reconsumed by CharacterReference state —
+        // consume it now and seed the buffer.
+        if let Some(c) = self.next_char() {
+            self.temporary_buffer.push(c);
+        }
+
+        // Consume remaining ASCII alphanumeric chars greedily (§13.2.5.78:
+        // "maximum number of characters possible").
+        while let Some(&c) = self.input.get(self.pos) {
+            if !c.is_ascii_alphanumeric() {
+                break;
+            }
+            self.temporary_buffer.push(c);
+            self.pos += 1;
+            self.last_was_eof = false;
+        }
+
+        // Peek the next input char (do not consume yet).
+        let next_is_semicolon = self.input.get(self.pos).copied() == Some(';');
+
+        // Find the longest prefix of `temporary_buffer` that matches an
+        // entity name. The `prefix + ";"` form is only valid when L equals
+        // the full buffer length, because `;` (if present) is adjacent only
+        // to the end of the buffer — not to any shorter prefix. For shorter
+        // prefixes, the char immediately after the prefix is another
+        // alphanumeric, never `;`. `match_len` counts total consumed chars
+        // including `;` when `has_semi` is true.
+        let buf_len = self.temporary_buffer.len();
+        let mut best_match: Option<(usize, &'static str, bool)> = None;
+        for L in (1..=buf_len).rev() {
+            if best_match.is_some() {
+                break;
+            }
+            if next_is_semicolon && L == buf_len {
+                let mut with_semi = String::with_capacity(L + 1);
+                with_semi.push_str(&self.temporary_buffer);
+                with_semi.push(';');
+                if let Some(s) = Self::resolve_named_entity(&with_semi) {
+                    best_match = Some((L + 1, s, true));
+                    continue;
                 }
             }
-            Some(c) if c.is_ascii_alphanumeric() => {
-                self.temporary_buffer.push(c);
-                None
+            if let Some(s) = Self::resolve_named_entity(&self.temporary_buffer[..L]) {
+                best_match = Some((L, s, false));
             }
-            Some(c) => {
-                // Non-alphanumeric, non-`;`: try lookup without `;` (legacy).
-                match Self::resolve_named_entity(&self.temporary_buffer) {
-                    Some(s) => {
-                        let state = self.return_state.take().unwrap_or(State::Data);
-                        // Attr-context rule (§13.2.5.77): if consumed as part
-                        // of an attribute, and the match doesn't end with `;`
-                        // (legacy), and the next char is `=` or ASCII alphanum,
-                        // don't resolve — flush as literal instead.
-                        let in_attr = matches!(
-                            state,
-                            State::AttributeValueDoubleQuoted
-                                | State::AttributeValueSingleQuoted
-                                | State::AttributeValueUnquoted
-                        );
-                        if in_attr && (c == '=' || c.is_ascii_alphanumeric()) {
-                            self.flush_literal_ampersand_and_name(state);
-                            self.state = state;
-                            self.reconsume = true;
-                            None
-                        } else {
-                            self.temporary_buffer.clear();
-                            self.state = state;
-                            self.reconsume = true;
-                            self.emit_resolved(s, state)
-                        }
-                    }
-                    None => {
-                        let state = self.return_state.take().unwrap_or(State::Data);
-                        self.flush_literal_ampersand_and_name(state);
-                        self.state = state;
-                        self.reconsume = true;
-                        None
+        }
+
+        let return_state = self.return_state.take().unwrap_or(State::Data);
+        let in_attr = matches!(
+            return_state,
+            State::AttributeValueDoubleQuoted
+                | State::AttributeValueSingleQuoted
+                | State::AttributeValueUnquoted
+        );
+
+        match best_match {
+            Some((match_len, resolved, has_semi)) => {
+                // If the match includes `;`, consume it now.
+                if has_semi {
+                    self.pos += 1;
+                    self.last_was_eof = false;
+                    self.temporary_buffer.push(';');
+                }
+                // Rewind position to the end of the match so that any
+                // consumed chars beyond the match are reprocessed in the
+                // return state (§13.2.5.78 "maximum number" rule).
+                let extra = self.temporary_buffer.len() - match_len;
+                if extra > 0 {
+                    self.pos -= extra;
+                    self.temporary_buffer.truncate(match_len);
+                }
+
+                // §13.2.5.78 attr-context historical rule: if consumed as
+                // part of an attribute, last matched char is not `;`, and
+                // the next input char is `=` or ASCII alphanumeric, flush
+                // as literal (don't resolve the entity).
+                let next_after_match = self.input.get(self.pos).copied();
+                if in_attr && !has_semi {
+                    if next_after_match == Some('=')
+                        || matches!(next_after_match, Some(c) if c.is_ascii_alphanumeric())
+                    {
+                        self.flush_literal_ampersand_and_name(return_state);
+                        self.state = return_state;
+                        return None;
                     }
                 }
+
+                // Normal path: emit resolved char(s). (Missing-semicolon
+                // parse error per §13.2.5.78 step 1 is not recorded here.)
+                self.temporary_buffer.clear();
+                self.state = return_state;
+                self.emit_resolved(resolved, return_state)
             }
             None => {
-                // EOF: try lookup without `;` (legacy only).
-                match Self::resolve_named_entity(&self.temporary_buffer) {
-                    Some(s) => {
-                        self.temporary_buffer.clear();
-                        let state = self.return_state.take().unwrap_or(State::Data);
-                        self.state = state;
-                        self.emit_resolved(s, state)
-                    }
-                    None => {
-                        let state = self.return_state.take().unwrap_or(State::Data);
-                        self.flush_literal_ampersand_and_name(state);
-                        self.state = state;
-                        None
-                    }
-                }
+                // No match: flush `&` + consumed name as literal. The next
+                // input char (boundary) is consumed fresh in the return
+                // state — functionally equivalent to the spec's "flush +
+                // switch to ambiguous ampersand state" path, since all
+                // consumed chars are ASCII alphanumeric and would be
+                // emitted/appended one-by-one in ambiguous ampersand state.
+                self.flush_literal_ampersand_and_name(return_state);
+                self.state = return_state;
+                None
             }
         }
     }
@@ -2242,48 +2271,74 @@ impl HtmlTokenizer {
 
     /// Emit `&` and return to the return_state.
     /// Used when an `&` is not followed by a valid character reference.
-    /// Per spec §13.2.5.72, the current input character is re-consumed
-    /// in the return state.
+    /// Per spec §13.2.5.77 "Anything else → flush code points consumed as
+    /// a character reference. Reconsume in the return state." 临时缓冲区
+    /// 只有 `&`，按 §13.2.5 flush 定义：属性上下文 append 到 attr value 并返回
+    /// None；其他上下文 emit character token。
     fn emit_ampersand_and_return(&mut self) -> Option<Token> {
         let state = self.return_state.take().unwrap_or(State::Data);
         self.state = state;
         self.reconsume = true;
-        self.append_char_to_attr_if_needed('&', state);
-        Some(Token::Character('&'))
-    }
-
-    /// Emit `&#` and return via pending tokens.
-    fn emit_ampersand_hash_and_return(&mut self) -> Option<Token> {
-        self.pending_tokens.push(Token::Character('#'));
-        self.pending_tokens.push(Token::Character('&'));
-        let state = self.return_state.take().unwrap_or(State::Data);
-        self.state = state;
-        self.reconsume = true;
-        None
-    }
-
-    /// Emit `&#x` and return via pending tokens.
-    fn emit_ampersand_hash_x_and_return(&mut self) -> Option<Token> {
-        self.pending_tokens.push(Token::Character('x'));
-        self.pending_tokens.push(Token::Character('#'));
-        self.pending_tokens.push(Token::Character('&'));
-        let state = self.return_state.take().unwrap_or(State::Data);
-        self.state = state;
-        self.reconsume = true;
-        None
-    }
-
-    /// Append a character to `current_attr_value` if the state is
-    /// an attribute value state.
-    fn append_char_to_attr_if_needed(&mut self, ch: char, state: State) {
         match state {
             State::AttributeValueDoubleQuoted
             | State::AttributeValueSingleQuoted
             | State::AttributeValueUnquoted => {
-                self.current_attr_value.push(ch);
+                self.current_attr_value.push('&');
+                None
             }
-            _ => {}
+            _ => Some(Token::Character('&')),
         }
+    }
+
+    /// Emit `&#` and return. §13.2.5.80/82 "absence-of-digits-in-numeric-
+    /// character-reference parse error. Flush code points consumed as a
+    /// character reference. Reconsume in the return state." 临时缓冲区是
+    /// `&#`，按 §13.2.5 flush 定义：属性上下文 append 到 attr value；其他上下文
+    /// push 到 pending_tokens（`&` 先 pop，再 `#`）。
+    fn emit_ampersand_hash_and_return(&mut self) -> Option<Token> {
+        let state = self.return_state.take().unwrap_or(State::Data);
+        self.state = state;
+        self.reconsume = true;
+        match state {
+            State::AttributeValueDoubleQuoted
+            | State::AttributeValueSingleQuoted
+            | State::AttributeValueUnquoted => {
+                self.current_attr_value.push('&');
+                self.current_attr_value.push('#');
+            }
+            _ => {
+                self.pending_tokens.push(Token::Character('#'));
+                self.pending_tokens.push(Token::Character('&'));
+            }
+        }
+        None
+    }
+
+    /// Emit `&#x` (or `&#X`) and return. §13.2.5.81 "absence-of-digits-in-
+    /// numeric-character-reference parse error. Flush code points consumed
+    /// as a character reference. Reconsume in the return state." 临时缓冲区
+    /// 是 `&#x`，用 `char_ref_hex_prefix` 保留原 case。按 §13.2.5 flush 定义：
+    /// 属性上下文 append 到 attr value；其他上下文 push 到 pending_tokens。
+    fn emit_ampersand_hash_x_and_return(&mut self) -> Option<Token> {
+        let state = self.return_state.take().unwrap_or(State::Data);
+        self.state = state;
+        self.reconsume = true;
+        match state {
+            State::AttributeValueDoubleQuoted
+            | State::AttributeValueSingleQuoted
+            | State::AttributeValueUnquoted => {
+                self.current_attr_value.push('&');
+                self.current_attr_value.push('#');
+                self.current_attr_value.push(self.char_ref_hex_prefix);
+            }
+            _ => {
+                self.pending_tokens
+                    .push(Token::Character(self.char_ref_hex_prefix));
+                self.pending_tokens.push(Token::Character('#'));
+                self.pending_tokens.push(Token::Character('&'));
+            }
+        }
+        None
     }
 
     // ── Attribute state helpers ───────────────────────────────────
@@ -2333,11 +2388,19 @@ impl HtmlTokenizer {
         }
 
         // 检查 "[CDATA["（7 字符）
+        // §13.2.5.42: If the adjusted current node is not in the HTML
+        // namespace, switch to CDATA section state. Otherwise, this is a
+        // cdata-in-html-content parse error: create a comment token with
+        // data "[CDATA[" and switch to bogus comment state.
+        // Since foreign content (SVG/MathML) is not yet implemented, we
+        // always take the "cdata-in-html-content" branch.
         if self.pos + 6 < self.input.len() {
             let slice: String = self.input[self.pos..self.pos + 7].iter().collect();
             if slice == "[CDATA[" {
                 self.pos += 7;
-                self.state = State::CDATASection;
+                self.current_comment.clear();
+                self.current_comment.push_str("[CDATA[");
+                self.state = State::BogusComment;
                 return None;
             }
         }
@@ -2354,18 +2417,18 @@ impl HtmlTokenizer {
     ///
     /// Consume the next input character:
     /// - U+005D RIGHT SQUARE BRACKET (]) → CDATASectionBracket
-    /// - U+0000 NULL → parse error; emit U+FFFD character token
-    /// - EOF → parse error; emit end-of-file token
+    /// - EOF → parse error (eof-in-cdata); emit end-of-file token
     /// - Anything else → emit character token
+    ///
+    /// 注意：§13.2.5.69 规范明确说明 "U+0000 NULL characters are handled in
+    /// the tree construction stage, as part of the in foreign content
+    /// insertion mode"。tokenizer 不对 NUL 做特殊处理，按 "Anything else"
+    /// emit NUL 字符 token，由 tree construction 阶段处理。
     fn handle_cdata_section_state(&mut self) -> Option<Token> {
         match self.next_char() {
             Some(']') => {
                 self.state = State::CDATASectionBracket;
                 None
-            }
-            Some('\0') => {
-                // TODO: record parse error (unexpected-null-character)
-                Some(Token::Character('\u{FFFD}'))
             }
             Some(c) => Some(Token::Character(c)),
             None => {
@@ -2564,7 +2627,10 @@ impl HtmlTokenizer {
             }
             Some('>') => {
                 self.state = State::Data;
-                let (target, data) = self.current_pi.take().unwrap_or((String::new(), String::new()));
+                let (target, data) = self
+                    .current_pi
+                    .take()
+                    .unwrap_or((String::new(), String::new()));
                 Some(Token::ProcessingInstruction { target, data })
             }
             None => {
@@ -2589,7 +2655,10 @@ impl HtmlTokenizer {
         match self.next_char() {
             Some('>') => {
                 self.state = State::Data;
-                let (target, data) = self.current_pi.take().unwrap_or((String::new(), String::new()));
+                let (target, data) = self
+                    .current_pi
+                    .take()
+                    .unwrap_or((String::new(), String::new()));
                 Some(Token::ProcessingInstruction { target, data })
             }
             None => {
@@ -5547,7 +5616,9 @@ mod tests {
 
     #[test]
     fn rawtext_end_tag_name_eof() {
-        // RAWTEXT end tag name on EOF emits `</` + switch to Data
+        // §13.2.5.14: EOF has no dedicated arm — falls to "Anything else":
+        // emit '<', '/', and each char in temp buffer. Reconsume in RAWTEXT.
+        // §13.2.5.3: RAWTEXT on EOF emits EOF token.
         let mut t = enter_content_model("</sty", State::RAWTEXT, Some("style"));
         // '<' → RAWTEXTLessThanSign
         assert_eq!(t.step(), None);
@@ -5557,13 +5628,16 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(t.step(), None);
         }
-        // EOF → handler pushes pending '<' '/' and returns None
+        // EOF → backout: pushes '<', '/', 's', 't', 'y' to pending, returns None
         assert_eq!(t.step(), None);
-        // Pending tokens drained
+        // Pending tokens drained (in order: '<', '/', 's', 't', 'y')
         assert_eq!(t.next_token(), Some(Token::Character('<')));
         assert_eq!(t.next_token(), Some(Token::Character('/')));
-        // Next call: state is Data, naturally at EOF → Data emits EOF
-        assert_eq!(t.state(), State::Data);
+        assert_eq!(t.next_token(), Some(Token::Character('s')));
+        assert_eq!(t.next_token(), Some(Token::Character('t')));
+        assert_eq!(t.next_token(), Some(Token::Character('y')));
+        // State is RAWTEXT (not Data), reconsume EOF → RAWTEXT emits EOF
+        assert_eq!(t.state(), State::RAWTEXT);
         assert_eq!(t.next_token(), Some(Token::EOF));
     }
 
@@ -5712,13 +5786,13 @@ mod tests {
     #[test]
     fn script_data_escaped_lt_alpha_to_double_escape_start() {
         // `<s` in escaped. §13.2.5.20: `<` does NOT emit (Nothing emitted),
-        // switches to EscapedLessThanSign. §13.2.5.23: alpha emits ONLY the
-        // current char `s` (the `<` is emitted by the dash/dash-dash state
-        // that precedes ScriptDataEscaped in a real stream — here we enter
-        // ScriptDataEscaped directly so the `<` is spec-correctly dropped).
+        // switches to EscapedLessThanSign. §13.2.5.23: alpha branch emits `<`
+        // and reconsumes in ScriptDataDoubleEscapeStart; the reconsumed `s`
+        // is then appended to the temp buffer and emitted.
         let mut t = enter_content_model("<s", State::ScriptDataEscaped, Some("script"));
         assert_eq!(t.step(), None); // '<' → EscapedLessThanSign (no emit)
-        assert_eq!(t.step(), Some(Token::Character('s'))); // 's' → alpha, emit `s`
+        assert_eq!(t.step(), Some(Token::Character('<'))); // 's' → alpha, emit '<', reconsume
+        assert_eq!(t.step(), Some(Token::Character('s'))); // 's' reconsumed → DoubleEscapeStart, emit 's'
         assert_eq!(t.state(), State::ScriptDataDoubleEscapeStart);
     }
 
@@ -5805,9 +5879,10 @@ mod tests {
 
     #[test]
     fn char_ref_named_amp() {
-        // `&amp;` → `&`: '&' 'a' 'm' 'p' ';' (5 Nones → Some)
+        // `&amp;` → `&`: Data→CharRef (None), CharRef→NamedCharRef (None),
+        // NamedCharRef greedily consumes `amp;` and emits `&` (Some).
         let mut t = HtmlTokenizer::new("&amp;");
-        for _ in 0..5 {
+        for _ in 0..2 {
             assert_eq!(t.step(), None);
         }
         assert_eq!(t.next_token(), Some(Token::Character('&')));
@@ -5815,9 +5890,9 @@ mod tests {
 
     #[test]
     fn char_ref_named_lt() {
-        // `&lt;` → `<`: '&' 'l' 't' ';' (3 Nones → Some)
+        // `&lt;` → `<`: 2 Nones (Data, CharRef), then NamedCharRef emits.
         let mut t = HtmlTokenizer::new("&lt;");
-        for _ in 0..4 {
+        for _ in 0..2 {
             assert_eq!(t.step(), None);
         }
         assert_eq!(t.next_token(), Some(Token::Character('<')));
@@ -5825,9 +5900,9 @@ mod tests {
 
     #[test]
     fn char_ref_named_gt() {
-        // `&gt;` → `>`: '&' 'g' 't' ';' (4 Nones → Some)
+        // `&gt;` → `>`: 2 Nones (Data, CharRef), then NamedCharRef emits.
         let mut t = HtmlTokenizer::new("&gt;");
-        for _ in 0..4 {
+        for _ in 0..2 {
             assert_eq!(t.step(), None);
         }
         assert_eq!(t.next_token(), Some(Token::Character('>')));
@@ -5835,9 +5910,9 @@ mod tests {
 
     #[test]
     fn char_ref_named_quot() {
-        // `&quot;` → `"`: '&' 'q' 'u' 'o' 't' ';' (5 Nones → Some)
+        // `&quot;` → `"`: 2 Nones (Data, CharRef), then NamedCharRef emits.
         let mut t = HtmlTokenizer::new("&quot;");
-        for _ in 0..6 {
+        for _ in 0..2 {
             assert_eq!(t.step(), None);
         }
         assert_eq!(t.next_token(), Some(Token::Character('"')));
@@ -5920,9 +5995,10 @@ mod tests {
 
     #[test]
     fn char_ref_notin_entity() {
-        // `&notin;` → ∉ (U+2209), now in full entity table
+        // `&notin;` → ∉ (U+2209): §13.2.5.78 longest match picks `notin;`
+        // over legacy `not`. 2 Nones (Data, CharRef), then NamedCharRef emits.
         let mut t = HtmlTokenizer::new("&notin;");
-        for _ in 0..7 {
+        for _ in 0..2 {
             assert_eq!(t.step(), None);
         }
         assert_eq!(t.next_token(), Some(Token::Character('\u{2209}')));
@@ -5932,12 +6008,12 @@ mod tests {
     fn char_ref_e2e_data_state() {
         // `&lt;a&gt;` → `<a>`
         let mut t = HtmlTokenizer::new("&lt;a&gt;");
-        for _ in 0..4 {
+        for _ in 0..2 {
             assert_eq!(t.step(), None);
         } // &lt; resolved
         assert_eq!(t.next_token(), Some(Token::Character('<')));
         assert_eq!(t.next_token(), Some(Token::Character('a')));
-        for _ in 0..4 {
+        for _ in 0..2 {
             assert_eq!(t.step(), None);
         } // &gt; resolved
         assert_eq!(t.next_token(), Some(Token::Character('>')));
@@ -5948,29 +6024,30 @@ mod tests {
 
     #[test]
     fn cdata_emits_characters() {
-        // `<![CDATA[hello]]>` via MarkupDeclarationOpen
+        // §13.2.5.42: `<![CDATA[hello]]>` in HTML content is a
+        // cdata-in-html-content parse error. A comment token with data
+        // "[CDATA[" is created, and the tokenizer switches to bogus
+        // comment state. The bogus comment state appends remaining
+        // characters until `>`, then emits the comment.
         let mut t = HtmlTokenizer::new("<![CDATA[hello]]>");
         assert_eq!(t.step(), None); // Data → TagOpen
         assert_eq!(t.step(), None); // TagOpen → MarkupDeclarationOpen
-        assert_eq!(t.step(), None); // "[CDATA[" → CDATASection
-        assert_eq!(t.next_token(), Some(Token::Character('h')));
-        assert_eq!(t.next_token(), Some(Token::Character('e')));
-        assert_eq!(t.next_token(), Some(Token::Character('l')));
-        assert_eq!(t.next_token(), Some(Token::Character('l')));
-        assert_eq!(t.next_token(), Some(Token::Character('o')));
-        // ']' → CDATASectionBracket
-        assert_eq!(t.step(), None);
-        // ']' → CDATASectionEnd
-        assert_eq!(t.step(), None);
-        // '>' → Data (CDATA closed, no token emitted)
-        assert_eq!(t.step(), None);
+        assert_eq!(t.step(), None); // "[CDATA[" → BogusComment (comment data = "[CDATA[")
+                                    // BogusComment consumes "hello]]" and emits on ">"
+        assert_eq!(
+            t.next_token(),
+            Some(Token::Comment("[CDATA[hello]]".to_string()))
+        );
         assert_eq!(t.state(), State::Data);
     }
 
     #[test]
-    fn cdata_null_emits_replacement_char() {
+    fn cdata_null_emits_character() {
+        // §13.2.5.69 CDATA section state has no NUL arm — NUL falls to
+        // "Anything else" → emit as character token. NUL→FFFD replacement
+        // happens in tree construction, not tokenization.
         let mut t = enter_content_model("\0x", State::CDATASection, None);
-        assert_eq!(t.next_token(), Some(Token::Character('\u{FFFD}')));
+        assert_eq!(t.next_token(), Some(Token::Character('\0')));
         assert_eq!(t.next_token(), Some(Token::Character('x')));
     }
 
