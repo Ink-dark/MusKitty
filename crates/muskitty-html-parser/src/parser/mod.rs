@@ -14,6 +14,7 @@
 //! - [`insertion_mode`] defines the 23 insertion modes from §13.2.6.1.
 
 mod dispatch;
+mod foreign;
 mod helpers;
 mod insertion_mode;
 
@@ -130,6 +131,24 @@ impl HtmlTreeConstructor {
             .unwrap_or_else(|| self.document.clone())
     }
 
+    /// Whether the adjusted current node is in foreign content (i.e., not
+    /// in the HTML namespace).
+    ///
+    /// Used by the tokenizer to decide between CDATA section state and
+    /// bogus comment state when encountering `<![CDATA[` (§13.2.5.42).
+    /// Returns `false` when the stack is empty (no adjusted current node)
+    /// or the current node is in the HTML namespace.
+    pub fn current_node_in_foreign_content(&self) -> bool {
+        match self.open_elements.last() {
+            Some(node) => {
+                let n = node.borrow();
+                matches!(&n.kind, muskitty_dom::NodeKind::Element(e)
+                    if e.namespace != muskitty_dom::Namespace::Html)
+            }
+            None => false,
+        }
+    }
+
     /// Feed a single token to the tree construction state machine.
     ///
     /// Dispatches the token to the handler for the current insertion mode.
@@ -148,10 +167,20 @@ impl HtmlTreeConstructor {
                 return;
             }
         }
+        let mut reprocess_count = 0u32;
         loop {
             match dispatch::dispatch(self, token, tokenizer) {
                 dispatch::Step::Done => return,
-                dispatch::Step::Reprocess => continue,
+                dispatch::Step::Reprocess => {
+                    reprocess_count += 1;
+                    if reprocess_count > 50 {
+                        panic!(
+                            "reprocess loop on token {:?}, insertion_mode {:?}",
+                            token, self.insertion_mode
+                        );
+                    }
+                    continue;
+                }
             }
         }
     }

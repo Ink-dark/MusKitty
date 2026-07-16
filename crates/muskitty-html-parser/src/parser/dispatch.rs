@@ -40,6 +40,33 @@ pub fn dispatch(
     token: &Token,
     tokenizer: &mut dyn Tokenizer,
 ) -> Step {
+    // Tree construction dispatcher (§13.2.6): if the adjusted current node
+    // is in foreign content and none of the integration-point escape hatches
+    // apply, route the token to the foreign-content rules instead of the
+    // current insertion mode. The dispatcher is re-evaluated on every token
+    // (and on every reprocess), so once a foreign element is popped off the
+    // stack the parser automatically returns to HTML content.
+    if super::foreign::dispatcher_routes_to_foreign(parser, token) {
+        return super::foreign::process_in_foreign_content(parser, token, tokenizer);
+    }
+    dispatch_in_current_mode(parser, token, tokenizer)
+}
+
+/// Process a token using the rules for the current insertion mode, **without**
+/// re-evaluating the tree construction dispatcher (§13.2.6).
+///
+/// This is used by the foreign-content end-tag handler (§13.2.6.5 "Any other
+/// end tag" step 7), which — after walking the stack and finding an HTML
+/// element — must hand the token to the current insertion mode directly.
+/// Returning `Step::Reprocess` instead would re-enter `dispatch`, which would
+/// re-run the dispatcher and route the token back into foreign content (since
+/// the foreign element is still on top of the stack), causing an infinite
+/// reprocess loop.
+pub(crate) fn dispatch_in_current_mode(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match parser.insertion_mode {
         InsertionMode::Initial => handle_initial(parser, token),
         InsertionMode::BeforeHtml => handle_before_html(parser, token),
@@ -70,12 +97,12 @@ fn is_whitespace(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\u{000C}' | '\r' | ' ')
 }
 
-/// Create an element with the given tag name, append it to the current node,
-/// and push it onto the open elements stack.
+/// Create an element with the given tag name, insert it at the appropriate
+/// insertion location (§13.2.6.2 — handles template content and foster
+/// parenting), and push it onto the open elements stack.
 fn create_and_push(parser: &mut HtmlTreeConstructor, name: &str) {
     let element = Node::new_element_html(name, vec![], &parser.document);
-    let current = parser.current_node();
-    let _ = append_child(&current, element.clone());
+    helpers::insert_node(parser, &element);
     parser.open_elements.push(element);
 }
 
@@ -364,15 +391,21 @@ fn handle_in_head(
             }
             // Generate implied end tags.
             helpers::generate_implied_end_tags(parser, None);
-            // Pop until a template element is popped.
+            // Pop until a template element is popped. Per §13.2.6.2, a
+            // "template element" is an HTML element whose local name is
+            // "template" — an SVG-namespaced `<template>` (e.g. inside
+            // `<svg><foo><template>`) must NOT match.
             while let Some(top) = parser.open_elements.pop() {
-                let is_template = top
+                let is_html_template = top
                     .borrow()
                     .kind
                     .as_element()
-                    .map(|e| e.local_name == "template")
+                    .map(|e| {
+                        e.local_name == "template"
+                            && e.namespace == muskitty_dom::Namespace::Html
+                    })
                     .unwrap_or(false);
-                if is_template {
+                if is_html_template {
                     break;
                 }
             }
@@ -687,7 +720,51 @@ fn handle_in_body(
     tokenizer: &mut dyn Tokenizer,
 ) -> Step {
     match token {
-        Token::EOF => Step::Done,
+        Token::EOF => {
+            // §13.2.6.4.7: If the stack of template insertion modes is not
+            // empty, process the token using the rules for the "in template"
+            // insertion mode. Otherwise, check for unexpected elements (parse
+            // error), then stop parsing.
+            if !parser.template_insertion_modes.is_empty() {
+                return handle_in_template(parser, token, tokenizer);
+            }
+            // Parse error if any open element is not in the allowed set.
+            let unexpected = parser.open_elements.iter().any(|n| {
+                let borrowed = n.borrow();
+                let local = borrowed
+                    .kind
+                    .as_element()
+                    .map(|e| e.local_name.as_str())
+                    .unwrap_or("");
+                !matches!(
+                    local,
+                    "dd"
+                        | "dt"
+                        | "li"
+                        | "optgroup"
+                        | "option"
+                        | "p"
+                        | "rb"
+                        | "rp"
+                        | "rt"
+                        | "rtc"
+                        | "tbody"
+                        | "td"
+                        | "tfoot"
+                        | "th"
+                        | "thead"
+                        | "tr"
+                        | "body"
+                        | "html"
+                )
+            });
+            if unexpected {
+                parser
+                    .errors
+                    .push(ParseError::Generic("unexpected open element at EOF"));
+            }
+            Step::Done
+        }
         Token::Character(c) if is_whitespace(*c) => {
             helpers::reconstruct_active_formatting_elements(parser);
             helpers::insert_character(parser, *c);
@@ -752,15 +829,17 @@ fn handle_in_body_start_tag(
     let name = tag.name.as_str();
 
     // "html" — merge attributes onto the existing <html> element.
+    // §13.2.6.4.7: If there is a template element on the stack of open
+    // elements, then ignore the token. Otherwise, merge attributes.
     if name == "html" {
         parser
             .errors
             .push(ParseError::Generic("unexpected <html> start tag in body"));
-        // Merge attributes onto the html element (top of stack after document).
-        if let Some(html) = parser.open_elements.first().cloned() {
-            merge_attributes(&html, tag);
+        if !template_in_stack(parser) {
+            if let Some(html) = parser.open_elements.first().cloned() {
+                merge_attributes(&html, tag);
+            }
         }
-        parser.frameset_ok = false;
         return Step::Done;
     }
 
@@ -837,16 +916,26 @@ fn handle_in_body_start_tag(
 
     // "body" — merge attributes onto the existing <body> element.
     if name == "body" {
+        // §13.2.6.4.7: Parse error. If the stack has only one node, or the
+        // second element is not a body element, or if there is a template
+        // element on the stack, then ignore the token. Otherwise, merge
+        // attributes onto the body element (second element on the stack).
         parser
             .errors
             .push(ParseError::Generic("unexpected <body> start tag in body"));
-        if parser.open_elements.len() >= 2 {
-            // open_elements[1] is typically the body.
+        let should_ignore = parser.open_elements.len() < 2
+            || !parser
+                .open_elements
+                .get(1)
+                .and_then(|n| n.borrow().kind.as_element().map(|e| e.local_name == "body"))
+                .unwrap_or(false)
+            || template_in_stack(parser);
+        if !should_ignore {
             if let Some(body) = parser.open_elements.get(1).cloned() {
                 merge_attributes(&body, tag);
             }
+            parser.frameset_ok = false;
         }
-        parser.frameset_ok = false;
         return Step::Done;
     }
 
@@ -1263,20 +1352,21 @@ fn handle_in_body_start_tag(
             });
             if has_a_in_afe {
                 helpers::adoption_agency(parser, "a");
-                // Remove any <a> elements from the active formatting list
-                // and the open elements stack.
+                // §13.2.6.4.7: Remove that <a> element from the list of
+                // active formatting elements and the stack of open elements
+                // if the adoption agency algorithm didn't already remove it.
                 parser.active_formatting_elements.retain(|e| {
                     !matches!(e, ActiveFormattingEntry::Element(el) if {
                         let l = el.borrow();
                         l.kind.as_element().map(|e| e.local_name.as_str()) == Some("a")
                     })
                 });
-                if let Some(pos) = parser.open_elements.iter().position(|n| {
+                // Remove the <a> from the stack WITHOUT truncating elements
+                // above it (e.g. <table> must stay on the stack).
+                parser.open_elements.retain(|n| {
                     let l = n.borrow();
-                    l.kind.as_element().map(|e| e.local_name.as_str()) == Some("a")
-                }) {
-                    parser.open_elements.truncate(pos);
-                }
+                    l.kind.as_element().map(|e| e.local_name.as_str()) != Some("a")
+                });
             }
         }
         // Special case for <nobr> (§13.2.6.4.7): if there is a <nobr> in
@@ -1446,6 +1536,48 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
+    // <math> (§13.2.6.4.7): reconstruct active formatting, adjust MathML
+    // attributes, adjust foreign attributes, insert a foreign element with
+    // the MathML namespace. If self-closing, pop the current node and
+    // acknowledge the flag.
+    if name == "math" {
+        helpers::reconstruct_active_formatting_elements(parser);
+        let mut adjusted = tag.clone();
+        super::foreign::adjust_mathml_attributes(&mut adjusted);
+        super::foreign::adjust_foreign_attributes(&mut adjusted);
+        super::foreign::insert_foreign_element(
+            parser,
+            &adjusted,
+            muskitty_dom::Namespace::MathMl,
+            false,
+        );
+        if tag.self_closing {
+            parser.open_elements.pop();
+        }
+        return Step::Done;
+    }
+
+    // <svg> (§13.2.6.4.7): reconstruct active formatting, adjust SVG
+    // attributes, adjust foreign attributes, insert a foreign element with
+    // the SVG namespace. If self-closing, pop the current node and
+    // acknowledge the flag.
+    if name == "svg" {
+        helpers::reconstruct_active_formatting_elements(parser);
+        let mut adjusted = tag.clone();
+        super::foreign::adjust_svg_attributes(&mut adjusted);
+        super::foreign::adjust_foreign_attributes(&mut adjusted);
+        super::foreign::insert_foreign_element(
+            parser,
+            &adjusted,
+            muskitty_dom::Namespace::Svg,
+            false,
+        );
+        if tag.self_closing {
+            parser.open_elements.pop();
+        }
+        return Step::Done;
+    }
+
     // Anything else (start tag): reconstruct active formatting, insert.
     helpers::reconstruct_active_formatting_elements(parser);
     helpers::insert_element(parser, tag);
@@ -1469,14 +1601,20 @@ fn handle_in_body_end_tag(
             return Step::Done;
         }
         helpers::generate_implied_end_tags(parser, None);
+        // Pop until an HTML template element is popped. Per §13.2.6.2, a
+        // "template element" is an HTML element whose local name is
+        // "template" — an SVG-namespaced `<template>` must NOT match.
         while let Some(top) = parser.open_elements.pop() {
-            let is_template = top
+            let is_html_template = top
                 .borrow()
                 .kind
                 .as_element()
-                .map(|e| e.local_name == "template")
+                .map(|e| {
+                    e.local_name == "template"
+                        && e.namespace == muskitty_dom::Namespace::Html
+                })
                 .unwrap_or(false);
-            if is_template {
+            if is_html_template {
                 break;
             }
         }
@@ -2137,7 +2275,15 @@ fn handle_in_table(
         }
         Token::Tag(tag) if tag.kind == TagKind::End => match tag.name.as_str() {
             "table" => {
-                // Pop until a table element is popped (§13.2.6.4.9).
+                // §13.2.6.4.9: If no table in table scope, parse error,
+                // ignore. Otherwise: pop until table popped, reset insertion
+                // mode appropriately.
+                if !helpers::has_element_in_table_scope(parser, "table") {
+                    parser.errors.push(ParseError::Generic(
+                        "end table without table in table scope",
+                    ));
+                    return Step::Done;
+                }
                 while let Some(top) = parser.open_elements.pop() {
                     let is_table = top
                         .borrow()
@@ -2149,7 +2295,7 @@ fn handle_in_table(
                         break;
                     }
                 }
-                parser.insertion_mode = InsertionMode::InBody;
+                reset_insertion_mode(parser);
                 Step::Done
             }
             "body" | "caption" | "col" | "colgroup" | "html" | "tbody" | "td" | "tfoot" | "th"
@@ -2505,9 +2651,9 @@ fn handle_in_row(
                     "caption" | "col" | "colgroup" | "tbody" | "tfoot" | "thead" | "tr"
                 ))
                 || (tag.kind == TagKind::End
-                    && matches!(tag.name.as_str(), "tbody" | "tfoot" | "thead")) =>
+                    && matches!(tag.name.as_str(), "table" | "tbody" | "tfoot" | "thead")) =>
         {
-            // Act as if </tr> was seen, then reprocess.
+            // §13.2.6.4.14: Act as if </tr> was seen, then reprocess.
             if !helpers::has_element_in_table_scope(parser, "tr") {
                 parser.errors.push(ParseError::Generic(
                     "unexpected token; no tr in table scope",
@@ -2833,13 +2979,16 @@ fn handle_in_template(
                     .errors
                     .push(ParseError::Generic("unexpected EOF in template"));
                 while let Some(top) = parser.open_elements.pop() {
-                    let is_template = top
+                    let is_html_template = top
                         .borrow()
                         .kind
                         .as_element()
-                        .map(|e| e.local_name == "template")
+                        .map(|e| {
+                            e.local_name == "template"
+                                && e.namespace == muskitty_dom::Namespace::Html
+                        })
                         .unwrap_or(false);
-                    if is_template {
+                    if is_html_template {
                         break;
                     }
                 }
@@ -2855,13 +3004,20 @@ fn handle_in_template(
     }
 }
 
-/// Check if there is a template element on the stack of open elements.
+/// Check if there is an HTML template element on the stack of open elements.
+///
+/// Per §13.2.6.2, a "template element" is an HTML element whose local name
+/// is "template". SVG-namespaced `<template>` elements (which can appear
+/// inside `<svg>`) do not count.
 fn template_in_stack(parser: &HtmlTreeConstructor) -> bool {
     parser.open_elements.iter().any(|n| {
         n.borrow()
             .kind
             .as_element()
-            .map(|e| e.local_name == "template")
+            .map(|e| {
+                e.local_name == "template"
+                    && e.namespace == muskitty_dom::Namespace::Html
+            })
             .unwrap_or(false)
     })
 }
@@ -3105,13 +3261,26 @@ pub fn reset_insertion_mode(parser: &mut HtmlTreeConstructor) {
                 return;
             }
             "template" => {
-                // Use the template insertion mode stack if available.
-                if let Some(&mode) = parser.template_insertion_modes.last() {
-                    parser.insertion_mode = mode;
-                } else {
-                    parser.insertion_mode = InsertionMode::InTemplate;
+                // Per §13.2.6.2, a "template element" is an HTML element
+                // whose local name is "template". An SVG-namespaced
+                // `<template>` (inside `<svg>`) must NOT trigger the
+                // template insertion-mode reset — skip it and keep
+                // searching down the stack.
+                let is_html_template = node
+                    .borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| e.namespace == muskitty_dom::Namespace::Html)
+                    .unwrap_or(false);
+                if is_html_template {
+                    // Use the template insertion mode stack if available.
+                    if let Some(&mode) = parser.template_insertion_modes.last() {
+                        parser.insertion_mode = mode;
+                    } else {
+                        parser.insertion_mode = InsertionMode::InTemplate;
+                    }
+                    return;
                 }
-                return;
             }
             "head" => {
                 // Per §13.2.6.4.2, head always switches to InHead (no

@@ -84,58 +84,126 @@ fn foster_parenting_active(parser: &HtmlTreeConstructor) -> bool {
         .unwrap_or(false)
 }
 
-/// Insert a node at the appropriate place for inserting a node (§13.2.6.2).
-///
-/// When foster parenting is active (§13.2.6.3), the node is inserted at
-/// the foster parenting position: before the last table element in its
-/// parent's children list. Otherwise, the node is appended to the current
-/// node (or template content if current node is a `<template>`).
-pub fn insert_node(parser: &HtmlTreeConstructor, node: &Rc<RefCell<Node>>) {
-    if foster_parenting_active(parser) {
-        let (parent, table) = foster_parent_position(parser);
-        if let Some(table_node) = table {
-            let _ = muskitty_dom::insert_before(&parent, node.clone(), Some(&table_node));
-        } else {
-            let _ = append_child(&parent, node.clone());
-        }
-    } else {
-        let target = insertion_target(parser);
-        let _ = append_child(&target, node.clone());
-    }
+/// A foster-parenting insertion location (§13.2.6.2).
+enum FosterLocation {
+    /// Append to the end of this node's children.
+    Append(Rc<RefCell<Node>>),
+    /// Insert before `before` within `parent`.
+    Before {
+        parent: Rc<RefCell<Node>>,
+        before: Rc<RefCell<Node>>,
+    },
 }
 
-/// Find the foster parent and the table element to insert before
-/// (§13.2.6.3).
+/// Compute the foster-parenting insertion location per §13.2.6.2.
 ///
-/// Returns (parent, Some(table_node)) where `parent` is the element below
-/// the last table on the stack, and `table_node` is the table element to
-/// insert before. If no table is on the stack, returns (current_node, None).
-fn foster_parent_position(
-    parser: &HtmlTreeConstructor,
-) -> (Rc<RefCell<Node>>, Option<Rc<RefCell<Node>>>) {
-    let table_index = parser
+/// Implements the full algorithm:
+/// 1. Find the last `template` and last `table` in the stack.
+/// 2. If `template` exists and is above `table` (or no table): insert into
+///    template's template contents.
+/// 3. If no `table`: insert into the first element (html) — fragment case.
+/// 4. If `table` has a parent: insert before `table`.
+/// 5. Otherwise: insert into the element above `table`.
+fn foster_parent_location(parser: &HtmlTreeConstructor) -> FosterLocation {
+    // Find last template and last table indices (searching from top).
+    let last_template_idx = parser
         .open_elements
         .iter()
+        .enumerate()
         .rev()
-        .position(|n| {
+        .find(|(_, n)| {
+            n.borrow()
+                .kind
+                .as_element()
+                .map(|e| e.local_name == "template")
+                .unwrap_or(false)
+        })
+        .map(|(i, _)| i);
+
+    let last_table_idx = parser
+        .open_elements
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, n)| {
             n.borrow()
                 .kind
                 .as_element()
                 .map(|e| e.local_name == "table")
                 .unwrap_or(false)
         })
-        .map(|i| parser.open_elements.len() - 1 - i);
+        .map(|(i, _)| i);
 
-    if let Some(idx) = table_index {
-        let table_node = parser.open_elements[idx].clone();
-        let parent = if idx > 0 {
-            parser.open_elements[idx - 1].clone()
-        } else {
-            parser.document.clone()
+    // Step 2c: If last_template exists and (no last_table or last_template
+    // is above last_table), insert into last_template's template contents.
+    if let Some(tmpl_idx) = last_template_idx {
+        let template_above_table = match last_table_idx {
+            Some(tbl_idx) => tmpl_idx > tbl_idx,
+            None => true,
         };
-        (parent, Some(table_node))
+        if template_above_table {
+            let template = &parser.open_elements[tmpl_idx];
+            let content = template
+                .borrow()
+                .kind
+                .as_element()
+                .and_then(|e| e.template_content.clone())
+                .unwrap_or_else(|| template.clone());
+            return FosterLocation::Append(content);
+        }
+    }
+
+    // Step 2d: If no last_table, insert into first element (html).
+    // (fragment case)
+    if last_table_idx.is_none() {
+        let html = parser
+            .open_elements
+            .first()
+            .cloned()
+            .unwrap_or_else(|| parser.document.clone());
+        return FosterLocation::Append(html);
+    }
+
+    // Step 2e: If last_table has a parent, insert before last_table.
+    let table_idx = last_table_idx.unwrap();
+    let table_node = parser.open_elements[table_idx].clone();
+    let table_parent = table_node.borrow().parent_node.upgrade();
+    if let Some(parent) = table_parent {
+        return FosterLocation::Before {
+            parent,
+            before: table_node,
+        };
+    }
+
+    // Step 2f: Insert into the element above last_table.
+    if table_idx > 0 {
+        let prev = parser.open_elements[table_idx - 1].clone();
+        return FosterLocation::Append(prev);
+    }
+
+    // Fallback: append to current node.
+    FosterLocation::Append(parser.current_node())
+}
+
+/// Insert a node at the appropriate place for inserting a node (§13.2.6.2).
+///
+/// When foster parenting is active (§13.2.6.3), the node is inserted at
+/// the foster parenting position per the full algorithm in §13.2.6.2.
+/// Otherwise, the node is appended to the current node (or template content
+/// if current node is a `<template>`).
+pub fn insert_node(parser: &HtmlTreeConstructor, node: &Rc<RefCell<Node>>) {
+    if foster_parenting_active(parser) {
+        match foster_parent_location(parser) {
+            FosterLocation::Append(parent) => {
+                let _ = append_child(&parent, node.clone());
+            }
+            FosterLocation::Before { parent, before } => {
+                let _ = muskitty_dom::insert_before(&parent, node.clone(), Some(&before));
+            }
+        }
     } else {
-        (parser.current_node(), None)
+        let target = insertion_target(parser);
+        let _ = append_child(&target, node.clone());
     }
 }
 
@@ -163,54 +231,52 @@ pub fn insert_element(parser: &mut HtmlTreeConstructor, token: &TagToken) {
 /// the template's content DocumentFragment (via `insertion_target`).
 ///
 /// When foster parenting is active (§13.2.6.3), the character is inserted
-/// at the foster parenting position (before the last table element on the
-/// stack). If the node before the table is a Text node, the character is
-/// appended to it.
+/// at the foster parenting position per the full algorithm in §13.2.6.2.
+/// If the previous sibling (for "before table") or last child (for "append")
+/// is a Text node, the character is appended to it.
 pub fn insert_character(parser: &HtmlTreeConstructor, c: char) {
     if foster_parenting_active(parser) {
-        // Find foster parent position and check if the previous sibling
-        // of the table is a Text node we can append to.
-        let (parent, table) = foster_parent_position(parser);
-        if let Some(table_node) = table {
-            // Find the previous sibling of the table node.
-            let prev_sibling = {
-                let children = parent.borrow();
-                let idx = children
-                    .children
-                    .iter()
-                    .position(|n| Rc::ptr_eq(n, &table_node));
-                idx.and_then(|i| {
-                    if i > 0 {
-                        Some(children.children[i - 1].clone())
-                    } else {
-                        None
-                    }
-                })
-            };
-            if let Some(prev) = prev_sibling {
-                if prev.borrow().node_type == NodeType::Text {
-                    if let NodeKind::Text(ref mut t) = prev.borrow_mut().kind {
-                        t.data.push(c);
-                        return;
-                    }
-                }
-            }
-            // Create a new Text node before the table.
-            let text = Node::new_text(&c.to_string(), &parser.document);
-            let _ = muskitty_dom::insert_before(&parent, text, Some(&table_node));
-        } else {
-            // No table on stack: fall back to appending to foster parent.
-            let last_child = parent.borrow().last_child();
-            if let Some(child) = last_child {
-                if child.borrow().node_type == NodeType::Text {
-                    if let NodeKind::Text(ref mut t) = child.borrow_mut().kind {
-                        t.data.push(c);
-                        return;
+        match foster_parent_location(parser) {
+            FosterLocation::Before { parent, before } => {
+                // Find the previous sibling of the table node.
+                let prev_sibling = {
+                    let children = parent.borrow();
+                    let idx = children
+                        .children
+                        .iter()
+                        .position(|n| Rc::ptr_eq(n, &before));
+                    idx.and_then(|i| {
+                        if i > 0 {
+                            Some(children.children[i - 1].clone())
+                        } else {
+                            None
+                        }
+                    })
+                };
+                if let Some(prev) = prev_sibling {
+                    if prev.borrow().node_type == NodeType::Text {
+                        if let NodeKind::Text(ref mut t) = prev.borrow_mut().kind {
+                            t.data.push(c);
+                            return;
+                        }
                     }
                 }
+                let text = Node::new_text(&c.to_string(), &parser.document);
+                let _ = muskitty_dom::insert_before(&parent, text, Some(&before));
             }
-            let text = Node::new_text(&c.to_string(), &parser.document);
-            let _ = append_child(&parent, text);
+            FosterLocation::Append(parent) => {
+                let last_child = parent.borrow().last_child();
+                if let Some(child) = last_child {
+                    if child.borrow().node_type == NodeType::Text {
+                        if let NodeKind::Text(ref mut t) = child.borrow_mut().kind {
+                            t.data.push(c);
+                            return;
+                        }
+                    }
+                }
+                let text = Node::new_text(&c.to_string(), &parser.document);
+                let _ = append_child(&parent, text);
+            }
         }
         return;
     }
@@ -417,10 +483,36 @@ pub fn detect_quirks_mode(
 
 /// The default scope set per §13.2.6.4.2. An element is "in scope" if it
 /// appears on the open elements stack before any of these boundary names.
+///
+/// Per §13.2.6.4.2, the default scope boundary set includes both HTML
+/// elements and MathML/SVG integration-point elements:
+/// applet, caption, html, table, td, th, marquee, object, template,
+/// mi, mo, mn, ms, mtext, annotation-xml, foreignObject, desc, title.
+///
+/// Note: boundary matching is namespace-agnostic — the spec compares tag
+/// names only. For SVG, `foreignObject`/`desc`/`title` keep their case in
+/// `local_name`; the boundary check lowercases both sides.
 const DEFAULT_SCOPE: &[&str] = &[
-    "applet", "caption", "html", "table", "td", "th", "marquee", "object",
+    "applet",
+    "caption",
+    "html",
+    "table",
+    "td",
+    "th",
+    "marquee",
+    "object",
     "template",
-    // MathML / SVG foreign elements omitted — Phase 4 will add foreign content.
+    // MathML text integration points.
+    "mi",
+    "mo",
+    "mn",
+    "ms",
+    "mtext",
+    "annotation-xml",
+    // HTML integration points (SVG).
+    "foreignobject",
+    "desc",
+    "title",
 ];
 
 /// The list scope set: default scope + `ol` + `ul` (§13.2.6.4.2).
@@ -434,6 +526,18 @@ fn html_local_name(node: &Rc<RefCell<Node>>) -> Option<String> {
         if e.namespace == muskitty_dom::Namespace::Html {
             return Some(e.local_name.clone());
         }
+    }
+    None
+}
+
+/// Return the local name of an open element regardless of namespace,
+/// lowercased for boundary comparison (§13.2.6.4.2). Used by scope checks
+/// so that MathML/SVG integration-point elements (mi, mo, foreignObject,
+/// etc.) act as scope boundaries.
+fn local_name_for_boundary(node: &Rc<RefCell<Node>>) -> Option<String> {
+    let n = node.borrow();
+    if let NodeKind::Element(ref e) = n.kind {
+        return Some(e.local_name.to_ascii_lowercase());
     }
     None
 }
@@ -551,15 +655,21 @@ fn has_element_in_scope_with(
     extra: &[&str],
 ) -> bool {
     for node in parser.open_elements.iter().rev() {
-        let local = match html_local_name(node) {
+        // Target match: only HTML-namespace elements match the search name.
+        // (All callers search for HTML element names like "p", "body",
+        // "select".)
+        if html_local_name(node).as_deref() == Some(name) {
+            return true;
+        }
+        // Boundary check: namespace-agnostic. Foreign integration-point
+        // elements (mi, mo, mn, ms, mtext, annotation-xml, foreignObject,
+        // desc, title) act as scope boundaries per §13.2.6.4.2.
+        let boundary_local = match local_name_for_boundary(node) {
             Some(l) => l,
             None => continue,
         };
-        if local == name {
-            return true;
-        }
-        // Boundary element encountered: target is not in scope.
-        if base_scope.contains(&local.as_str()) || extra.contains(&local.as_str()) {
+        if base_scope.contains(&boundary_local.as_str()) || extra.contains(&boundary_local.as_str())
+        {
             return false;
         }
     }
@@ -1172,12 +1282,22 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
             }
         }
 
-        // 4.9: Insert last_node into common ancestor, fostering if needed.
-        //      For the non-table case, append last_node to common ancestor.
+        // 4.9: Insert last_node at the appropriate place for inserting a
+        //      node, using common ancestor as the override target (§13.2.6.4.7
+        //      adoption agency step 7). If the common ancestor is a template
+        //      element, the insertion target is its template content
+        //      DocumentFragment (§13.2.6.2).
         if let Some(ancestor) = common_ancestor {
-            // If last_node is already a child of ancestor (shouldn't be, but
-            // guard against double-append), skip. Otherwise append.
-            let _ = append_child(&ancestor, last_node.clone());
+            let target = {
+                let anc_ref = ancestor.borrow();
+                match &anc_ref.kind {
+                    NodeKind::Element(e) if e.local_name == "template" => {
+                        e.template_content.clone().unwrap_or_else(|| ancestor.clone())
+                    }
+                    _ => ancestor.clone(),
+                }
+            };
+            let _ = append_child(&target, last_node.clone());
         }
 
         // 4.10: Create a new element with the same tag/attrs as the
