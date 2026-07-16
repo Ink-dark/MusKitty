@@ -20,6 +20,10 @@ use crate::tokenizer::TagToken;
 /// form: always uses the HTML namespace, no custom element definitions, no
 /// attribute adjustment. Full foreign-attribute adjustment (§13.2.6.5) is
 /// deferred to Phase 3.
+///
+/// Per §13.2.6.2, when creating a `<template>` element a DocumentFragment is
+/// also created and attached as the template's content. All nodes inserted
+/// while the template is the current node go into this content fragment.
 pub fn create_element_for_token(
     parser: &HtmlTreeConstructor,
     token: &TagToken,
@@ -29,40 +33,60 @@ pub fn create_element_for_token(
         .iter()
         .map(|(name, value)| Attribute::new(name, value))
         .collect();
-    Node::new_element_html(&token.name, attrs, &parser.document)
+    let element = Node::new_element_html(&token.name, attrs, &parser.document);
+    if token.name == "template" {
+        let content = Node::new_document_fragment(&parser.document);
+        if let NodeKind::Element(ref mut e) = element.borrow_mut().kind {
+            e.set_template_content(content);
+        }
+    }
+    element
+}
+
+/// Determine the target node for insertion per §13.2.6.2.
+///
+/// If the current node is a `<template>` element, returns the template's
+/// content DocumentFragment; otherwise returns the current node itself.
+/// Foster parenting is handled separately by the caller via `foster_parent`.
+fn insertion_target(parser: &HtmlTreeConstructor) -> Rc<RefCell<Node>> {
+    let current = parser.current_node();
+    let target = {
+        let current_ref = current.borrow();
+        match &current_ref.kind {
+            NodeKind::Element(e) if e.local_name == "template" => e.template_content.clone(),
+            _ => None,
+        }
+    };
+    target.unwrap_or_else(|| current.clone())
 }
 
 /// Insert a node at the appropriate place for inserting a node (§13.2.6.2).
 ///
 /// When foster parenting is active (§13.2.6.3), the node is inserted at
-/// the foster parenting position: before the last table element on the
-/// stack of open elements (or at the end of its parent if the table is
-/// the current node). Otherwise, the node is appended to the current node.
+/// the foster parenting position: before the last table element in its
+/// parent's children list. Otherwise, the node is appended to the current
+/// node (or template content if current node is a `<template>`).
 pub fn insert_node(parser: &HtmlTreeConstructor, node: &Rc<RefCell<Node>>) {
     if parser.foster_parenting {
-        let parent = foster_parent(parser);
-        let _ = append_child(&parent, node.clone());
+        let (parent, table) = foster_parent(parser);
+        if let Some(table_node) = table {
+            let _ = muskitty_dom::insert_before(&parent, node.clone(), Some(&table_node));
+        } else {
+            let _ = append_child(&parent, node.clone());
+        }
     } else {
-        let current = parser.current_node();
-        let _ = append_child(&current, node.clone());
+        let target = insertion_target(parser);
+        let _ = append_child(&target, node.clone());
     }
 }
 
-/// Find the foster parent for the current foster-parenting context
+/// Find the foster parent and the table element to insert before
 /// (§13.2.6.3).
 ///
-/// The foster parent is determined by the last table element on the open
-/// elements stack:
-/// - If the current node is a `<table>`, the foster parent is the parent
-///   of that table element.
-/// - Otherwise, the foster parent is the parent of the last `<table>`
-///   element on the stack.
-///
-/// This simplified implementation always returns the parent of the last
-/// table element (which covers the common case). Full spec compliance
-/// (including template content handling) is deferred.
-fn foster_parent(parser: &HtmlTreeConstructor) -> Rc<RefCell<Node>> {
-    // Find the last table element on the stack.
+/// Returns (parent, Some(table_node)) where `parent` is the element below
+/// the last table on the stack, and `table_node` is the table element to
+/// insert before. If no table is on the stack, returns (current_node, None).
+fn foster_parent(parser: &HtmlTreeConstructor) -> (Rc<RefCell<Node>>, Option<Rc<RefCell<Node>>>) {
     let table_index = parser
         .open_elements
         .iter()
@@ -77,18 +101,15 @@ fn foster_parent(parser: &HtmlTreeConstructor) -> Rc<RefCell<Node>> {
         .map(|i| parser.open_elements.len() - 1 - i);
 
     if let Some(idx) = table_index {
-        // The foster parent is the parent of the table element. Since we
-        // don't have explicit parent pointers in the stack, the parent is
-        // the element below the table on the stack (or the document).
-        if idx > 0 {
+        let table_node = parser.open_elements[idx].clone();
+        let parent = if idx > 0 {
             parser.open_elements[idx - 1].clone()
         } else {
             parser.document.clone()
-        }
+        };
+        (parent, Some(table_node))
     } else {
-        // No table on stack: fall back to current node (shouldn't happen
-        // when foster parenting is active, but be safe).
-        parser.current_node()
+        (parser.current_node(), None)
     }
 }
 
@@ -111,9 +132,12 @@ pub fn insert_element(parser: &mut HtmlTreeConstructor, token: &TagToken) {
 /// Per §13.2.6.2, if the current node's last child is a Text node, the
 /// character is appended to that Text node's data. Otherwise, a new Text
 /// node is created and inserted.
+///
+/// If the current node is a `<template>`, the character is inserted into
+/// the template's content DocumentFragment (via `insertion_target`).
 pub fn insert_character(parser: &HtmlTreeConstructor, c: char) {
-    let current = parser.current_node();
-    let last_child = current.borrow().last_child();
+    let target = insertion_target(parser);
+    let last_child = target.borrow().last_child();
     if let Some(child) = last_child {
         let is_text = child.borrow().node_type == NodeType::Text;
         if is_text {
@@ -124,7 +148,7 @@ pub fn insert_character(parser: &HtmlTreeConstructor, c: char) {
         }
     }
     let text = Node::new_text(&c.to_string(), &parser.document);
-    let _ = append_child(&current, text);
+    let _ = append_child(&target, text);
 }
 
 /// Insert a comment node as a child of the current node.
@@ -750,7 +774,7 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
             })
             .map(|(i, _)| fmt_stack_index + 1 + i);
 
-        let furthest_block_index = match furthest_block_index {
+        let mut furthest_block_index = match furthest_block_index {
             Some(i) => i,
             None => {
                 // No furthest block: pop elements off the stack until the
@@ -820,8 +844,18 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
                     // Remove node from the stack.
                     parser.open_elements.remove(node_index);
                     // Adjust furthest_block_index / fmt_stack_index if needed.
+                    // Per §13.2.6.4.7 step 7 inner loop: removing a node
+                    // above the furthest block shifts the furthest block
+                    // (and any node below it, including the formatting
+                    // element) down by one in the stack. Failing to adjust
+                    // furthest_block_index here causes an out-of-bounds
+                    // panic when the outer loop later reads
+                    // `open_elements[furthest_block_index]`.
                     if node_index < fmt_stack_index {
                         fmt_stack_index_will_decrement(&mut fmt_stack_index);
+                    }
+                    if node_index < furthest_block_index {
+                        furthest_block_index -= 1;
                     }
                 }
                 Some(afe_idx) => {

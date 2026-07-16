@@ -665,15 +665,7 @@ fn handle_in_body_start_tag(
     // Head-element start tags: process using the rules for "in head".
     if matches!(
         name,
-        "base"
-            | "basefont"
-            | "bgsound"
-            | "link"
-            | "meta"
-            | "noframes"
-            | "script"
-            | "style"
-            | "template"
+        "base" | "basefont" | "bgsound" | "link" | "meta" | "noframes" | "script" | "style"
             | "title"
     ) {
         // Defer to the InHead handler. We cannot call it directly (it's a
@@ -683,7 +675,7 @@ fn handle_in_body_start_tag(
             helpers::insert_element(parser, tag);
             parser.open_elements.pop();
         } else {
-            // title/style/script/noframes/template: defer to a future InHead
+            // title/style/script/noframes: defer to a future InHead
             // callback by signalling that this tag is not yet supported
             // inline. For Phase 3.2 we mark it as a parse error so callers
             // know it was ignored.
@@ -691,6 +683,20 @@ fn handle_in_body_start_tag(
                 "head element in body not yet inline-handled",
             ));
         }
+        return Step::Done;
+    }
+
+    // template (§13.2.6.4.7): process using in-head rules. Inlined here
+    // because handle_in_body_start_tag doesn't receive a tokenizer, and
+    // the template start-tag path doesn't need one.
+    if name == "template" {
+        helpers::add_formatting_marker(parser);
+        helpers::insert_element(parser, tag);
+        parser.frameset_ok = false;
+        parser
+            .template_insertion_modes
+            .push(InsertionMode::InTemplate);
+        parser.insertion_mode = InsertionMode::InTemplate;
         return Step::Done;
     }
 
@@ -1096,6 +1102,34 @@ fn handle_in_body_end_tag(
     tag: &crate::tokenizer::TagToken,
 ) -> Step {
     let name = tag.name.as_str();
+
+    // </template> (§13.2.6.4.7): process using in-head rules. Inlined here
+    // because handle_in_body_end_tag doesn't receive a tokenizer, and the
+    // template end-tag path doesn't need one.
+    if name == "template" {
+        if !helpers::has_element_in_stack(parser, "template") {
+            parser.errors.push(ParseError::Generic(
+                "end template without template in stack",
+            ));
+            return Step::Done;
+        }
+        helpers::generate_implied_end_tags(parser, None);
+        while let Some(top) = parser.open_elements.pop() {
+            let is_template = top
+                .borrow()
+                .kind
+                .as_element()
+                .map(|e| e.local_name == "template")
+                .unwrap_or(false);
+            if is_template {
+                break;
+            }
+        }
+        helpers::clear_active_formatting_to_last_marker(parser);
+        parser.template_insertion_modes.pop();
+        reset_insertion_mode(parser);
+        return Step::Done;
+    }
 
     // </p>: if no p in button scope, parse error, insert <p>, reprocess.
     // Else: generate implied end tags except p, pop until p.
@@ -1631,9 +1665,10 @@ fn handle_in_table_text(parser: &mut HtmlTreeConstructor, token: &Token) -> Step
             Step::Done
         }
         _ => {
-            // Process the pending table character tokens: if any is
-            // non-whitespace, foster-parent the whole run as InBody
-            // characters; otherwise discard them (§13.2.6.4.10).
+            // Process the pending table character tokens (§13.2.6.4.10):
+            // - If any is non-whitespace → foster-parent the whole run.
+            // - If all are whitespace → insert into the current node (table/
+            //   tbody/tr etc.), preserving layout whitespace.
             let pending = std::mem::take(&mut parser.pending_table_text);
             let has_non_ws = pending.chars().any(|c| !is_whitespace(c));
             if has_non_ws {
@@ -1642,6 +1677,10 @@ fn handle_in_table_text(parser: &mut HtmlTreeConstructor, token: &Token) -> Step
                     handle_in_body(parser, &Token::Character(c));
                 }
                 parser.foster_parenting = false;
+            } else {
+                for c in pending.chars() {
+                    helpers::insert_character(parser, c);
+                }
             }
             // Restore original insertion mode (InTable) and reprocess.
             parser.insertion_mode = parser
@@ -2764,7 +2803,10 @@ fn handle_after_after_frameset(parser: &mut HtmlTreeConstructor, token: &Token) 
 /// insertion mode is set to InBody.
 pub fn reset_insertion_mode(parser: &mut HtmlTreeConstructor) {
     let last = parser.open_elements.len() - 1;
-    for (i, node) in parser.open_elements.iter().enumerate() {
+    // Per §13.2.6.4.2, iterate from the TOP of the stack (last element)
+    // downward. Iterating forward would incorrectly match <head> before
+    // <body>, returning InHead instead of InBody.
+    for (i, node) in parser.open_elements.iter().enumerate().rev() {
         let is_last = i == last;
         let local = node
             .borrow()
@@ -2813,10 +2855,10 @@ pub fn reset_insertion_mode(parser: &mut HtmlTreeConstructor) {
                 return;
             }
             "head" => {
-                if !is_last {
-                    parser.insertion_mode = InsertionMode::InHead;
-                    return;
-                }
+                // Per §13.2.6.4.2, head always switches to InHead (no
+                // "not the last" condition, unlike td/th).
+                parser.insertion_mode = InsertionMode::InHead;
+                return;
             }
             "body" => {
                 parser.insertion_mode = InsertionMode::InBody;
