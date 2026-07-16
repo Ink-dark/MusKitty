@@ -65,4 +65,15 @@ pub trait Tokenizer {
     /// token rather than literal text. Pass `None` to clear when leaving the
     /// content model.
     fn set_appropriate_end_tag_name(&mut self, name: Option<&str>);
+
+    /// Notify the tokenizer whether the adjusted current node is in foreign
+    /// content (not in the HTML namespace).
+    ///
+    /// The tree construction stage sets this before requesting the next token
+    /// so that the markup declaration open state (§13.2.5.42) can decide
+    /// between the CDATA section state (foreign content) and the bogus
+    /// comment state (HTML content) when encountering `<![CDATA[`.
+    ///
+    /// Defaults to `false` (HTML content).
+    fn set_foreign_content(&mut self, in_foreign: bool);
 }

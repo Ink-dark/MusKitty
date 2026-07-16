@@ -1,6 +1,6 @@
 # html5lib Tree Construction Gap Report
 
-**Pass rate: 96.4% (1654/1716)** — 204 skipped — 0 panicked
+**Pass rate: 97.8% (1679/1716)** — 204 skipped — 0 panicked
 
 ## Per-fixture results
 
@@ -11,7 +11,7 @@
 | blocks.dat | 48 | 0 | 0 | 48 |
 | comments01.dat | 16 | 0 | 0 | 16 |
 | doctype01.dat | 37 | 0 | 0 | 37 |
-| domjs-unsafe.dat | 46 | 3 | 0 | 49 |
+| domjs-unsafe.dat | 49 | 0 | 0 | 49 |
 | entities01.dat | 75 | 0 | 0 | 75 |
 | entities02.dat | 26 | 0 | 0 | 26 |
 | foreign-fragment.dat | 0 | 0 | 66 | 66 |
@@ -25,7 +25,7 @@
 | noscript01.dat | 18 | 0 | 0 | 18 |
 | pending-spec-changes-plain-text-unsafe.dat | 1 | 0 | 0 | 1 |
 | pending-spec-changes.dat | 3 | 0 | 0 | 3 |
-| plain-text-unsafe.dat | 32 | 1 | 0 | 33 |
+| plain-text-unsafe.dat | 33 | 0 | 0 | 33 |
 | processing-instructions.dat | 124 | 0 | 0 | 124 |
 | quirks01.dat | 4 | 0 | 0 | 4 |
 | ruby.dat | 21 | 0 | 0 | 21 |
@@ -49,7 +49,7 @@
 | tests19.dat | 91 | 12 | 0 | 103 |
 | tests2.dat | 63 | 0 | 0 | 63 |
 | tests20.dat | 64 | 0 | 0 | 64 |
-| tests21.dat | 2 | 21 | 0 | 23 |
+| tests21.dat | 23 | 0 | 0 | 23 |
 | tests22.dat | 5 | 0 | 0 | 5 |
 | tests23.dat | 3 | 2 | 0 | 5 |
 | tests24.dat | 8 | 0 | 0 | 8 |

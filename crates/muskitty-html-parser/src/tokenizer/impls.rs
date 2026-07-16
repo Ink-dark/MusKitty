@@ -87,6 +87,12 @@ pub struct HtmlTokenizer {
     /// points consumed as a character reference" (§13.2.5.81 anything-else)
     /// can replay the original case rather than always emitting lowercase.
     char_ref_hex_prefix: char,
+    /// Whether the adjusted current node is in foreign content (not in the
+    /// HTML namespace). Set by tree construction before requesting the next
+    /// token so that the markup declaration open state (§13.2.5.42) can
+    /// decide between CDATA section state (foreign) and bogus comment
+    /// state (HTML) when encountering `<![CDATA[`.
+    in_foreign_content: bool,
 }
 
 impl HtmlTokenizer {
@@ -118,6 +124,7 @@ impl HtmlTokenizer {
             return_state: None,
             character_reference_code: 0,
             char_ref_hex_prefix: 'x',
+            in_foreign_content: false,
         }
     }
 
@@ -389,10 +396,15 @@ impl Tokenizer for HtmlTokenizer {
         self.return_state = None;
         self.character_reference_code = 0;
         self.char_ref_hex_prefix = 'x';
+        self.in_foreign_content = false;
     }
 
     fn set_appropriate_end_tag_name(&mut self, name: Option<&str>) {
         self.appropriate_end_tag_name = name.map(|s| s.to_string());
+    }
+
+    fn set_foreign_content(&mut self, in_foreign: bool) {
+        self.in_foreign_content = in_foreign;
     }
 }
 
@@ -2392,15 +2404,23 @@ impl HtmlTokenizer {
         // namespace, switch to CDATA section state. Otherwise, this is a
         // cdata-in-html-content parse error: create a comment token with
         // data "[CDATA[" and switch to bogus comment state.
-        // Since foreign content (SVG/MathML) is not yet implemented, we
-        // always take the "cdata-in-html-content" branch.
         if self.pos + 6 < self.input.len() {
             let slice: String = self.input[self.pos..self.pos + 7].iter().collect();
             if slice == "[CDATA[" {
                 self.pos += 7;
-                self.current_comment.clear();
-                self.current_comment.push_str("[CDATA[");
-                self.state = State::BogusComment;
+                if self.in_foreign_content {
+                    // Foreign content (SVG/MathML): switch to CDATA section
+                    // state. The CDATA section state emits character tokens
+                    // that tree construction inserts as text content.
+                    self.state = State::CDATASection;
+                } else {
+                    // HTML content: cdata-in-html-content parse error.
+                    // Create a comment token whose data is "[CDATA[" and
+                    // switch to bogus comment state.
+                    self.current_comment.clear();
+                    self.current_comment.push_str("[CDATA[");
+                    self.state = State::BogusComment;
+                }
                 return None;
             }
         }
