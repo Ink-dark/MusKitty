@@ -80,6 +80,17 @@ pub struct HtmlTreeConstructor {
     pub scripting_flag: bool,
     /// Parse errors accumulated during tree construction (§13.2.6).
     pub errors: Vec<ParseError>,
+    /// Whether the next U+000A LF character token should be ignored.
+    /// Set by `<pre>`/`<listing>` start tags per §13.2.6.4.7: "If the next
+    /// token is a U+000A LINE FEED (LF) character token, then ignore that
+    /// token and move on to the next one."
+    pub skip_next_lf: bool,
+    /// Whether the Document is in quirks mode (§13.2.6.4.1). Set by the
+    /// DOCTYPE token in Initial mode, or by the "anything else" branch of
+    /// Initial mode (no DOCTYPE → quirks). Affects `<table>` handling in
+    /// InBody (§13.2.6.4.7: in quirks mode, `<p>` is not closed before a
+    /// `<table>`).
+    pub quirks_mode: bool,
 }
 
 impl HtmlTreeConstructor {
@@ -102,6 +113,8 @@ impl HtmlTreeConstructor {
             frameset_ok: true,
             scripting_flag: false,
             errors: Vec::new(),
+            skip_next_lf: false,
+            quirks_mode: false,
         }
     }
 
@@ -127,6 +140,14 @@ impl HtmlTreeConstructor {
     /// The `tokenizer` is passed so handlers can switch the tokenizer's
     /// content model (e.g. to RCDATA for `<title>`, per §13.2.6.4.4).
     pub fn run(&mut self, token: &Token, tokenizer: &mut dyn Tokenizer) {
+        // §13.2.6.4.7: pre/listing start tags cause the parser to skip a
+        // single leading U+000A LF character token (authoring convenience).
+        if self.skip_next_lf {
+            self.skip_next_lf = false;
+            if let Token::Character('\n') = token {
+                return;
+            }
+        }
         loop {
             match dispatch::dispatch(self, token, tokenizer) {
                 dispatch::Step::Done => return,

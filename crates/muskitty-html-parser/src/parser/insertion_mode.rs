@@ -39,10 +39,6 @@ pub enum InsertionMode {
     InRow,
     /// §13.2.6.13 — In cell insertion mode.
     InCell,
-    /// §13.2.6.14 — In select insertion mode.
-    InSelect,
-    /// §13.2.6.15 — In select in table insertion mode.
-    InSelectInTable,
     /// §13.2.6.16 — In template insertion mode.
     InTemplate,
     /// §13.2.6.17 — After body insertion mode.

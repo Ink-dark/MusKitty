@@ -236,6 +236,7 @@ fn actual_to_expected(tokens: &[Token]) -> Vec<ExpectedToken> {
                     },
                     Token::Comment(s) => out.push(ExpectedToken::Comment(s.clone())),
                     Token::EOF => {}
+                    Token::ProcessingInstruction { .. } => {}
                     Token::Character(_) => unreachable!(),
                 }
             }

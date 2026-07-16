@@ -23,6 +23,7 @@ pub mod document_type;
 pub mod element;
 pub mod error;
 pub mod node;
+pub mod processing_instruction;
 pub mod text;
 pub mod tree;
 
@@ -34,5 +35,6 @@ pub use document_type::DocumentTypeData;
 pub use element::ElementData;
 pub use error::DomError;
 pub use node::{Descendants, Node, NodeKind, NodeType};
+pub use processing_instruction::ProcessingInstructionData;
 pub use text::TextData;
 pub use tree::{append_child, insert_before, remove_child, replace_child, set_text_content};

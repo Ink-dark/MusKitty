@@ -14,6 +14,7 @@ use crate::document::DocumentData;
 use crate::document_fragment::DocumentFragmentData;
 use crate::document_type::DocumentTypeData;
 use crate::element::ElementData;
+use crate::processing_instruction::ProcessingInstructionData;
 use crate::text::TextData;
 
 /// `Node.nodeType` 常量。参见 DOM Living Standard §4.4。
@@ -52,6 +53,7 @@ pub enum NodeKind {
     Document(DocumentData),
     DocumentType(DocumentTypeData),
     DocumentFragment(DocumentFragmentData),
+    ProcessingInstruction(ProcessingInstructionData),
 }
 
 impl NodeKind {
@@ -248,6 +250,23 @@ impl Node {
         }))
     }
 
+    /// 创建 ProcessingInstruction 节点。
+    /// `node_name` 为 target，`data` 为 PI 数据。参见 DOM §7.4。
+    pub fn new_processing_instruction(
+        target: &str,
+        data: &str,
+        owner_document: &Rc<RefCell<Node>>,
+    ) -> Rc<RefCell<Node>> {
+        Rc::new(RefCell::new(Node {
+            node_type: NodeType::ProcessingInstruction,
+            node_name: target.to_string(),
+            owner_document: Rc::downgrade(owner_document),
+            parent_node: Weak::new(),
+            children: Vec::new(),
+            kind: NodeKind::ProcessingInstruction(ProcessingInstructionData::new(target, data)),
+        }))
+    }
+
     // —— 只读遍历 API（DOM §4.4） ——
 
     /// `Node.parentNode`
@@ -337,11 +356,14 @@ impl Node {
                 }
                 Some(s)
             }
-            NodeType::Text | NodeType::Comment => match &self.kind {
-                NodeKind::Text(t) => Some(t.data.clone()),
-                NodeKind::Comment(c) => Some(c.data.clone()),
-                _ => None,
-            },
+            NodeType::Text | NodeType::Comment | NodeType::ProcessingInstruction => {
+                match &self.kind {
+                    NodeKind::Text(t) => Some(t.data.clone()),
+                    NodeKind::Comment(c) => Some(c.data.clone()),
+                    NodeKind::ProcessingInstruction(pi) => Some(pi.data.clone()),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

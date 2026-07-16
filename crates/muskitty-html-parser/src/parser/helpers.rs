@@ -20,6 +20,10 @@ use crate::tokenizer::TagToken;
 /// form: always uses the HTML namespace, no custom element definitions, no
 /// attribute adjustment. Full foreign-attribute adjustment (§13.2.6.5) is
 /// deferred to Phase 3.
+///
+/// Per §13.2.6.2, when creating a `<template>` element a DocumentFragment is
+/// also created and attached as the template's content. All nodes inserted
+/// while the template is the current node go into this content fragment.
 pub fn create_element_for_token(
     parser: &HtmlTreeConstructor,
     token: &TagToken,
@@ -29,40 +33,86 @@ pub fn create_element_for_token(
         .iter()
         .map(|(name, value)| Attribute::new(name, value))
         .collect();
-    Node::new_element_html(&token.name, attrs, &parser.document)
+    let element = Node::new_element_html(&token.name, attrs, &parser.document);
+    if token.name == "template" {
+        let content = Node::new_document_fragment(&parser.document);
+        if let NodeKind::Element(ref mut e) = element.borrow_mut().kind {
+            e.set_template_content(content);
+        }
+    }
+    element
+}
+
+/// Determine the target node for insertion per §13.2.6.2.
+///
+/// If the current node is a `<template>` element, returns the template's
+/// content DocumentFragment; otherwise returns the current node itself.
+/// Foster parenting is handled separately by the caller via `foster_parent`.
+fn insertion_target(parser: &HtmlTreeConstructor) -> Rc<RefCell<Node>> {
+    let current = parser.current_node();
+    let target = {
+        let current_ref = current.borrow();
+        match &current_ref.kind {
+            NodeKind::Element(e) if e.local_name == "template" => e.template_content.clone(),
+            _ => None,
+        }
+    };
+    target.unwrap_or_else(|| current.clone())
+}
+
+/// Check whether foster parenting should actually apply for the current
+/// insertion. Per §13.2.6.3, foster parenting only takes effect when the
+/// foster-parenting flag is enabled **and** the target (current node) is a
+/// `table`, `tbody`, `tfoot`, `thead`, or `tr` element. If the current
+/// node is some other element (e.g. a `<plaintext>` that was foster-parented
+/// onto the stack before a table), normal insertion applies.
+fn foster_parenting_active(parser: &HtmlTreeConstructor) -> bool {
+    if !parser.foster_parenting {
+        return false;
+    }
+    parser
+        .open_elements
+        .last()
+        .and_then(|n| {
+            n.borrow().kind.as_element().map(|e| {
+                matches!(
+                    e.local_name.as_str(),
+                    "table" | "tbody" | "tfoot" | "thead" | "tr"
+                )
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Insert a node at the appropriate place for inserting a node (§13.2.6.2).
 ///
 /// When foster parenting is active (§13.2.6.3), the node is inserted at
-/// the foster parenting position: before the last table element on the
-/// stack of open elements (or at the end of its parent if the table is
-/// the current node). Otherwise, the node is appended to the current node.
+/// the foster parenting position: before the last table element in its
+/// parent's children list. Otherwise, the node is appended to the current
+/// node (or template content if current node is a `<template>`).
 pub fn insert_node(parser: &HtmlTreeConstructor, node: &Rc<RefCell<Node>>) {
-    if parser.foster_parenting {
-        let parent = foster_parent(parser);
-        let _ = append_child(&parent, node.clone());
+    if foster_parenting_active(parser) {
+        let (parent, table) = foster_parent_position(parser);
+        if let Some(table_node) = table {
+            let _ = muskitty_dom::insert_before(&parent, node.clone(), Some(&table_node));
+        } else {
+            let _ = append_child(&parent, node.clone());
+        }
     } else {
-        let current = parser.current_node();
-        let _ = append_child(&current, node.clone());
+        let target = insertion_target(parser);
+        let _ = append_child(&target, node.clone());
     }
 }
 
-/// Find the foster parent for the current foster-parenting context
+/// Find the foster parent and the table element to insert before
 /// (§13.2.6.3).
 ///
-/// The foster parent is determined by the last table element on the open
-/// elements stack:
-/// - If the current node is a `<table>`, the foster parent is the parent
-///   of that table element.
-/// - Otherwise, the foster parent is the parent of the last `<table>`
-///   element on the stack.
-///
-/// This simplified implementation always returns the parent of the last
-/// table element (which covers the common case). Full spec compliance
-/// (including template content handling) is deferred.
-fn foster_parent(parser: &HtmlTreeConstructor) -> Rc<RefCell<Node>> {
-    // Find the last table element on the stack.
+/// Returns (parent, Some(table_node)) where `parent` is the element below
+/// the last table on the stack, and `table_node` is the table element to
+/// insert before. If no table is on the stack, returns (current_node, None).
+fn foster_parent_position(
+    parser: &HtmlTreeConstructor,
+) -> (Rc<RefCell<Node>>, Option<Rc<RefCell<Node>>>) {
     let table_index = parser
         .open_elements
         .iter()
@@ -77,18 +127,15 @@ fn foster_parent(parser: &HtmlTreeConstructor) -> Rc<RefCell<Node>> {
         .map(|i| parser.open_elements.len() - 1 - i);
 
     if let Some(idx) = table_index {
-        // The foster parent is the parent of the table element. Since we
-        // don't have explicit parent pointers in the stack, the parent is
-        // the element below the table on the stack (or the document).
-        if idx > 0 {
+        let table_node = parser.open_elements[idx].clone();
+        let parent = if idx > 0 {
             parser.open_elements[idx - 1].clone()
         } else {
             parser.document.clone()
-        }
+        };
+        (parent, Some(table_node))
     } else {
-        // No table on stack: fall back to current node (shouldn't happen
-        // when foster parenting is active, but be safe).
-        parser.current_node()
+        (parser.current_node(), None)
     }
 }
 
@@ -111,9 +158,64 @@ pub fn insert_element(parser: &mut HtmlTreeConstructor, token: &TagToken) {
 /// Per §13.2.6.2, if the current node's last child is a Text node, the
 /// character is appended to that Text node's data. Otherwise, a new Text
 /// node is created and inserted.
+///
+/// If the current node is a `<template>`, the character is inserted into
+/// the template's content DocumentFragment (via `insertion_target`).
+///
+/// When foster parenting is active (§13.2.6.3), the character is inserted
+/// at the foster parenting position (before the last table element on the
+/// stack). If the node before the table is a Text node, the character is
+/// appended to it.
 pub fn insert_character(parser: &HtmlTreeConstructor, c: char) {
-    let current = parser.current_node();
-    let last_child = current.borrow().last_child();
+    if foster_parenting_active(parser) {
+        // Find foster parent position and check if the previous sibling
+        // of the table is a Text node we can append to.
+        let (parent, table) = foster_parent_position(parser);
+        if let Some(table_node) = table {
+            // Find the previous sibling of the table node.
+            let prev_sibling = {
+                let children = parent.borrow();
+                let idx = children
+                    .children
+                    .iter()
+                    .position(|n| Rc::ptr_eq(n, &table_node));
+                idx.and_then(|i| {
+                    if i > 0 {
+                        Some(children.children[i - 1].clone())
+                    } else {
+                        None
+                    }
+                })
+            };
+            if let Some(prev) = prev_sibling {
+                if prev.borrow().node_type == NodeType::Text {
+                    if let NodeKind::Text(ref mut t) = prev.borrow_mut().kind {
+                        t.data.push(c);
+                        return;
+                    }
+                }
+            }
+            // Create a new Text node before the table.
+            let text = Node::new_text(&c.to_string(), &parser.document);
+            let _ = muskitty_dom::insert_before(&parent, text, Some(&table_node));
+        } else {
+            // No table on stack: fall back to appending to foster parent.
+            let last_child = parent.borrow().last_child();
+            if let Some(child) = last_child {
+                if child.borrow().node_type == NodeType::Text {
+                    if let NodeKind::Text(ref mut t) = child.borrow_mut().kind {
+                        t.data.push(c);
+                        return;
+                    }
+                }
+            }
+            let text = Node::new_text(&c.to_string(), &parser.document);
+            let _ = append_child(&parent, text);
+        }
+        return;
+    }
+    let target = insertion_target(parser);
+    let last_child = target.borrow().last_child();
     if let Some(child) = last_child {
         let is_text = child.borrow().node_type == NodeType::Text;
         if is_text {
@@ -124,7 +226,7 @@ pub fn insert_character(parser: &HtmlTreeConstructor, c: char) {
         }
     }
     let text = Node::new_text(&c.to_string(), &parser.document);
-    let _ = append_child(&current, text);
+    let _ = append_child(&target, text);
 }
 
 /// Insert a comment node as a child of the current node.
@@ -145,6 +247,170 @@ pub fn insert_comment(parser: &HtmlTreeConstructor, data: &str) {
 pub fn insert_comment_at(target: &Rc<RefCell<Node>>, data: &str, document: &Rc<RefCell<Node>>) {
     let comment = Node::new_comment(data, document);
     let _ = append_child(target, comment);
+}
+
+/// Insert a ProcessingInstruction node at the adjusted insertion location
+/// (§13.2.6.2 "insert a processing instruction").
+///
+/// Per the spec, a ProcessingInstruction node with the token's target and
+/// data is created and inserted at the same location a comment would go.
+/// Foster parenting applies as normal for `insert_node`.
+pub fn insert_processing_instruction(parser: &HtmlTreeConstructor, target: &str, data: &str) {
+    let pi = Node::new_processing_instruction(target, data, &parser.document);
+    insert_node(parser, &pi);
+}
+
+/// Insert a ProcessingInstruction node as a child of the specified target
+/// node (variant of `insert_comment_at` for PI tokens emitted before the
+/// html element exists, e.g. in Initial/BeforeHtml modes).
+pub fn insert_processing_instruction_at(
+    target: &Rc<RefCell<Node>>,
+    target_name: &str,
+    data: &str,
+    document: &Rc<RefCell<Node>>,
+) {
+    let pi = Node::new_processing_instruction(target_name, data, document);
+    let _ = append_child(target, pi);
+}
+
+// ── Quirks mode detection (§13.2.6.4.1) ────────────────────────
+
+/// ASCII case-insensitive "starts with" check (§13.2.6.4.1 line 3165
+/// requires ASCII case-insensitive comparison of public/system IDs).
+fn ascii_starts_with(haystack: &str, needle: &str) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    haystack[..needle.len()].eq_ignore_ascii_case(needle)
+}
+
+/// Public identifiers whose exact value (ASCII case-insensitive) triggers
+/// quirks mode (§13.2.6.4.1, the first list, exact-match entries).
+const QUIRKS_PUBLIC_ID_EXACT: &[&str] = &[
+    "-//W3O//DTD W3 HTML Strict 3.0//EN//",
+    "-/W3C/DTD HTML 4.0 Transitional/EN",
+    "HTML",
+];
+
+/// The single system identifier whose exact value triggers quirks mode
+/// (§13.2.6.4.1, the first list).
+const QUIRKS_SYSTEM_ID_EXACT: &str = "http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd";
+
+/// Public identifier prefixes that trigger quirks mode
+/// (§13.2.6.4.1, the first list, "starts with" entries).
+const QUIRKS_PUBLIC_ID_PREFIX: &[&str] = &[
+    "+//Silmaril//dtd html Pro v0r11 19970101//",
+    "-//AS//DTD HTML 3.0 asWedit + extensions//",
+    "-//AdvaSoft Ltd//DTD HTML 3.0 asWedit + extensions//",
+    "-//IETF//DTD HTML 2.0 Level 1//",
+    "-//IETF//DTD HTML 2.0 Level 2//",
+    "-//IETF//DTD HTML 2.0 Strict Level 1//",
+    "-//IETF//DTD HTML 2.0 Strict Level 2//",
+    "-//IETF//DTD HTML 2.0 Strict//",
+    "-//IETF//DTD HTML 2.0//",
+    "-//IETF//DTD HTML 2.1E//",
+    "-//IETF//DTD HTML 3.0//",
+    "-//IETF//DTD HTML 3.2 Final//",
+    "-//IETF//DTD HTML 3.2//",
+    "-//IETF//DTD HTML 3//",
+    "-//IETF//DTD HTML Level 0//",
+    "-//IETF//DTD HTML Level 1//",
+    "-//IETF//DTD HTML Level 2//",
+    "-//IETF//DTD HTML Level 3//",
+    "-//IETF//DTD HTML Strict Level 0//",
+    "-//IETF//DTD HTML Strict Level 1//",
+    "-//IETF//DTD HTML Strict Level 2//",
+    "-//IETF//DTD HTML Strict Level 3//",
+    "-//IETF//DTD HTML Strict//",
+    "-//IETF//DTD HTML//",
+    "-//Metrius//DTD Metrius Presentational//",
+    "-//Microsoft//DTD Internet Explorer 2.0 HTML Strict//",
+    "-//Microsoft//DTD Internet Explorer 2.0 HTML//",
+    "-//Microsoft//DTD Internet Explorer 2.0 Tables//",
+    "-//Microsoft//DTD Internet Explorer 3.0 HTML Strict//",
+    "-//Microsoft//DTD Internet Explorer 3.0 HTML//",
+    "-//Microsoft//DTD Internet Explorer 3.0 Tables//",
+    "-//Netscape Comm. Corp.//DTD HTML//",
+    "-//Netscape Comm. Corp.//DTD Strict HTML//",
+    "-//O'Reilly and Associates//DTD HTML 2.0//",
+    "-//O'Reilly and Associates//DTD HTML Extended 1.0//",
+    "-//O'Reilly and Associates//DTD HTML Extended Relaxed 1.0//",
+    "-//SQ//DTD HTML 2.0 HoTMetaL + extensions//",
+    "-//SoftQuad Software//DTD HoTMetaL PRO 6.0::19990601::extensions to HTML 4.0//",
+    "-//SoftQuad//DTD HoTMetaL PRO 4.0::19971010::extensions to HTML 4.0//",
+    "-//Spyglass//DTD HTML 2.0 Extended//",
+    "-//Sun Microsystems Corp.//DTD HotJava HTML//",
+    "-//Sun Microsystems Corp.//DTD HotJava Strict HTML//",
+    "-//W3C//DTD HTML 3 1995-03-24//",
+    "-//W3C//DTD HTML 3.2 Draft//",
+    "-//W3C//DTD HTML 3.2 Final//",
+    "-//W3C//DTD HTML 3.2//",
+    "-//W3C//DTD HTML 3.2S Draft//",
+    "-//W3C//DTD HTML 4.0 Frameset//",
+    "-//W3C//DTD HTML 4.0 Transitional//",
+    "-//W3C//DTD HTML Experimental 19960712//",
+    "-//W3C//DTD HTML Experimental 970421//",
+    "-//W3C//DTD W3 HTML//",
+    "-//W3O//DTD W3 HTML 3.0//",
+    "-//WebTechs//DTD Mozilla HTML 2.0//",
+    "-//WebTechs//DTD Mozilla HTML//",
+];
+
+/// Public identifier prefixes that trigger quirks mode only when the system
+/// identifier is missing or the empty string (§13.2.6.4.1, first list).
+const QUIRKS_PUBLIC_ID_PREFIX_WHEN_SYS_MISSING: &[&str] = &[
+    "-//W3C//DTD HTML 4.01 Frameset//",
+    "-//W3C//DTD HTML 4.01 Transitional//",
+];
+
+/// Detect whether a DOCTYPE token puts the Document into quirks mode,
+/// per §13.2.6.4.1 (the "force-quirks" / public-id / system-id checks).
+///
+/// Returns `true` for full quirks mode. Limited-quirks mode is not tracked
+/// separately because no implemented insertion-mode rule distinguishes it
+/// from no-quirks (the only current consumer — InBody `<table>` closing `<p>`
+/// — treats limited-quirks as "not quirks").
+pub fn detect_quirks_mode(
+    force_quirks: bool,
+    name: Option<&str>,
+    public_id: Option<&str>,
+    system_id: Option<&str>,
+) -> bool {
+    // force-quirks flag, or name is not "html".
+    if force_quirks || name != Some("html") {
+        return true;
+    }
+    let pid = public_id.unwrap_or("");
+    let sid = system_id.unwrap_or("");
+    let sid_missing_or_empty = system_id.map(|s| s.is_empty()).unwrap_or(true);
+
+    // Exact public identifier matches.
+    if QUIRKS_PUBLIC_ID_EXACT
+        .iter()
+        .any(|p| pid.eq_ignore_ascii_case(p))
+    {
+        return true;
+    }
+    // Exact system identifier match.
+    if sid.eq_ignore_ascii_case(QUIRKS_SYSTEM_ID_EXACT) {
+        return true;
+    }
+    // Public identifier prefix matches.
+    if QUIRKS_PUBLIC_ID_PREFIX
+        .iter()
+        .any(|p| ascii_starts_with(pid, p))
+    {
+        return true;
+    }
+    // System identifier missing/empty + public identifier prefix.
+    if sid_missing_or_empty
+        && QUIRKS_PUBLIC_ID_PREFIX_WHEN_SYS_MISSING
+            .iter()
+            .any(|p| ascii_starts_with(pid, p))
+    {
+        return true;
+    }
+    false
 }
 
 // ── Open elements stack helpers (§13.2.6.4.2) ─────────────────
@@ -211,33 +477,6 @@ pub fn has_element_in_table_scope(parser: &HtmlTreeConstructor, name: &str) -> b
     false
 }
 
-/// The select scope set (§13.2.6.4.2): only `optgroup` + `option` are NOT
-/// boundaries; everything else is. Equivalent to "default scope minus all
-/// boundaries except optgroup/option" — simpler to implement directly.
-#[allow(dead_code)]
-const SELECT_SCOPE_BOUNDARY: &[&str] = &[
-    "html", "table", "template", "caption", "td", "th", "marquee", "object", "applet",
-];
-
-/// Check whether an element is in *select scope* (§13.2.6.4.2): same as
-/// default scope but the boundary set excludes `optgroup` and `option`.
-#[allow(dead_code)]
-pub fn has_element_in_select_scope(parser: &HtmlTreeConstructor, name: &str) -> bool {
-    for node in parser.open_elements.iter().rev() {
-        let local = match html_local_name(node) {
-            Some(l) => l,
-            None => continue,
-        };
-        if local == name {
-            return true;
-        }
-        if SELECT_SCOPE_BOUNDARY.contains(&local.as_str()) {
-            return false;
-        }
-    }
-    false
-}
-
 /// Check whether an element with the given tag name is on the stack of
 /// open elements (no scope boundaries — just a plain stack search).
 /// Used by `</template>` handling per §13.2.6.4.5.
@@ -246,6 +485,63 @@ pub fn has_element_in_stack(parser: &HtmlTreeConstructor, name: &str) -> bool {
         .open_elements
         .iter()
         .any(|n| html_local_name(n).as_deref() == Some(name))
+}
+
+/// Close a list item (`<li>`) or definition term (`<dd>`/`<dt>`) per the
+/// loop algorithm in §13.2.6.4.7.
+///
+/// Walks the stack of open elements from top to bottom. If any of the
+/// `targets` is found, generates implied end tags except for that element,
+/// then pops until that element is popped. The walk stops early if a
+/// special element that is not `address`, `div`, or `p` is encountered.
+///
+/// For `<li>`, pass `&["li"]`. For `<dd>`/`<dt>`, pass `&["dd", "dt"]`
+/// (the spec checks for both regardless of which start tag triggered it).
+///
+/// Returns `true` if a target was found and popped; `false` otherwise.
+pub fn close_list_item(parser: &mut HtmlTreeConstructor, targets: &[&str]) -> bool {
+    // Walk from top of stack downward.
+    for i in (0..parser.open_elements.len()).rev() {
+        let local = match html_local_name(&parser.open_elements[i]) {
+            Some(l) => l,
+            None => continue,
+        };
+        let target = targets.iter().find(|t| local == **t);
+        if let Some(target) = target {
+            let target = target.to_string();
+            // Found the target. Generate implied end tags except for target.
+            generate_implied_end_tags(parser, Some(&target));
+            // If current node is not target, parse error.
+            let current_is_target = parser
+                .open_elements
+                .last()
+                .and_then(|n| html_local_name(n))
+                .map(|l| l == target)
+                .unwrap_or(false);
+            if !current_is_target {
+                parser
+                    .errors
+                    .push(ParseError::Generic("list item not at current node"));
+            }
+            // Pop until target is popped.
+            while let Some(top) = parser.open_elements.last() {
+                let top_name = html_local_name(top);
+                parser.open_elements.pop();
+                if top_name.as_deref() == Some(target.as_str()) {
+                    break;
+                }
+            }
+            return true;
+        }
+        // If node is special but not address/div/p, stop.
+        if SPECIAL_ELEMENTS.contains(&local.as_str())
+            && !matches!(local.as_str(), "address" | "div" | "p")
+        {
+            return false;
+        }
+        // Otherwise: continue to previous entry.
+    }
+    false
 }
 
 fn has_element_in_scope_with(
@@ -683,7 +979,7 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
     for _ in 0..8 {
         // 4.1: Find the formatting element (last AFE entry with tag=subject,
         //      between end and last marker).
-        let formatting_afe_index = match find_formatting_element(parser, subject) {
+        let mut formatting_afe_index = match find_formatting_element(parser, subject) {
             Some(i) => i,
             None => {
                 // No formatting element: run "any other end tag" behavior.
@@ -750,7 +1046,7 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
             })
             .map(|(i, _)| fmt_stack_index + 1 + i);
 
-        let furthest_block_index = match furthest_block_index {
+        let mut furthest_block_index = match furthest_block_index {
             Some(i) => i,
             None => {
                 // No furthest block: pop elements off the stack until the
@@ -785,7 +1081,8 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
 
         // 4.8: Inner loop.
         let mut node_index = furthest_block_index;
-        let mut last_node = parser.open_elements[furthest_block_index].clone();
+        let furthest_block_node = parser.open_elements[furthest_block_index].clone();
+        let mut last_node = furthest_block_node.clone();
 
         let mut inner_iterations = 0;
         loop {
@@ -823,11 +1120,40 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
                     if node_index < fmt_stack_index {
                         fmt_stack_index_will_decrement(&mut fmt_stack_index);
                     }
+                    if node_index < furthest_block_index {
+                        furthest_block_index -= 1;
+                    }
                 }
                 Some(afe_idx) => {
-                    // Create a new element with the same tag/attrs as node,
-                    // append last_node to it, replace node in both the stack
-                    // and the AFE list, set last_node = new element.
+                    // §13.2.6.4.7 step 13.4: If innerLoopCounter > 3 and
+                    // node is in the AFE list, remove it from the AFE list
+                    // (and then from the stack via the "not in AFE" path).
+                    // This prevents excessive cloning of formatting elements
+                    // in deeply nested misnested content.
+                    if inner_iterations > 3 {
+                        parser.active_formatting_elements.remove(afe_idx);
+                        // Adjust bookmark if the removed entry was before it.
+                        if afe_idx < bookmark {
+                            bookmark -= 1;
+                        }
+                        // Adjust formatting_afe_index if the removed entry
+                        // was before the formatting element.
+                        if afe_idx < formatting_afe_index {
+                            formatting_afe_index -= 1;
+                        }
+                        // Now treat as "not in AFE": remove from stack.
+                        parser.open_elements.remove(node_index);
+                        if node_index < fmt_stack_index {
+                            fmt_stack_index_will_decrement(&mut fmt_stack_index);
+                        }
+                        if node_index < furthest_block_index {
+                            furthest_block_index -= 1;
+                        }
+                        continue;
+                    }
+                    // Step 13.6: Create a new element with the same tag/attrs
+                    // as node, append last_node to it, replace node in both
+                    // the stack and the AFE list, set last_node = new element.
                     let new_element = clone_element(parser, &node);
                     let _ = append_child(&new_element, last_node.clone());
                     // Replace node in the open elements stack.
@@ -835,12 +1161,13 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
                     // Replace node in the AFE list.
                     parser.active_formatting_elements[afe_idx] =
                         ActiveFormattingEntry::Element(new_element.clone());
-                    last_node = new_element;
-                    // If node (the AFE entry) was the bookmark, move the
-                    // bookmark to immediately after the new entry.
-                    if afe_idx == bookmark {
+                    // Step 13.7: If lastNode is furthestBlock, move the
+                    // bookmark to be immediately after the new node in the
+                    // AFE list.
+                    if Rc::ptr_eq(&last_node, &furthest_block_node) {
                         bookmark = afe_idx + 1;
                     }
+                    last_node = new_element;
                 }
             }
         }
