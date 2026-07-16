@@ -436,8 +436,7 @@ fn html5lib_tree_construction_suite() {
             .and_then(|s| s.to_str())
             .unwrap_or("?")
             .to_string();
-        let text = fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let cases = parse_dat(&text);
 
         let mut file_pass = 0usize;
@@ -481,14 +480,7 @@ fn html5lib_tree_construction_suite() {
     );
     eprintln!(" ─────────────────────────────────────────────────────────────────");
     for (name, p, f, s) in &per_file {
-        eprintln!(
-            " {:<36} {:>8} {:>8} {:>8} {:>8}",
-            name,
-            p,
-            f,
-            s,
-            p + f + s
-        );
+        eprintln!(" {:<36} {:>8} {:>8} {:>8} {:>8}", name, p, f, s, p + f + s);
     }
     eprintln!(" ─────────────────────────────────────────────────────────────────");
     let total = total_pass + total_fail + total_skip;
@@ -561,7 +553,10 @@ fn html5lib_tree_construction_suite() {
         for r in &panic_samples {
             report.push_str(&format!(
                 "- **{} #{}** `{}` — {}\n",
-                r.file, r.index, r.data_preview, r.detail.trim()
+                r.file,
+                r.index,
+                r.data_preview,
+                r.detail.trim()
             ));
         }
     }

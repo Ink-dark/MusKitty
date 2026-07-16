@@ -356,12 +356,14 @@ impl Node {
                 }
                 Some(s)
             }
-            NodeType::Text | NodeType::Comment | NodeType::ProcessingInstruction => match &self.kind {
-                NodeKind::Text(t) => Some(t.data.clone()),
-                NodeKind::Comment(c) => Some(c.data.clone()),
-                NodeKind::ProcessingInstruction(pi) => Some(pi.data.clone()),
-                _ => None,
-            },
+            NodeType::Text | NodeType::Comment | NodeType::ProcessingInstruction => {
+                match &self.kind {
+                    NodeKind::Text(t) => Some(t.data.clone()),
+                    NodeKind::Comment(c) => Some(c.data.clone()),
+                    NodeKind::ProcessingInstruction(pi) => Some(pi.data.clone()),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
