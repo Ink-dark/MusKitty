@@ -171,6 +171,30 @@ pub fn insert_comment_at(target: &Rc<RefCell<Node>>, data: &str, document: &Rc<R
     let _ = append_child(target, comment);
 }
 
+/// Insert a ProcessingInstruction node at the adjusted insertion location
+/// (§13.2.6.2 "insert a processing instruction").
+///
+/// Per the spec, a ProcessingInstruction node with the token's target and
+/// data is created and inserted at the same location a comment would go.
+/// Foster parenting applies as normal for `insert_node`.
+pub fn insert_processing_instruction(parser: &HtmlTreeConstructor, target: &str, data: &str) {
+    let pi = Node::new_processing_instruction(target, data, &parser.document);
+    insert_node(parser, &pi);
+}
+
+/// Insert a ProcessingInstruction node as a child of the specified target
+/// node (variant of `insert_comment_at` for PI tokens emitted before the
+/// html element exists, e.g. in Initial/BeforeHtml modes).
+pub fn insert_processing_instruction_at(
+    target: &Rc<RefCell<Node>>,
+    target_name: &str,
+    data: &str,
+    document: &Rc<RefCell<Node>>,
+) {
+    let pi = Node::new_processing_instruction(target_name, data, document);
+    let _ = append_child(target, pi);
+}
+
 // ── Open elements stack helpers (§13.2.6.4.2) ─────────────────
 
 /// The default scope set per §13.2.6.4.2. An element is "in scope" if it

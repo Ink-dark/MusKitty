@@ -231,6 +231,13 @@ fn serialize_node(node: &Rc<RefCell<Node>>, depth: usize, out: &mut String) {
                     out.push_str(&format!("{}<!-- {} -->\n", indent, c.data));
                 }
             }
+            NodeType::ProcessingInstruction => {
+                if let NodeKind::ProcessingInstruction(pi) = &n.kind {
+                    // WPT test.js format: `<?{target} {data}?>`
+                    // (always a space after target, even when data is empty).
+                    out.push_str(&format!("{}<?{} {}?>\n", indent, pi.target, pi.data));
+                }
+            }
             NodeType::DocumentType => {
                 if let NodeKind::DocumentType(d) = &n.kind {
                     if d.public_id.is_empty() && d.system_id.is_empty() {

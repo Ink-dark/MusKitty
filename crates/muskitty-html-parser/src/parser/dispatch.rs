@@ -46,24 +46,24 @@ pub fn dispatch(
         InsertionMode::BeforeHead => handle_before_head(parser, token),
         InsertionMode::InHead => handle_in_head(parser, token, tokenizer),
         InsertionMode::AfterHead => handle_after_head(parser, token, tokenizer),
-        InsertionMode::InBody => handle_in_body(parser, token),
+        InsertionMode::InBody => handle_in_body(parser, token, tokenizer),
         InsertionMode::Text => handle_text(parser, token, tokenizer),
-        InsertionMode::AfterBody => handle_after_body(parser, token),
-        InsertionMode::AfterAfterBody => handle_after_after_body(parser, token),
+        InsertionMode::AfterBody => handle_after_body(parser, token, tokenizer),
+        InsertionMode::AfterAfterBody => handle_after_after_body(parser, token, tokenizer),
         InsertionMode::InTable => handle_in_table(parser, token, tokenizer),
-        InsertionMode::InTableText => handle_in_table_text(parser, token),
-        InsertionMode::InCaption => handle_in_caption(parser, token),
+        InsertionMode::InTableText => handle_in_table_text(parser, token, tokenizer),
+        InsertionMode::InCaption => handle_in_caption(parser, token, tokenizer),
         InsertionMode::InColumnGroup => handle_in_column_group(parser, token, tokenizer),
         InsertionMode::InTableBody => handle_in_table_body(parser, token),
         InsertionMode::InRow => handle_in_row(parser, token),
-        InsertionMode::InCell => handle_in_cell(parser, token),
+        InsertionMode::InCell => handle_in_cell(parser, token, tokenizer),
         InsertionMode::InHeadNoscript => handle_in_head_noscript(parser, token, tokenizer),
-        InsertionMode::InSelect => handle_in_select(parser, token),
-        InsertionMode::InSelectInTable => handle_in_select_in_table(parser, token),
+        InsertionMode::InSelect => handle_in_select(parser, token, tokenizer),
+        InsertionMode::InSelectInTable => handle_in_select_in_table(parser, token, tokenizer),
         InsertionMode::InTemplate => handle_in_template(parser, token, tokenizer),
-        InsertionMode::InFrameset => handle_in_frameset(parser, token),
-        InsertionMode::AfterFrameset => handle_after_frameset(parser, token),
-        InsertionMode::AfterAfterFrameset => handle_after_after_frameset(parser, token),
+        InsertionMode::InFrameset => handle_in_frameset(parser, token, tokenizer),
+        InsertionMode::AfterFrameset => handle_after_frameset(parser, token, tokenizer),
+        InsertionMode::AfterAfterFrameset => handle_after_after_frameset(parser, token, tokenizer),
     }
 }
 
@@ -88,6 +88,15 @@ fn handle_initial(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
         Token::Character(c) if is_whitespace(*c) => Step::Done,
         Token::Comment(data) => {
             helpers::insert_comment_at(&parser.document, data, &parser.document);
+            Step::Done
+        }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction_at(
+                &parser.document,
+                target,
+                data,
+                &parser.document,
+            );
             Step::Done
         }
         Token::Doctype(dt) => {
@@ -130,6 +139,15 @@ fn handle_before_html(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             helpers::insert_comment_at(&parser.document, data, &parser.document);
             Step::Done
         }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction_at(
+                &parser.document,
+                target,
+                data,
+                &parser.document,
+            );
+            Step::Done
+        }
         Token::Character(c) if is_whitespace(*c) => Step::Done,
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
             let element = helpers::create_element_for_token(parser, tag);
@@ -162,6 +180,10 @@ fn handle_before_head(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
         Token::Character(c) if is_whitespace(*c) => Step::Done,
         Token::Comment(data) => {
             helpers::insert_comment(parser, data);
+            Step::Done
+        }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
             Step::Done
         }
         Token::Doctype(_) => {
@@ -216,6 +238,10 @@ fn handle_in_head(
         }
         Token::Comment(data) => {
             helpers::insert_comment(parser, data);
+            Step::Done
+        }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
             Step::Done
         }
         Token::Doctype(_) => {
@@ -388,6 +414,10 @@ fn handle_after_head(
         }
         Token::Comment(data) => {
             helpers::insert_comment(parser, data);
+            Step::Done
+        }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
             Step::Done
         }
         Token::Doctype(_) => {
@@ -613,7 +643,11 @@ const VOID_ELEMENTS: &[&str] = &[
     "source", "track", "wbr",
 ];
 
-fn handle_in_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_body(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::EOF => Step::Done,
         Token::Character(c) if is_whitespace(*c) => {
@@ -631,13 +665,19 @@ fn handle_in_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             helpers::insert_comment(parser, data);
             Step::Done
         }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
+            Step::Done
+        }
         Token::Doctype(_) => {
             parser
                 .errors
                 .push(ParseError::Generic("unexpected DOCTYPE in body"));
             Step::Done
         }
-        Token::Tag(tag) if tag.kind == TagKind::Start => handle_in_body_start_tag(parser, tag),
+        Token::Tag(tag) if tag.kind == TagKind::Start => {
+            handle_in_body_start_tag(parser, tag, tokenizer)
+        }
         Token::Tag(tag) if tag.kind == TagKind::End => handle_in_body_end_tag(parser, tag),
         _ => Step::Done,
     }
@@ -646,6 +686,7 @@ fn handle_in_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
 fn handle_in_body_start_tag(
     parser: &mut HtmlTreeConstructor,
     tag: &crate::tokenizer::TagToken,
+    tokenizer: &mut dyn Tokenizer,
 ) -> Step {
     let name = tag.name.as_str();
 
@@ -662,33 +703,58 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
-    // Head-element start tags: process using the rules for "in head".
+    // Head-element start tags: process using the rules for "in head"
+    // (§13.2.6.4.7). For void-like elements (base/link/meta/etc.) we
+    // insert and pop. For title/style/script/noframes we must switch the
+    // tokenizer to the appropriate content model and enter Text mode so
+    // their contents are consumed as raw text rather than parsed markup.
     if matches!(
         name,
         "base" | "basefont" | "bgsound" | "link" | "meta" | "noframes" | "script" | "style"
             | "title"
     ) {
-        // Defer to the InHead handler. We cannot call it directly (it's a
-        // private fn), so switch modes transiently. Simpler: replicate the
-        // common void-element behaviour here.
         if matches!(name, "base" | "basefont" | "bgsound" | "link" | "meta") {
             helpers::insert_element(parser, tag);
             parser.open_elements.pop();
+        } else if name == "title" {
+            // title: RCDATA (§13.2.6.4.4).
+            tokenizer.set_appropriate_end_tag_name(Some(name));
+            tokenizer.set_state(State::RCDATA);
+            helpers::insert_element(parser, tag);
+            parser.original_insertion_mode = Some(parser.insertion_mode);
+            parser.insertion_mode = InsertionMode::Text;
+        } else if matches!(name, "noframes" | "style") {
+            // noframes/style: RAWTEXT (§13.2.6.4.4).
+            tokenizer.set_appropriate_end_tag_name(Some(name));
+            tokenizer.set_state(State::RAWTEXT);
+            helpers::insert_element(parser, tag);
+            parser.original_insertion_mode = Some(parser.insertion_mode);
+            parser.insertion_mode = InsertionMode::Text;
         } else {
-            // title/style/script/noframes: defer to a future InHead
-            // callback by signalling that this tag is not yet supported
-            // inline. For Phase 3.2 we mark it as a parse error so callers
-            // know it was ignored.
-            parser.errors.push(ParseError::Generic(
-                "head element in body not yet inline-handled",
-            ));
+            // script: ScriptData (§13.2.6.4.4).
+            tokenizer.set_appropriate_end_tag_name(Some(name));
+            tokenizer.set_state(State::ScriptData);
+            helpers::insert_element(parser, tag);
+            parser.original_insertion_mode = Some(parser.insertion_mode);
+            parser.insertion_mode = InsertionMode::Text;
         }
         return Step::Done;
     }
 
-    // template (§13.2.6.4.7): process using in-head rules. Inlined here
-    // because handle_in_body_start_tag doesn't receive a tokenizer, and
-    // the template start-tag path doesn't need one.
+    // textarea (§13.2.6.4.7): switch tokenizer to RCDATA, insert element,
+    // switch to Text mode. Also drop frameset_ok.
+    if name == "textarea" {
+        tokenizer.set_appropriate_end_tag_name(Some(name));
+        tokenizer.set_state(State::RCDATA);
+        helpers::insert_element(parser, tag);
+        parser.frameset_ok = false;
+        parser.original_insertion_mode = Some(parser.insertion_mode);
+        parser.insertion_mode = InsertionMode::Text;
+        return Step::Done;
+    }
+
+    // template (§13.2.6.4.7): process using in-head rules. The template
+    // start-tag path doesn't need a tokenizer switch, so this is inlined.
     if name == "template" {
         helpers::add_formatting_marker(parser);
         helpers::insert_element(parser, tag);
@@ -1380,11 +1446,15 @@ fn merge_attributes(element: &Rc<RefCell<muskitty_dom::Node>>, tag: &crate::toke
 
 // ── After body insertion mode (§13.2.6.4.17) ──────────────────
 
-fn handle_after_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_after_body(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Character(c) if is_whitespace(*c) => {
             // Process using the rules for "in body".
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Comment(data) => {
             // Insert a comment as the last child of the first element in the
@@ -1397,6 +1467,16 @@ fn handle_after_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             helpers::insert_comment_at(&html, data, &parser.document);
             Step::Done
         }
+        Token::ProcessingInstruction { target, data } => {
+            // Insert a PI as the last child of the <html> element.
+            let html = parser
+                .open_elements
+                .first()
+                .cloned()
+                .unwrap_or_else(|| parser.document.clone());
+            helpers::insert_processing_instruction_at(&html, target, data, &parser.document);
+            Step::Done
+        }
         Token::Doctype(_) => {
             parser
                 .errors
@@ -1405,7 +1485,7 @@ fn handle_after_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
             // Process using the rules for "in body".
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "body" => {
             // If body not in scope, parse error, ignore. Otherwise switch to
@@ -1446,20 +1526,34 @@ fn handle_after_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
 
 // ── After after body insertion mode (§13.2.6.4.20) ────────────
 
-fn handle_after_after_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_after_after_body(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Comment(data) => {
             // Insert a comment at the Document.
             helpers::insert_comment_at(&parser.document, data, &parser.document);
             Step::Done
         }
+        Token::ProcessingInstruction { target, data } => {
+            // Insert a PI at the Document.
+            helpers::insert_processing_instruction_at(
+                &parser.document,
+                target,
+                data,
+                &parser.document,
+            );
+            Step::Done
+        }
         Token::Doctype(_) => {
             // Process using the rules for "in body".
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Character(c) if is_whitespace(*c) => {
             // Process using the rules for "in body".
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::EOF => Step::Done,
         _ => {
@@ -1555,6 +1649,10 @@ fn handle_in_table(
             helpers::insert_comment(parser, data);
             Step::Done
         }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
+            Step::Done
+        }
         Token::Doctype(_) => {
             parser
                 .errors
@@ -1599,7 +1697,7 @@ fn handle_in_table(
                     // Process using the rules for "in head" (§13.2.6.4.9).
                     handle_in_head(parser, token, tokenizer)
                 }
-                _ => foster_parent_in_body(parser, token),
+                _ => foster_parent_in_body(parser, token, tokenizer),
             }
         }
         Token::Tag(tag) if tag.kind == TagKind::End => match tag.name.as_str() {
@@ -1627,32 +1725,40 @@ fn handle_in_table(
                 Step::Done
             }
             "template" => handle_in_head(parser, token, tokenizer),
-            _ => foster_parent_in_body(parser, token),
+            _ => foster_parent_in_body(parser, token, tokenizer),
         },
         Token::EOF => {
             // Reprocess in InBody for EOF handling (template/fragment checks).
             parser.insertion_mode = InsertionMode::InBody;
             Step::Reprocess
         }
-        _ => foster_parent_in_body(parser, token),
+        _ => foster_parent_in_body(parser, token, tokenizer),
     }
 }
 
 /// Foster-parent a token by enabling foster parenting, processing it as
 /// InBody, then disabling foster parenting (§13.2.6.4.9 "anything else").
-fn foster_parent_in_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn foster_parent_in_body(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     parser
         .errors
         .push(ParseError::Generic("foster parenting in table"));
     parser.foster_parenting = true;
-    let step = handle_in_body(parser, token);
+    let step = handle_in_body(parser, token, tokenizer);
     parser.foster_parenting = false;
     step
 }
 
 // ── InTableText insertion mode (§13.2.6.4.10) ───────────────────
 
-fn handle_in_table_text(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_table_text(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Character('\0') => {
             parser
@@ -1674,7 +1780,7 @@ fn handle_in_table_text(parser: &mut HtmlTreeConstructor, token: &Token) -> Step
             if has_non_ws {
                 parser.foster_parenting = true;
                 for c in pending.chars() {
-                    handle_in_body(parser, &Token::Character(c));
+                    handle_in_body(parser, &Token::Character(c), tokenizer);
                 }
                 parser.foster_parenting = false;
             } else {
@@ -1694,7 +1800,11 @@ fn handle_in_table_text(parser: &mut HtmlTreeConstructor, token: &Token) -> Step
 
 // ── InCaption insertion mode (§13.2.6.4.11) ─────────────────────
 
-fn handle_in_caption(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_caption(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "caption" => {
             if !helpers::has_element_in_scope(parser, "caption") {
@@ -1757,7 +1867,7 @@ fn handle_in_caption(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
         }
         _ => {
             // Anything else: process using the rules for InBody.
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
     }
 }
@@ -1798,6 +1908,10 @@ fn handle_in_column_group(
             helpers::insert_comment(parser, data);
             Step::Done
         }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
+            Step::Done
+        }
         Token::Doctype(_) => {
             parser
                 .errors
@@ -1805,7 +1919,7 @@ fn handle_in_column_group(
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start => match tag.name.as_str() {
-            "html" => handle_in_body(parser, token),
+            "html" => handle_in_body(parser, token, tokenizer),
             "col" => {
                 helpers::insert_element(parser, tag);
                 parser.open_elements.pop();
@@ -1976,7 +2090,11 @@ fn handle_in_row(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
 
 // ── InCell insertion mode (§13.2.6.4.15) ────────────────────────
 
-fn handle_in_cell(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_cell(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Tag(tag) if tag.kind == TagKind::End && matches!(tag.name.as_str(), "td" | "th") => {
             let name = tag.name.clone();
@@ -2053,7 +2171,7 @@ fn handle_in_cell(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
         }
         _ => {
             // Anything else: process using the rules for InBody.
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
     }
 }
@@ -2075,7 +2193,7 @@ fn handle_in_head_noscript(
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "noscript" => {
             // Pop the noscript element and switch to InHead.
@@ -2085,6 +2203,14 @@ fn handle_in_head_noscript(
         }
         Token::Character(c) if is_whitespace(*c) => handle_in_head(parser, token, tokenizer),
         Token::Comment(data) => handle_in_head(parser, &Token::Comment(data.clone()), tokenizer),
+        Token::ProcessingInstruction { target, data } => handle_in_head(
+            parser,
+            &Token::ProcessingInstruction {
+                target: target.clone(),
+                data: data.clone(),
+            },
+            tokenizer,
+        ),
         Token::Tag(tag)
             if tag.kind == TagKind::Start
                 && matches!(
@@ -2130,7 +2256,11 @@ fn handle_anything_else_in_head_noscript(parser: &mut HtmlTreeConstructor, _toke
 
 // ── InSelect insertion mode (§13.2.6.4.16) ──────────────────────
 
-fn handle_in_select(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_select(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Character('\0') => {
             parser
@@ -2146,6 +2276,10 @@ fn handle_in_select(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             helpers::insert_comment(parser, data);
             Step::Done
         }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
+            Step::Done
+        }
         Token::Doctype(_) => {
             parser
                 .errors
@@ -2153,7 +2287,7 @@ fn handle_in_select(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "option" => {
             // If current node is an option, pop it (§13.2.6.4.16).
@@ -2386,7 +2520,11 @@ fn handle_in_select_end_tag(parser: &mut HtmlTreeConstructor, name: &str) {
 
 // ── InSelectInTable insertion mode (§13.2.6.4.18) ───────────────
 
-fn handle_in_select_in_table(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_select_in_table(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Tag(tag)
             if tag.kind == TagKind::Start
@@ -2441,7 +2579,7 @@ fn handle_in_select_in_table(parser: &mut HtmlTreeConstructor, token: &Token) ->
                 Step::Done
             }
         }
-        _ => handle_in_select(parser, token),
+        _ => handle_in_select(parser, token, tokenizer),
     }
 }
 
@@ -2459,10 +2597,14 @@ fn handle_in_template(
         }
         Token::Character(_) => {
             helpers::reconstruct_active_formatting_elements(parser);
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Comment(data) => {
             helpers::insert_comment(parser, data);
+            Step::Done
+        }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
             Step::Done
         }
         Token::Doctype(_) => {
@@ -2472,7 +2614,7 @@ fn handle_in_template(
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Tag(tag)
             if tag.kind == TagKind::Start
@@ -2552,10 +2694,18 @@ fn handle_in_template(
                     .unwrap_or(InsertionMode::InBody);
                 Step::Reprocess
             } else {
+                // Parse error. Pop the current template element from the
+                // stack of open elements, remove the current template
+                // insertion mode from the stack of template insertion
+                // modes, and reprocess the EOF token (§13.2.6.4.19).
                 parser
                     .errors
                     .push(ParseError::Generic("unexpected EOF in template"));
-                Step::Done
+                parser.open_elements.pop();
+                parser.template_insertion_modes.pop();
+                // Reset insertion mode after popping template.
+                reset_insertion_mode(parser);
+                Step::Reprocess
             }
         }
         _ => {
@@ -2600,7 +2750,11 @@ fn template_in_stack(parser: &HtmlTreeConstructor) -> bool {
 
 // ── InFrameset insertion mode (§13.2.6.4.21) ────────────────────
 
-fn handle_in_frameset(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_frameset(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Character(c) if is_whitespace(*c) => {
             helpers::insert_character(parser, *c);
@@ -2610,6 +2764,10 @@ fn handle_in_frameset(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             helpers::insert_comment(parser, data);
             Step::Done
         }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
+            Step::Done
+        }
         Token::Doctype(_) => {
             parser
                 .errors
@@ -2617,7 +2775,7 @@ fn handle_in_frameset(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "frameset" => {
             helpers::insert_element(parser, tag);
@@ -2693,7 +2851,11 @@ fn handle_in_frameset(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
 
 // ── AfterFrameset insertion mode (§13.2.6.4.22) ─────────────────
 
-fn handle_after_frameset(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_after_frameset(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Character(c) if is_whitespace(*c) => {
             helpers::insert_character(parser, *c);
@@ -2703,6 +2865,10 @@ fn handle_after_frameset(parser: &mut HtmlTreeConstructor, token: &Token) -> Ste
             helpers::insert_comment(parser, data);
             Step::Done
         }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction(parser, target, data);
+            Step::Done
+        }
         Token::Doctype(_) => {
             parser
                 .errors
@@ -2710,7 +2876,7 @@ fn handle_after_frameset(parser: &mut HtmlTreeConstructor, token: &Token) -> Ste
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            handle_in_body(parser, token)
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "html" => {
             parser.insertion_mode = InsertionMode::AfterAfterFrameset;
@@ -2749,11 +2915,24 @@ fn handle_after_frameset(parser: &mut HtmlTreeConstructor, token: &Token) -> Ste
 
 // ── AfterAfterFrameset insertion mode (§13.2.6.4.23) ────────────
 
-fn handle_after_after_frameset(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_after_after_frameset(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Comment(data) => {
             // Insert at the Document.
             helpers::insert_comment_at(&parser.document, data, &parser.document);
+            Step::Done
+        }
+        Token::ProcessingInstruction { target, data } => {
+            helpers::insert_processing_instruction_at(
+                &parser.document,
+                target,
+                data,
+                &parser.document,
+            );
             Step::Done
         }
         Token::Doctype(_) => {
@@ -2762,7 +2941,7 @@ fn handle_after_after_frameset(parser: &mut HtmlTreeConstructor, token: &Token) 
             ));
             Step::Done
         }
-        Token::Character(c) if is_whitespace(*c) => handle_in_body(parser, token),
+        Token::Character(c) if is_whitespace(*c) => handle_in_body(parser, token, tokenizer),
         Token::EOF => Step::Done,
         Token::Tag(tag)
             if tag.kind == TagKind::Start

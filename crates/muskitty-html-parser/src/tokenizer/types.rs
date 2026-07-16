@@ -4,8 +4,8 @@
 
 /// A token emitted by the tokenizer.
 ///
-/// WHATWG §13.2.5 defines six token kinds: DOCTYPE, start tag, end tag,
-/// comment, character, and end-of-file.
+/// WHATWG §13.2.5 defines token kinds: DOCTYPE, start tag, end tag,
+/// comment, character, end-of-file, and processing instruction.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     /// A DOCTYPE token (§13.2.5.53–§13.2.5.68).
@@ -18,6 +18,9 @@ pub enum Token {
     Character(char),
     /// End-of-file token. Emitted when the input stream is exhausted.
     EOF,
+    /// A processing instruction token (§13.2.5.72–§13.2.5.76).
+    /// Carries the PI target and data.
+    ProcessingInstruction { target: String, data: String },
 }
 
 /// Distinguishes start tags from end tags.
@@ -237,23 +240,35 @@ pub enum State {
     /// §13.2.5.71 CDATA section end state
     CDATASectionEnd,
 
+    // ── Processing instruction states (§13.2.5.72–§13.2.5.76) ──
+    /// §13.2.5.72 Processing instruction open state
+    ProcessingInstructionOpen,
+    /// §13.2.5.73 Processing instruction target state
+    ProcessingInstructionTarget,
+    /// §13.2.5.74 After processing instruction target state
+    AfterProcessingInstructionTarget,
+    /// §13.2.5.75 Processing instruction data state
+    ProcessingInstructionData,
+    /// §13.2.5.76 Processing instruction questionable state
+    ProcessingInstructionQuestionable,
+
     // ── Character reference states ────────────────────────
-    /// §13.2.5.72 Character reference state
+    /// §13.2.5.77 Character reference state
     CharacterReference,
-    /// §13.2.5.73 Named character reference state
+    /// §13.2.5.78 Named character reference state
     NamedCharacterReference,
-    /// §13.2.5.74 Ambiguous ampersand state
+    /// §13.2.5.79 Ambiguous ampersand state
     AmbiguousAmpersand,
-    /// §13.2.5.75 Numeric character reference state
+    /// §13.2.5.80 Numeric character reference state
     NumericCharacterReference,
-    /// §13.2.5.76 Hexadecimal character reference start state
+    /// §13.2.5.81 Hexadecimal character reference start state
     HexCharacterReferenceStart,
-    /// §13.2.5.77 Decimal character reference start state
+    /// §13.2.5.82 Decimal character reference start state
     DecimalCharacterReferenceStart,
-    /// §13.2.5.78 Hexadecimal character reference state
+    /// §13.2.5.83 Hexadecimal character reference state
     HexCharacterReference,
-    /// §13.2.5.79 Decimal character reference state
+    /// §13.2.5.84 Decimal character reference state
     DecimalCharacterReference,
-    /// §13.2.5.80 Numeric character reference end state
+    /// §13.2.5.85 Numeric character reference end state
     NumericCharacterReferenceEnd,
 }

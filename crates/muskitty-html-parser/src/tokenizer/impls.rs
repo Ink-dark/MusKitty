@@ -51,6 +51,10 @@ pub struct HtmlTokenizer {
     current_tag: Option<TagToken>,
     /// The comment data currently being accumulated.
     current_comment: String,
+    /// The processing instruction token currently being built
+    /// (§13.2.5.72–§13.2.5.76). Set when a valid PI target is identified
+    /// in the ProcessingInstructionTarget state.
+    current_pi: Option<(String, String)>,
     /// The attribute name currently being accumulated (AttributeName state).
     current_attr_name: String,
     /// The attribute value currently being accumulated (attribute value states).
@@ -94,6 +98,7 @@ impl HtmlTokenizer {
             last_was_eof: false,
             current_tag: None,
             current_comment: String::new(),
+            current_pi: None,
             current_attr_name: String::new(),
             current_attr_value: String::new(),
             current_doctype: DoctypeToken {
@@ -301,6 +306,21 @@ impl HtmlTokenizer {
             State::CDATASection => self.handle_cdata_section_state(),
             State::CDATASectionBracket => self.handle_cdata_section_bracket_state(),
             State::CDATASectionEnd => self.handle_cdata_section_end_state(),
+            State::ProcessingInstructionOpen => {
+                self.handle_processing_instruction_open_state()
+            }
+            State::ProcessingInstructionTarget => {
+                self.handle_processing_instruction_target_state()
+            }
+            State::AfterProcessingInstructionTarget => {
+                self.handle_after_processing_instruction_target_state()
+            }
+            State::ProcessingInstructionData => {
+                self.handle_processing_instruction_data_state()
+            }
+            State::ProcessingInstructionQuestionable => {
+                self.handle_processing_instruction_questionable_state()
+            }
         };
         result
     }
@@ -354,6 +374,7 @@ impl Tokenizer for HtmlTokenizer {
         self.last_was_eof = false;
         self.current_tag = None;
         self.current_comment.clear();
+        self.current_pi = None;
         self.current_attr_name.clear();
         self.current_attr_value.clear();
         self.current_doctype = DoctypeToken {
@@ -1608,9 +1629,11 @@ impl HtmlTokenizer {
                 None
             }
             Some('?') => {
-                self.current_comment.clear();
-                self.current_comment.push('?');
-                self.state = State::BogusComment;
+                // §13.2.5.6: U+003F QUESTION MARK (?)
+                // Set the temporary buffer to the empty string. Switch to the
+                // processing instruction open state.
+                self.temporary_buffer.clear();
+                self.state = State::ProcessingInstructionOpen;
                 None
             }
             Some(_c) => {
@@ -2409,6 +2432,176 @@ impl HtmlTokenizer {
                 self.pending_tokens.push(Token::Character(']'));
                 self.pending_tokens.push(Token::Character(']'));
                 self.state = State::CDATASection;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    // ── Processing instruction states (§13.2.5.72–§13.2.5.76) ──────
+
+    /// Convert the temporary buffer to a comment token (§13.2.5).
+    ///
+    /// Per the spec: "create a comment token whose data is the concatenation
+    /// of '?' and the code points in the temporary buffer". Used when a
+    /// processing instruction is found to have an invalid target and is
+    /// instead treated as a bogus comment. The current character is reconsumed
+    /// in the bogus comment state, so the buffer's content becomes the
+    /// initial comment data and the reconsumed char is appended next.
+    fn convert_temporary_buffer_to_comment(&mut self) {
+        // The BogusComment state appends to `current_comment`, so seed it with
+        // "?" + temporary buffer contents. The reconsumed character will be
+        // appended by the bogus comment handler on the next step.
+        self.current_comment.clear();
+        self.current_comment.push('?');
+        self.current_comment
+            .push_str(&self.temporary_buffer.clone());
+        self.temporary_buffer.clear();
+        self.state = State::BogusComment;
+        self.reconsume = true;
+    }
+
+    /// §13.2.5.72 Processing instruction open state
+    ///
+    /// Consume the next input character:
+    /// - ASCII alpha or U+005F LOW LINE (_) → reconsume in PI target state
+    /// - EOF → parse error (eof-in-processing-instruction), emit EOF
+    /// - Anything else → parse error, convert temporary buffer to comment,
+    ///   reconsume in bogus comment state
+    fn handle_processing_instruction_open_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                // Reconsume in the processing instruction target state.
+                self.state = State::ProcessingInstructionTarget;
+                self.reconsume = true;
+                None
+            }
+            None => {
+                // TODO: parse error (eof-in-processing-instruction)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(_) => {
+                // TODO: parse error (invalid-first-character-of-processing-instruction-target)
+                self.convert_temporary_buffer_to_comment();
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.73 Processing instruction target state
+    ///
+    /// Accumulates the PI target name in the temporary buffer until a
+    /// delimiter (whitespace, '?', or '>') is found. On delimiter, the target
+    /// is checked against "xml"/"xml-stylesheet" (disallowed) and either
+    /// converted to a comment or used to create a PI token.
+    fn handle_processing_instruction_target_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if matches!(c, '\t' | '\n' | '\u{000C}' | ' ' | '?' | '>') => {
+                let target = self.temporary_buffer.clone();
+                // Disallowed targets: "xml" or "xml-stylesheet" (ASCII
+                // case-insensitive) → parse error, convert to comment.
+                if target.eq_ignore_ascii_case("xml")
+                    || target.eq_ignore_ascii_case("xml-stylesheet")
+                {
+                    // TODO: parse error (disallowed-processing-instruction-target)
+                    self.convert_temporary_buffer_to_comment();
+                    return None;
+                }
+                // Valid target: create a PI token with empty data, reconsume
+                // in the after-target state.
+                self.current_pi = Some((target, String::new()));
+                self.temporary_buffer.clear();
+                self.state = State::AfterProcessingInstructionTarget;
+                self.reconsume = true;
+                None
+            }
+            Some(c) if c.is_ascii_alphanumeric() || c == '-' || c == '_' => {
+                self.temporary_buffer.push(c);
+                None
+            }
+            None => {
+                // TODO: parse error (eof-in-processing-instruction)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(_) => {
+                // TODO: parse error (invalid-processing-instruction-target)
+                self.convert_temporary_buffer_to_comment();
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.74 After processing instruction target state
+    ///
+    /// Skips whitespace between the target and data. Any non-whitespace
+    /// character is reconsumed in the data state.
+    fn handle_after_processing_instruction_target_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some(c) if matches!(c, '\t' | '\n' | '\u{000C}' | ' ') => {
+                // Ignore the character.
+                None
+            }
+            _ => {
+                // Reconsume in the processing instruction data state.
+                self.state = State::ProcessingInstructionData;
+                self.reconsume = true;
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.75 Processing instruction data state
+    ///
+    /// Accumulates PI data until '?' (→ questionable state) or '>'
+    /// (emit the PI token).
+    fn handle_processing_instruction_data_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('?') => {
+                self.state = State::ProcessingInstructionQuestionable;
+                None
+            }
+            Some('>') => {
+                self.state = State::Data;
+                let (target, data) = self.current_pi.take().unwrap_or((String::new(), String::new()));
+                Some(Token::ProcessingInstruction { target, data })
+            }
+            None => {
+                // TODO: parse error (eof-in-processing-instruction)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            Some(c) => {
+                if let Some((_, data)) = self.current_pi.as_mut() {
+                    data.push(c);
+                }
+                None
+            }
+        }
+    }
+
+    /// §13.2.5.76 Processing instruction questionable state
+    ///
+    /// After a '?' in data: '>' ends the PI, anything else appends '?' to
+    /// data and reconsumes in the data state.
+    fn handle_processing_instruction_questionable_state(&mut self) -> Option<Token> {
+        match self.next_char() {
+            Some('>') => {
+                self.state = State::Data;
+                let (target, data) = self.current_pi.take().unwrap_or((String::new(), String::new()));
+                Some(Token::ProcessingInstruction { target, data })
+            }
+            None => {
+                // TODO: parse error (eof-in-processing-instruction)
+                self.eof_emitted = true;
+                Some(Token::EOF)
+            }
+            _ => {
+                if let Some((_, data)) = self.current_pi.as_mut() {
+                    data.push('?');
+                }
+                self.state = State::ProcessingInstructionData;
                 self.reconsume = true;
                 None
             }
@@ -4515,12 +4708,15 @@ mod tests {
 
     #[test]
     fn bogus_comment_eof() {
-        // `<?x` + EOF → Token::Comment("?x") + EOF
+        // `<?x` + EOF: Per WHATWG §13.2.5.6, `?` in TagOpen switches to
+        // ProcessingInstructionOpen (§13.2.5.72). `x` is alphabetic, so we
+        // enter ProcessingInstructionTarget (§13.2.5.73). EOF in that state
+        // emits EOF directly (no comment is produced).
         let mut t = HtmlTokenizer::new("<?x");
         assert_eq!(t.step(), None); // Data → TagOpen
-        assert_eq!(t.step(), None); // TagOpen → BogusComment
-        assert_eq!(t.step(), None); // 'x'
-        assert_eq!(t.next_token(), Some(Token::Comment("?x".into())));
+        assert_eq!(t.step(), None); // TagOpen → ProcessingInstructionOpen
+        assert_eq!(t.step(), None); // PIOpen 'x' → PITarget (reconsume)
+        assert_eq!(t.step(), None); // PITarget 'x' → append to temp buffer
         assert_eq!(t.next_token(), Some(Token::EOF));
     }
 
