@@ -13,7 +13,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use muskitty_dom::{append_child, Attribute, Node, NodeKind};
+use muskitty_dom::{append_child, remove_child, Attribute, Node, NodeKind};
 
 use crate::error::ParseError;
 use crate::tokenizer::{State, TagKind, Token, Tokenizer};
@@ -43,7 +43,7 @@ pub fn dispatch(
     match parser.insertion_mode {
         InsertionMode::Initial => handle_initial(parser, token),
         InsertionMode::BeforeHtml => handle_before_html(parser, token),
-        InsertionMode::BeforeHead => handle_before_head(parser, token),
+        InsertionMode::BeforeHead => handle_before_head(parser, token, tokenizer),
         InsertionMode::InHead => handle_in_head(parser, token, tokenizer),
         InsertionMode::AfterHead => handle_after_head(parser, token, tokenizer),
         InsertionMode::InBody => handle_in_body(parser, token, tokenizer),
@@ -55,11 +55,9 @@ pub fn dispatch(
         InsertionMode::InCaption => handle_in_caption(parser, token, tokenizer),
         InsertionMode::InColumnGroup => handle_in_column_group(parser, token, tokenizer),
         InsertionMode::InTableBody => handle_in_table_body(parser, token),
-        InsertionMode::InRow => handle_in_row(parser, token),
+        InsertionMode::InRow => handle_in_row(parser, token, tokenizer),
         InsertionMode::InCell => handle_in_cell(parser, token, tokenizer),
         InsertionMode::InHeadNoscript => handle_in_head_noscript(parser, token, tokenizer),
-        InsertionMode::InSelect => handle_in_select(parser, token, tokenizer),
-        InsertionMode::InSelectInTable => handle_in_select_in_table(parser, token, tokenizer),
         InsertionMode::InTemplate => handle_in_template(parser, token, tokenizer),
         InsertionMode::InFrameset => handle_in_frameset(parser, token, tokenizer),
         InsertionMode::AfterFrameset => handle_after_frameset(parser, token, tokenizer),
@@ -109,6 +107,16 @@ fn handle_initial(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             {
                 parser.errors.push(ParseError::InvalidDoctype);
             }
+            // §13.2.6.4.1: Set quirks mode based on force-quirks flag, the
+            // DOCTYPE name, and the public/system identifier lists.
+            if helpers::detect_quirks_mode(
+                dt.force_quirks,
+                dt.name.as_deref(),
+                dt.public_id.as_deref(),
+                dt.system_id.as_deref(),
+            ) {
+                parser.quirks_mode = true;
+            }
             let doctype_node = Node::new_document_type(
                 dt.name.as_deref().unwrap_or(""),
                 dt.public_id.as_deref().unwrap_or(""),
@@ -116,9 +124,13 @@ fn handle_initial(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
                 &parser.document,
             );
             let _ = append_child(&parser.document, doctype_node);
+            // §13.2.6.4.1: "Then, switch the insertion mode to 'before html'."
+            parser.insertion_mode = InsertionMode::BeforeHtml;
             Step::Done
         }
         _ => {
+            // §13.2.6.4.1 "Anything else": no DOCTYPE → quirks mode.
+            parser.quirks_mode = true;
             parser.insertion_mode = InsertionMode::BeforeHtml;
             Step::Reprocess
         }
@@ -175,7 +187,11 @@ fn handle_before_html(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
 
 // ── Before head insertion mode (§13.2.6.4.3) ──────────────────
 
-fn handle_before_head(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_before_head(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Character(c) if is_whitespace(*c) => Step::Done,
         Token::Comment(data) => {
@@ -193,8 +209,9 @@ fn handle_before_head(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            // Process using in body rules — skeleton ignores it (Phase 3.2).
-            Step::Done
+            // §13.2.6.4.3: Process the token using the rules for the
+            // "in body" insertion mode.
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "head" => {
             let element = helpers::create_element_for_token(parser, tag);
@@ -214,6 +231,13 @@ fn handle_before_head(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             parser.head_element = parser.open_elements.last().cloned();
             parser.insertion_mode = InsertionMode::InHead;
             Step::Reprocess
+        }
+        Token::Tag(tag) if tag.kind == TagKind::End => {
+            // §13.2.6.4.3: Any other end tag → Parse error. Ignore.
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected end tag in before head"));
+            Step::Done
         }
         _ => {
             create_and_push(parser, "head");
@@ -251,8 +275,9 @@ fn handle_in_head(
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            // Process using in body rules — skeleton ignores it (Phase 3.2).
-            Step::Done
+            // §13.2.6.4.4: Process the token using the rules for the
+            // "in body" insertion mode.
+            handle_in_body(parser, token, tokenizer)
         }
         // base / basefont / bgsound / link: insert element, immediately pop.
         Token::Tag(tag)
@@ -427,9 +452,10 @@ fn handle_after_head(
             Step::Done
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            // Process using in body rules — skeleton ignores it (Phase 3.2).
+            // §13.2.6.4.6: Process the token using the rules for the
+            // "in body" insertion mode.
             let _ = tag;
-            Step::Done
+            handle_in_body(parser, token, tokenizer)
         }
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "body" => {
             let element = helpers::create_element_for_token(parser, tag);
@@ -450,8 +476,8 @@ fn handle_after_head(
         }
         // base/basefont/bgsound/link/meta/noframes/script/style/template/title:
         // parse error. Push the head element back onto the stack, process the
-        // token using the "in head" rules, then remove the head element again.
-        // Simplified: reprocess in InHead with head temporarily pushed.
+        // token using the "in head" rules, then remove the head element again
+        // (§13.2.6.4.6).
         Token::Tag(tag)
             if tag.kind == TagKind::Start
                 && matches!(
@@ -472,15 +498,16 @@ fn handle_after_head(
                 .errors
                 .push(ParseError::UnexpectedStartTag(tag.name.clone()));
             if let Some(head) = parser.head_element.clone() {
+                let head_ptr = Rc::as_ptr(&head);
                 parser.open_elements.push(head);
-                // Process in InHead.
-                parser.insertion_mode = InsertionMode::InHead;
-                // After InHead pops back, we need to remove the head and
-                // return to AfterHead. For the skeleton, reprocess in InHead;
-                // the InHead handler's anything-else / head-end-tag will pop
-                // and switch to AfterHead, which is close enough for the
-                // common cases (e.g. <meta> after </head>).
-                Step::Reprocess
+                // Process the token using InHead rules directly (don't
+                // change insertion mode — InHead handler may set it itself,
+                // e.g. to Text for <title>/<style>).
+                let step = handle_in_head(parser, token, tokenizer);
+                // Remove head from the stack (it might not be the current
+                // node at this point, e.g. if <title> pushed title on top).
+                parser.open_elements.retain(|n| Rc::as_ptr(n) != head_ptr);
+                step
             } else {
                 Step::Done
             }
@@ -494,24 +521,33 @@ fn handle_after_head(
         Token::Tag(tag)
             if tag.kind == TagKind::End && matches!(tag.name.as_str(), "body" | "html" | "br") =>
         {
-            // Act as anything-else: create body, switch to InBody, reprocess.
+            // Act as anything-else: insert a fake <body> WITHOUT resetting
+            // frameset-ok, switch to InBody, reprocess (§13.2.6.4.6).
             create_and_push(parser, "body");
-            parser.frameset_ok = false;
             parser.insertion_mode = InsertionMode::InBody;
             Step::Reprocess
         }
-        // template end tag: process using in head rules.
+        // template end tag (§13.2.6.4.6): process using in head rules.
+        // The InHead </template> handler scans the whole stack, pops until
+        // template, clears formatting to last marker, pops the template
+        // insertion mode stack, and resets insertion mode — so we just
+        // delegate and return its result.
         Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "template" => {
-            let _ = (tag, tokenizer);
-            parser.errors.push(ParseError::Generic(
-                "template end tag not yet supported (Phase 3.5)",
-            ));
+            let _ = tag;
+            handle_in_head(parser, token, tokenizer)
+        }
+        // Any other end tag (§13.2.6.4.6): Parse error. Ignore the token.
+        Token::Tag(tag) if tag.kind == TagKind::End => {
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected end tag after head"));
+            let _ = tag;
             Step::Done
         }
         _ => {
-            // Anything else: create body, switch to InBody, reprocess.
+            // Anything else (§13.2.6.4.6): insert a fake <body> WITHOUT
+            // resetting frameset-ok, switch to InBody, reprocess.
             create_and_push(parser, "body");
-            parser.frameset_ok = false;
             parser.insertion_mode = InsertionMode::InBody;
             Step::Reprocess
         }
@@ -626,21 +662,23 @@ const BLOCK_LEVEL_END_TAGS: &[&str] = &[
     "footer",
     "header",
     "hgroup",
+    "listing",
     "main",
     "menu",
     "nav",
     "ol",
-    "p",
+    "pre",
     "search",
     "section",
+    "select",
     "summary",
     "ul",
 ];
 
 /// HTML void elements (§13.2.6.2) — inserted and immediately popped.
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "keygen", "link", "meta", "param",
-    "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "img", "keygen", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 fn handle_in_body(
@@ -653,6 +691,14 @@ fn handle_in_body(
         Token::Character(c) if is_whitespace(*c) => {
             helpers::reconstruct_active_formatting_elements(parser);
             helpers::insert_character(parser, *c);
+            Step::Done
+        }
+        Token::Character('\0') => {
+            // §13.2.6.4.7: A character token that is U+0000 NULL.
+            // Parse error. Ignore the token.
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected null character in body"));
             Step::Done
         }
         Token::Character(c) => {
@@ -678,7 +724,22 @@ fn handle_in_body(
         Token::Tag(tag) if tag.kind == TagKind::Start => {
             handle_in_body_start_tag(parser, tag, tokenizer)
         }
-        Token::Tag(tag) if tag.kind == TagKind::End => handle_in_body_end_tag(parser, tag),
+        Token::Tag(tag) if tag.kind == TagKind::End => {
+            // §13.2.6.4.7: </br> → parse error, act as <br> start tag.
+            if tag.name == "br" {
+                parser
+                    .errors
+                    .push(ParseError::Generic("end tag br treated as start tag"));
+                let br_tag = crate::tokenizer::TagToken {
+                    kind: TagKind::Start,
+                    name: "br".to_string(),
+                    attrs: vec![],
+                    self_closing: false,
+                };
+                return handle_in_body_start_tag(parser, &br_tag, tokenizer);
+            }
+            handle_in_body_end_tag(parser, tag)
+        }
         _ => Step::Done,
     }
 }
@@ -710,7 +771,14 @@ fn handle_in_body_start_tag(
     // their contents are consumed as raw text rather than parsed markup.
     if matches!(
         name,
-        "base" | "basefont" | "bgsound" | "link" | "meta" | "noframes" | "script" | "style"
+        "base"
+            | "basefont"
+            | "bgsound"
+            | "link"
+            | "meta"
+            | "noframes"
+            | "script"
+            | "style"
             | "title"
     ) {
         if matches!(name, "base" | "basefont" | "bgsound" | "link" | "meta") {
@@ -742,11 +810,12 @@ fn handle_in_body_start_tag(
     }
 
     // textarea (§13.2.6.4.7): switch tokenizer to RCDATA, insert element,
-    // switch to Text mode. Also drop frameset_ok.
+    // skip a leading LF, drop frameset_ok, switch to Text mode.
     if name == "textarea" {
         tokenizer.set_appropriate_end_tag_name(Some(name));
         tokenizer.set_state(State::RCDATA);
         helpers::insert_element(parser, tag);
+        parser.skip_next_lf = true;
         parser.frameset_ok = false;
         parser.original_insertion_mode = Some(parser.insertion_mode);
         parser.insertion_mode = InsertionMode::Text;
@@ -781,11 +850,76 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
-    // "frameset" — deferred to Phase 3.5.
+    // "frameset" (§13.2.6.4.7): If the stack has only one node or the second
+    // element is not body, ignore. If frameset_ok is false, ignore. Otherwise
+    // remove body from its parent, pop all nodes except html, insert frameset,
+    // and switch to InFrameset.
     if name == "frameset" {
-        parser.errors.push(ParseError::Generic(
-            "frameset in body not yet supported (Phase 3.5)",
-        ));
+        if parser.open_elements.len() < 2 {
+            parser
+                .errors
+                .push(ParseError::Generic("frameset with no body on stack"));
+            return Step::Done;
+        }
+        let second_is_body = parser
+            .open_elements
+            .get(1)
+            .map(|n| {
+                n.borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| e.local_name == "body")
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !second_is_body {
+            parser
+                .errors
+                .push(ParseError::Generic("frameset with non-body second element"));
+            return Step::Done;
+        }
+        if !parser.frameset_ok {
+            parser
+                .errors
+                .push(ParseError::Generic("frameset after non-whitespace content"));
+            return Step::Done;
+        }
+        // Remove the second element (body) from its parent (html).
+        if let (Some(html), Some(body)) = (
+            parser.open_elements.first().cloned(),
+            parser.open_elements.get(1).cloned(),
+        ) {
+            let _ = remove_child(&html, &body);
+        }
+        // Pop all nodes from the stack except the root html element.
+        while parser.open_elements.len() > 1 {
+            parser.open_elements.pop();
+        }
+        // Insert the frameset element and switch to InFrameset.
+        helpers::insert_element(parser, tag);
+        parser.insertion_mode = InsertionMode::InFrameset;
+        return Step::Done;
+    }
+
+    // §13.2.6.4.7: "caption", "col", "colgroup", "frame", "head", "tbody",
+    // "td", "tfoot", "th", "thead", "tr" → Parse error. Ignore the token.
+    if matches!(
+        name,
+        "caption"
+            | "col"
+            | "colgroup"
+            | "frame"
+            | "head"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "tr"
+    ) {
+        parser
+            .errors
+            .push(ParseError::UnexpectedStartTag(tag.name.clone()));
         return Step::Done;
     }
 
@@ -820,17 +954,17 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
-    // pre / listing: close p, insert, skip a leading newline, frameset_ok=false.
+    // pre / listing (§13.2.6.4.7): close p, insert, skip a leading LF,
+    // frameset_ok=false.
     if matches!(name, "pre" | "listing") {
         if helpers::has_element_in_button_scope(parser, "p") {
             helpers::close_p_element(parser);
         }
         helpers::insert_element(parser, tag);
-        // Skip a single leading U+000A (newline) per §13.2.6.4.7. The
-        // tokenizer emits characters one at a time, so the next token must
-        // be checked by the caller; for the skeleton, we rely on the
-        // tokenizer emitting that character normally and treat this as
-        // best-effort.
+        // §13.2.6.4.7: "If the next token is a U+000A LINE FEED (LF)
+        // character token, then ignore that token and move on to the next
+        // one." The run() loop checks skip_next_lf before dispatching.
+        parser.skip_next_lf = true;
         parser.frameset_ok = false;
         return Step::Done;
     }
@@ -857,66 +991,77 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
-    // li: close p; loop popping li if in list scope.
+    // li: §13.2.6.4.7 loop algorithm — walk stack, close li if found,
+    // stop at special elements (except address/div/p).
     if name == "li" {
         parser.frameset_ok = false;
-        if helpers::has_element_in_list_scope(parser, "li") {
-            helpers::generate_implied_end_tags(parser, Some("li"));
-            // Pop until li is popped.
-            while let Some(top) = parser.open_elements.last() {
-                let is_li = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name.as_str())
-                    == Some("li");
-                parser.open_elements.pop();
-                if is_li {
-                    break;
-                }
-            }
-        } else {
-            // No li in scope: just close p.
-            if helpers::has_element_in_button_scope(parser, "p") {
-                helpers::close_p_element(parser);
-            }
-        }
-        helpers::insert_element(parser, tag);
-        return Step::Done;
-    }
-
-    // dd / dt: similar to li.
-    if matches!(name, "dd" | "dt") {
-        parser.frameset_ok = false;
-        if helpers::has_element_in_scope(parser, "dd")
-            || helpers::has_element_in_scope(parser, "dt")
-        {
-            helpers::generate_implied_end_tags(parser, Some(name));
-            // Pop until dd/dt popped.
-            while let Some(top) = parser.open_elements.last() {
-                let top_name = top.borrow().kind.as_element().map(|e| e.local_name.clone());
-                let is_target = matches!(top_name.as_deref(), Some("dd") | Some("dt"));
-                parser.open_elements.pop();
-                if is_target {
-                    break;
-                }
-            }
-        } else if helpers::has_element_in_button_scope(parser, "p") {
+        helpers::close_list_item(parser, &["li"]);
+        // §13.2.6.4.7 step 6: close p if in button scope.
+        if helpers::has_element_in_button_scope(parser, "p") {
             helpers::close_p_element(parser);
         }
         helpers::insert_element(parser, tag);
         return Step::Done;
     }
 
-    // plaintext: insert, switch tokenizer to PLAINTEXT.
-    if name == "plaintext" {
+    // dd / dt: §13.2.6.4.7 loop algorithm — checks for BOTH dd and dt.
+    if matches!(name, "dd" | "dt") {
+        parser.frameset_ok = false;
+        helpers::close_list_item(parser, &["dd", "dt"]);
+        // §13.2.6.4.7 step 7: close p if in button scope.
+        if helpers::has_element_in_button_scope(parser, "p") {
+            helpers::close_p_element(parser);
+        }
         helpers::insert_element(parser, tag);
-        // Tokenizer state switch is done by the caller; mark it via a
-        // side-channel for now. For Phase 3.2 we don't have access here;
-        // left as a parse error.
-        parser.errors.push(ParseError::Generic(
-            "plaintext tokenizer switch not yet supported",
-        ));
+        return Step::Done;
+    }
+
+    // plaintext (§13.2.6.4.7): close p if in button scope, insert element,
+    // switch tokenizer to PLAINTEXT. Unlike RCDATA/RAWTEXT there is no end
+    // tag to exit this state — it persists until EOF.
+    if name == "plaintext" {
+        if helpers::has_element_in_button_scope(parser, "p") {
+            helpers::close_p_element(parser);
+        }
+        helpers::insert_element(parser, tag);
+        tokenizer.set_state(State::PLAINTEXT);
+        return Step::Done;
+    }
+
+    // iframe (§13.2.6.4.7): frameset_ok=false, RAWTEXT, insert element.
+    if name == "iframe" {
+        parser.frameset_ok = false;
+        tokenizer.set_appropriate_end_tag_name(Some(name));
+        tokenizer.set_state(State::RAWTEXT);
+        helpers::insert_element(parser, tag);
+        parser.original_insertion_mode = Some(parser.insertion_mode);
+        parser.insertion_mode = InsertionMode::Text;
+        return Step::Done;
+    }
+
+    // xmp (§13.2.6.4.7): close p, reconstruct, frameset_ok=false, RAWTEXT,
+    // insert element.
+    if name == "xmp" {
+        if helpers::has_element_in_button_scope(parser, "p") {
+            helpers::close_p_element(parser);
+        }
+        helpers::reconstruct_active_formatting_elements(parser);
+        parser.frameset_ok = false;
+        tokenizer.set_appropriate_end_tag_name(Some(name));
+        tokenizer.set_state(State::RAWTEXT);
+        helpers::insert_element(parser, tag);
+        parser.original_insertion_mode = Some(parser.insertion_mode);
+        parser.insertion_mode = InsertionMode::Text;
+        return Step::Done;
+    }
+
+    // noembed (§13.2.6.4.7): always follow the generic raw text element
+    // parsing algorithm (switch to RAWTEXT, insert, enter Text mode).
+    if name == "noembed" {
+        tokenizer.set_state(State::RAWTEXT);
+        helpers::insert_element(parser, tag);
+        parser.original_insertion_mode = Some(parser.insertion_mode);
+        parser.insertion_mode = InsertionMode::Text;
         return Step::Done;
     }
 
@@ -946,10 +1091,22 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
-    // hr: close p, frameset_ok=false, insert, pop.
+    // hr (§13.2.6.4.7): close p, if select in scope generate implied end
+    // tags (parse error if option/optgroup in scope), insert, pop,
+    // frameset_ok=false.
     if name == "hr" {
         if helpers::has_element_in_button_scope(parser, "p") {
             helpers::close_p_element(parser);
+        }
+        if helpers::has_element_in_scope(parser, "select") {
+            helpers::generate_implied_end_tags(parser, None);
+            if helpers::has_element_in_scope(parser, "option")
+                || helpers::has_element_in_scope(parser, "optgroup")
+            {
+                parser
+                    .errors
+                    .push(ParseError::Generic("hr when option/optgroup in scope"));
+            }
         }
         helpers::insert_element(parser, tag);
         parser.open_elements.pop();
@@ -957,7 +1114,88 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
-    // Void elements (area/base/br/col/embed/img/input/keygen/link/meta/
+    // rb / rtc (§13.2.6.4.7): if ruby in scope, generate implied end tags.
+    // Then insert element.
+    if matches!(name, "rb" | "rtc") {
+        if helpers::has_element_in_scope(parser, "ruby") {
+            helpers::generate_implied_end_tags(parser, None);
+            // If current node is not ruby, parse error.
+            let is_ruby = parser
+                .open_elements
+                .last()
+                .and_then(|n| n.borrow().kind.as_element().map(|e| e.local_name == "ruby"))
+                .unwrap_or(false);
+            if !is_ruby {
+                parser
+                    .errors
+                    .push(ParseError::Generic("rb/rtc not directly in ruby"));
+            }
+        }
+        helpers::insert_element(parser, tag);
+        return Step::Done;
+    }
+
+    // rp / rt (§13.2.6.4.7): if ruby in scope, generate implied end tags
+    // except rtc. Then insert element.
+    if matches!(name, "rp" | "rt") {
+        if helpers::has_element_in_scope(parser, "ruby") {
+            helpers::generate_implied_end_tags(parser, Some("rtc"));
+            // If current node is not rtc or ruby, parse error.
+            let is_rtc_or_ruby = parser
+                .open_elements
+                .last()
+                .and_then(|n| {
+                    n.borrow()
+                        .kind
+                        .as_element()
+                        .map(|e| matches!(e.local_name.as_str(), "rtc" | "ruby"))
+                })
+                .unwrap_or(false);
+            if !is_rtc_or_ruby {
+                parser
+                    .errors
+                    .push(ParseError::Generic("rp/rt not directly in rtc/ruby"));
+            }
+        }
+        helpers::insert_element(parser, tag);
+        return Step::Done;
+    }
+
+    // input (§13.2.6.4.7): Separate from void elements because it has a
+    // "select in scope" check. If select in scope, parse error, pop until
+    // select is popped. Then reconstruct, insert, pop, check type=hidden
+    // for frameset_ok.
+    if name == "input" {
+        if helpers::has_element_in_scope(parser, "select") {
+            parser.errors.push(ParseError::Generic(
+                "unexpected <input> when select in scope",
+            ));
+            while let Some(top) = parser.open_elements.pop() {
+                let is_select = top
+                    .borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| e.local_name == "select")
+                    .unwrap_or(false);
+                if is_select {
+                    break;
+                }
+            }
+        }
+        helpers::reconstruct_active_formatting_elements(parser);
+        helpers::insert_element(parser, tag);
+        parser.open_elements.pop();
+        let is_hidden = tag
+            .attrs
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("type") && v.eq_ignore_ascii_case("hidden"));
+        if !is_hidden {
+            parser.frameset_ok = false;
+        }
+        return Step::Done;
+    }
+
+    // Void elements (area/base/br/col/embed/img/keygen/link/meta/
     // param/source/track/wbr): reconstruct, insert, pop. img/keygen/wbr
     // additionally set frameset_ok=false.
     if VOID_ELEMENTS.contains(&name) {
@@ -983,16 +1221,6 @@ fn handle_in_body_start_tag(
         parser.open_elements.pop();
         if matches!(effective_tag.name.as_str(), "img" | "keygen" | "wbr") {
             parser.frameset_ok = false;
-        }
-        // input: frameset_ok=false unless type=hidden.
-        if effective_tag.name == "input" {
-            let is_hidden = effective_tag
-                .attrs
-                .iter()
-                .any(|(k, v)| k.eq_ignore_ascii_case("type") && v.eq_ignore_ascii_case("hidden"));
-            if !is_hidden {
-                parser.frameset_ok = false;
-            }
         }
         return Step::Done;
     }
@@ -1051,6 +1279,16 @@ fn handle_in_body_start_tag(
                 }
             }
         }
+        // Special case for <nobr> (§13.2.6.4.7): if there is a <nobr> in
+        // scope, parse error; run the adoption agency algorithm for the
+        // token. The shared reconstruct below serves as the "once again
+        // reconstruct the active formatting elements" step.
+        if name == "nobr" && helpers::has_element_in_scope(parser, "nobr") {
+            parser
+                .errors
+                .push(ParseError::Generic("nested nobr element"));
+            helpers::adoption_agency(parser, "nobr");
+        }
         helpers::reconstruct_active_formatting_elements(parser);
         let element = helpers::create_element_for_token(parser, tag);
         helpers::insert_node(parser, &element);
@@ -1059,10 +1297,10 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
-    // table (§13.2.6.4.7): close <p> if in button scope, insert <table>,
-    // switch to InTable, set frameset_ok=false.
+    // table (§13.2.6.4.7): in no-quirks mode, close <p> if in button
+    // scope; insert <table>, switch to InTable, set frameset_ok=false.
     if name == "table" {
-        if helpers::has_element_in_button_scope(parser, "p") {
+        if !parser.quirks_mode && helpers::has_element_in_button_scope(parser, "p") {
             helpers::close_p_element(parser);
         }
         helpers::insert_element(parser, tag);
@@ -1071,43 +1309,94 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
-    // select (§13.2.6.4.7): reconstruct, insert, switch to InSelect,
-    // frameset_ok=false.
+    // select (§13.2.6.4.7): InSelect mode has been removed from the spec.
+    // If a select is already in scope, parse error, ignore the token, pop
+    // until the previous select is popped. Otherwise: reconstruct, insert,
+    // frameset_ok=false. No insertion mode switch.
     if name == "select" {
+        if helpers::has_element_in_scope(parser, "select") {
+            parser.errors.push(ParseError::Generic(
+                "unexpected <select> when select in scope",
+            ));
+            // Pop until select is popped.
+            while let Some(top) = parser.open_elements.pop() {
+                let is_select = top
+                    .borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| e.local_name == "select")
+                    .unwrap_or(false);
+                if is_select {
+                    break;
+                }
+            }
+            return Step::Done;
+        }
         helpers::reconstruct_active_formatting_elements(parser);
         helpers::insert_element(parser, tag);
-        parser.insertion_mode = InsertionMode::InSelect;
         parser.frameset_ok = false;
         return Step::Done;
     }
 
-    // optgroup/option (§13.2.6.4.7): if current node is an option, pop it
-    // (implied end tag); then insert the element.
-    if matches!(name, "optgroup" | "option") {
-        if let Some(top) = parser.open_elements.last() {
-            let is_option = top
-                .borrow()
-                .kind
-                .as_element()
-                .map(|e| e.local_name == "option")
-                .unwrap_or(false);
-            if is_option && name == "option" {
-                parser.open_elements.pop();
+    // option (§13.2.6.4.7): If select in scope, generate implied end tags
+    // except optgroup; if option in scope, parse error. Otherwise, if current
+    // node is option, pop it. Then reconstruct and insert.
+    if name == "option" {
+        if helpers::has_element_in_scope(parser, "select") {
+            helpers::generate_implied_end_tags(parser, Some("optgroup"));
+            // If option in scope, parse error.
+            if helpers::has_element_in_scope(parser, "option") {
+                parser
+                    .errors
+                    .push(ParseError::Generic("option when option in scope"));
             }
-        }
-        if name == "optgroup" {
+        } else {
+            // If current node is an option, pop it.
             if let Some(top) = parser.open_elements.last() {
-                let is_optgroup = top
+                let is_option = top
                     .borrow()
                     .kind
                     .as_element()
-                    .map(|e| e.local_name == "optgroup")
+                    .map(|e| e.local_name == "option")
                     .unwrap_or(false);
-                if is_optgroup {
+                if is_option {
                     parser.open_elements.pop();
                 }
             }
         }
+        helpers::reconstruct_active_formatting_elements(parser);
+        helpers::insert_element(parser, tag);
+        return Step::Done;
+    }
+
+    // optgroup (§13.2.6.4.7): If select in scope, generate implied end tags;
+    // if option or optgroup in scope, parse error. Otherwise, if current node
+    // is option, pop it. Then reconstruct and insert.
+    if name == "optgroup" {
+        if helpers::has_element_in_scope(parser, "select") {
+            helpers::generate_implied_end_tags(parser, None);
+            if helpers::has_element_in_scope(parser, "option")
+                || helpers::has_element_in_scope(parser, "optgroup")
+            {
+                parser.errors.push(ParseError::Generic(
+                    "optgroup when option/optgroup in scope",
+                ));
+            }
+        } else {
+            // If current node is an option, pop it.
+            if let Some(top) = parser.open_elements.last() {
+                let is_option = top
+                    .borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| e.local_name == "option")
+                    .unwrap_or(false);
+                if is_option {
+                    parser.open_elements.pop();
+                }
+            }
+        }
+        helpers::reconstruct_active_formatting_elements(parser);
         helpers::insert_element(parser, tag);
         return Step::Done;
     }
@@ -1248,7 +1537,7 @@ fn handle_in_body_end_tag(
                 .push(ParseError::UnexpectedEndTag(name.to_string()));
             return Step::Done;
         }
-        helpers::generate_implied_end_tags(parser, None);
+        helpers::generate_implied_end_tags(parser, Some(name));
         // Pop until target.
         while let Some(top) = parser.open_elements.last() {
             let top_name = top.borrow().kind.as_element().map(|e| e.local_name.clone());
@@ -1265,15 +1554,59 @@ fn handle_in_body_end_tag(
     // form_element to None; if form not in scope, parse error; else:
     // generate implied end tags, pop until form.
     if name == "form" {
-        if parser.form_element.is_none() {
-            parser
-                .errors
-                .push(ParseError::Generic("end tag form without open form"));
+        // §13.2.6.4.7: If no template on stack, use form element pointer.
+        let has_template = helpers::has_element_in_stack(parser, "template");
+        if !has_template {
+            let node = parser.form_element.clone();
+            parser.form_element = None;
+            let node = match node {
+                Some(n) => n,
+                None => {
+                    parser
+                        .errors
+                        .push(ParseError::Generic("end tag form without open form"));
+                    return Step::Done;
+                }
+            };
+            let node_ptr = Rc::as_ptr(&node);
+            // Check if node is in scope.
+            let in_scope = parser.open_elements.iter().any(|n| {
+                Rc::as_ptr(n) == node_ptr
+                    && n.borrow()
+                        .kind
+                        .as_element()
+                        .map(|e| e.local_name == "form")
+                        .unwrap_or(false)
+            });
+            // Simplified scope check: if node is on the stack at all.
+            let on_stack = parser
+                .open_elements
+                .iter()
+                .any(|n| Rc::as_ptr(n) == node_ptr);
+            if !on_stack {
+                parser
+                    .errors
+                    .push(ParseError::Generic("end tag form without form in scope"));
+                return Step::Done;
+            }
+            let _ = in_scope;
+            helpers::generate_implied_end_tags(parser, None);
+            // If current node is not node, parse error.
+            let current_is_node = parser
+                .open_elements
+                .last()
+                .map(|n| Rc::as_ptr(n) == node_ptr)
+                .unwrap_or(false);
+            if !current_is_node {
+                parser
+                    .errors
+                    .push(ParseError::Generic("end tag form not at current node"));
+            }
+            // Remove node from the stack (not pop until).
+            parser.open_elements.retain(|n| Rc::as_ptr(n) != node_ptr);
             return Step::Done;
         }
-        // Per spec, the form on the stack may differ from the form pointer
-        // when inside template content; skeleton ignores template subtlety.
-        parser.form_element = None;
+        // Template on stack: use the "has form in scope" path.
         if !helpers::has_element_in_scope(parser, "form") {
             parser
                 .errors
@@ -1281,6 +1614,17 @@ fn handle_in_body_end_tag(
             return Step::Done;
         }
         helpers::generate_implied_end_tags(parser, None);
+        // If current node is not form, parse error.
+        let current_is_form = parser
+            .open_elements
+            .last()
+            .and_then(|n| n.borrow().kind.as_element().map(|e| e.local_name == "form"))
+            .unwrap_or(false);
+        if !current_is_form {
+            parser
+                .errors
+                .push(ParseError::Generic("end tag form not at current node"));
+        }
         // Pop until form.
         while let Some(top) = parser.open_elements.last() {
             let is_form = top
@@ -1638,12 +1982,39 @@ fn handle_in_table(
     tokenizer: &mut dyn Tokenizer,
 ) -> Step {
     match token {
-        Token::Character(c) if is_whitespace(*c) => {
-            // Per §13.2.6.4.9, whitespace in InTable goes to InTableText.
-            parser.pending_table_text.push(*c);
-            parser.insertion_mode = InsertionMode::InTableText;
-            parser.original_insertion_mode = Some(InsertionMode::InTable);
-            Step::Done
+        // §13.2.6.4.9: A character token, if the current node is table,
+        // tbody, template, tfoot, thead, or tr → switch to InTableText.
+        Token::Character(c) => {
+            let current_is_table_context = parser
+                .open_elements
+                .last()
+                .and_then(|n| {
+                    n.borrow().kind.as_element().map(|e| {
+                        matches!(
+                            e.local_name.as_str(),
+                            "table" | "tbody" | "template" | "tfoot" | "thead" | "tr"
+                        )
+                    })
+                })
+                .unwrap_or(false);
+            if current_is_table_context {
+                parser.pending_table_text.push(*c);
+                // Save the current insertion mode (which may be InRow,
+                // InCaption, etc. if handle_in_table was called via
+                // "process using in table rules" from another mode) so
+                // that InTableText restores to the correct mode.
+                let prev_mode = parser.insertion_mode;
+                parser.insertion_mode = InsertionMode::InTableText;
+                parser.original_insertion_mode = Some(prev_mode);
+                Step::Done
+            } else {
+                // Foster parent: process using InBody rules (§13.2.6.4.9
+                // "Anything else" → foster parenting).
+                parser.foster_parenting = true;
+                let step = handle_in_body(parser, token, tokenizer);
+                parser.foster_parenting = false;
+                step
+            }
         }
         Token::Comment(data) => {
             helpers::insert_comment(parser, data);
@@ -1696,6 +2067,70 @@ fn handle_in_table(
                 "style" | "script" | "template" => {
                     // Process using the rules for "in head" (§13.2.6.4.9).
                     handle_in_head(parser, token, tokenizer)
+                }
+                "input" => {
+                    // §13.2.6.4.9: If type=hidden (case-insensitive), parse
+                    // error, insert element, pop, acknowledge self-closing.
+                    // Otherwise, foster parent.
+                    let is_hidden = tag.attrs.iter().any(|(k, v)| {
+                        k.eq_ignore_ascii_case("type") && v.eq_ignore_ascii_case("hidden")
+                    });
+                    if is_hidden {
+                        parser
+                            .errors
+                            .push(ParseError::Generic("hidden input in table"));
+                        helpers::insert_element(parser, tag);
+                        parser.open_elements.pop();
+                        Step::Done
+                    } else {
+                        foster_parent_in_body(parser, token, tokenizer)
+                    }
+                }
+                "table" => {
+                    // §13.2.6.4.9: Parse error. If no table in table scope,
+                    // ignore. Otherwise: pop until table popped, reset
+                    // insertion mode, reprocess.
+                    parser
+                        .errors
+                        .push(ParseError::Generic("unexpected table start tag in table"));
+                    if helpers::has_element_in_table_scope(parser, "table") {
+                        while let Some(top) = parser.open_elements.pop() {
+                            let is_table = top
+                                .borrow()
+                                .kind
+                                .as_element()
+                                .map(|e| e.local_name == "table")
+                                .unwrap_or(false);
+                            if is_table {
+                                break;
+                            }
+                        }
+                        reset_insertion_mode(parser);
+                        Step::Reprocess
+                    } else {
+                        Step::Done
+                    }
+                }
+                "form" => {
+                    // §13.2.6.4.9: Parse error. If there is a template
+                    // element on the stack, or the form element pointer is
+                    // not null, ignore the token. Otherwise: insert an HTML
+                    // element for the token, set the form element pointer to
+                    // point to it, and pop that form element off the stack.
+                    parser
+                        .errors
+                        .push(ParseError::Generic("unexpected form start tag in table"));
+                    let has_template = helpers::has_element_in_stack(parser, "template");
+                    if has_template || parser.form_element.is_some() {
+                        Step::Done
+                    } else {
+                        let element = helpers::create_element_for_token(parser, tag);
+                        helpers::insert_node(parser, &element);
+                        parser.open_elements.push(element.clone());
+                        parser.form_element = Some(element);
+                        parser.open_elements.pop();
+                        Step::Done
+                    }
                 }
                 _ => foster_parent_in_body(parser, token, tokenizer),
             }
@@ -1947,7 +2382,7 @@ fn handle_in_column_group(
             "template" => handle_in_head(parser, token, tokenizer),
             _ => close_colgroup_and_reprocess(parser),
         },
-        Token::EOF => handle_in_head(parser, token, tokenizer),
+        Token::EOF => handle_in_body(parser, token, tokenizer),
         _ => close_colgroup_and_reprocess(parser),
     }
 }
@@ -2036,7 +2471,11 @@ fn handle_in_table_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step
 
 // ── InRow insertion mode (§13.2.6.4.14) ─────────────────────────
 
-fn handle_in_row(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_row(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Tag(tag)
             if tag.kind == TagKind::Start && matches!(tag.name.as_str(), "td" | "th") =>
@@ -2081,14 +2520,36 @@ fn handle_in_row(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
             Step::Reprocess
         }
         _ => {
-            // Anything else: process using the rules for InTable.
-            parser.insertion_mode = InsertionMode::InTable;
-            Step::Reprocess
+            // §13.2.6.4.14 "Anything else": Process using InTable rules,
+            // but keep insertion mode as InRow (don't switch permanently).
+            handle_in_table(parser, token, tokenizer)
         }
     }
 }
 
 // ── InCell insertion mode (§13.2.6.4.15) ────────────────────────
+
+/// Close the cell algorithm (§13.2.6.4.15): generate implied end tags,
+/// pop until td/th is popped, clear formatting to last marker, switch to
+/// InRow. Called from InCell when a start tag or an in-scope end tag
+/// requires closing the current cell.
+fn close_cell_and_switch_to_in_row(parser: &mut HtmlTreeConstructor) {
+    helpers::generate_implied_end_tags(parser, None);
+    // Pop until a td or th element has been popped.
+    while let Some(top) = parser.open_elements.pop() {
+        let is_cell = top
+            .borrow()
+            .kind
+            .as_element()
+            .map(|e| matches!(e.local_name.as_str(), "td" | "th"))
+            .unwrap_or(false);
+        if is_cell {
+            break;
+        }
+    }
+    helpers::clear_active_formatting_to_last_marker(parser);
+    parser.insertion_mode = InsertionMode::InRow;
+}
 
 fn handle_in_cell(
     parser: &mut HtmlTreeConstructor,
@@ -2121,8 +2582,10 @@ fn handle_in_cell(
             parser.insertion_mode = InsertionMode::InRow;
             Step::Done
         }
+        // Start tags that imply closing the cell (§13.2.6.4.15):
+        // caption/col/colgroup/tbody/td/tfoot/th/thead/tr → close cell, reprocess.
         Token::Tag(tag)
-            if (tag.kind == TagKind::Start
+            if tag.kind == TagKind::Start
                 && matches!(
                     tag.name.as_str(),
                     "caption"
@@ -2134,39 +2597,30 @@ fn handle_in_cell(
                         | "th"
                         | "thead"
                         | "tr"
-                ))
-                || (tag.kind == TagKind::End
-                    && matches!(tag.name.as_str(), "tbody" | "tfoot" | "thead" | "tr")) =>
+                ) =>
         {
-            // If a td or th is in table scope, close the cell and reprocess.
-            if helpers::has_element_in_table_scope(parser, "td")
-                || helpers::has_element_in_table_scope(parser, "th")
-            {
-                let target = if helpers::has_element_in_table_scope(parser, "td") {
-                    "td"
-                } else {
-                    "th"
-                };
-                helpers::generate_implied_end_tags(parser, None);
-                while let Some(top) = parser.open_elements.pop() {
-                    let is_target = top
-                        .borrow()
-                        .kind
-                        .as_element()
-                        .map(|e| e.local_name == target)
-                        .unwrap_or(false);
-                    if is_target {
-                        break;
-                    }
-                }
-                helpers::clear_active_formatting_to_last_marker(parser);
-                parser.insertion_mode = InsertionMode::InRow;
-                Step::Reprocess
-            } else {
-                parser.errors.push(ParseError::Generic(
-                    "unexpected token; no cell in table scope",
-                ));
+            let _ = tag;
+            close_cell_and_switch_to_in_row(parser);
+            Step::Reprocess
+        }
+        // End tags: table/tbody/tfoot/thead/tr → if the token's tag name is
+        // in table scope, close cell and reprocess; else parse error, ignore.
+        Token::Tag(tag)
+            if tag.kind == TagKind::End
+                && matches!(
+                    tag.name.as_str(),
+                    "table" | "tbody" | "tfoot" | "thead" | "tr"
+                ) =>
+        {
+            let name = tag.name.clone();
+            if !helpers::has_element_in_table_scope(parser, &name) {
+                parser
+                    .errors
+                    .push(ParseError::Generic("end tag not in table scope in cell"));
                 Step::Done
+            } else {
+                close_cell_and_switch_to_in_row(parser);
+                Step::Reprocess
             }
         }
         _ => {
@@ -2232,6 +2686,14 @@ fn handle_in_head_noscript(
             // </br> is treated as a start tag (anything else).
             handle_anything_else_in_head_noscript(parser, token)
         }
+        Token::Tag(tag) if tag.kind == TagKind::End => {
+            // §13.2.6.4.5: Any other end tag → Parse error. Ignore.
+            let _ = tag;
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected end tag in noscript"));
+            Step::Done
+        }
         Token::EOF => {
             parser
                 .errors
@@ -2254,368 +2716,22 @@ fn handle_anything_else_in_head_noscript(parser: &mut HtmlTreeConstructor, _toke
     Step::Reprocess
 }
 
-// ── InSelect insertion mode (§13.2.6.4.16) ──────────────────────
-
-fn handle_in_select(
-    parser: &mut HtmlTreeConstructor,
-    token: &Token,
-    tokenizer: &mut dyn Tokenizer,
-) -> Step {
-    match token {
-        Token::Character('\0') => {
-            parser
-                .errors
-                .push(ParseError::Generic("unexpected null in select"));
-            Step::Done
-        }
-        Token::Character(c) => {
-            helpers::insert_character(parser, *c);
-            Step::Done
-        }
-        Token::Comment(data) => {
-            helpers::insert_comment(parser, data);
-            Step::Done
-        }
-        Token::ProcessingInstruction { target, data } => {
-            helpers::insert_processing_instruction(parser, target, data);
-            Step::Done
-        }
-        Token::Doctype(_) => {
-            parser
-                .errors
-                .push(ParseError::Generic("unexpected DOCTYPE in select"));
-            Step::Done
-        }
-        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            handle_in_body(parser, token, tokenizer)
-        }
-        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "option" => {
-            // If current node is an option, pop it (§13.2.6.4.16).
-            if let Some(top) = parser.open_elements.last() {
-                let is_option = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "option")
-                    .unwrap_or(false);
-                if is_option {
-                    parser.open_elements.pop();
-                }
-            }
-            helpers::insert_element(parser, tag);
-            Step::Done
-        }
-        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "optgroup" => {
-            // If current node is an option, pop it.
-            if let Some(top) = parser.open_elements.last() {
-                let is_option = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "option")
-                    .unwrap_or(false);
-                if is_option {
-                    parser.open_elements.pop();
-                }
-            }
-            // If current node is an optgroup, pop it.
-            if let Some(top) = parser.open_elements.last() {
-                let is_optgroup = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "optgroup")
-                    .unwrap_or(false);
-                if is_optgroup {
-                    parser.open_elements.pop();
-                }
-            }
-            helpers::insert_element(parser, tag);
-            Step::Done
-        }
-        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "select" => {
-            // Parse error; pop until a select element is popped (§13.2.6.4.16).
-            parser
-                .errors
-                .push(ParseError::Generic("unexpected <select> in select"));
-            while let Some(top) = parser.open_elements.pop() {
-                let is_select = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "select")
-                    .unwrap_or(false);
-                if is_select {
-                    break;
-                }
-            }
-            // Reset insertion mode per §13.2.6.4.2.
-            reset_insertion_mode(parser);
-            Step::Done
-        }
-        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "input" => {
-            // Parse error; if the input is not hidden, pop until select.
-            parser
-                .errors
-                .push(ParseError::Generic("unexpected <input> in select"));
-            let is_hidden = tag
-                .attrs
-                .iter()
-                .any(|(k, v)| k.eq_ignore_ascii_case("type") && v.eq_ignore_ascii_case("hidden"));
-            if is_hidden {
-                helpers::insert_element(parser, tag);
-                parser.open_elements.pop();
-                Step::Done
-            } else {
-                while let Some(top) = parser.open_elements.pop() {
-                    let is_select = top
-                        .borrow()
-                        .kind
-                        .as_element()
-                        .map(|e| e.local_name == "select")
-                        .unwrap_or(false);
-                    if is_select {
-                        break;
-                    }
-                }
-                reset_insertion_mode(parser);
-                Step::Reprocess
-            }
-        }
-        Token::Tag(tag)
-            if tag.kind == TagKind::Start && matches!(tag.name.as_str(), "keygen" | "textarea") =>
-        {
-            parser
-                .errors
-                .push(ParseError::Generic("unexpected keygen/textarea in select"));
-            while let Some(top) = parser.open_elements.pop() {
-                let is_select = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "select")
-                    .unwrap_or(false);
-                if is_select {
-                    break;
-                }
-            }
-            reset_insertion_mode(parser);
-            Step::Reprocess
-        }
-        Token::Tag(tag)
-            if tag.kind == TagKind::Start && matches!(tag.name.as_str(), "script" | "template") =>
-        {
-            handle_in_head(parser, token, &mut NullTokenizer)
-        }
-        Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "select" => {
-            if !helpers::has_element_in_select_scope(parser, "select") {
-                parser
-                    .errors
-                    .push(ParseError::Generic("end select without select in scope"));
-                return Step::Done;
-            }
-            while let Some(top) = parser.open_elements.pop() {
-                let is_select = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "select")
-                    .unwrap_or(false);
-                if is_select {
-                    break;
-                }
-            }
-            reset_insertion_mode(parser);
-            Step::Done
-        }
-        Token::Tag(tag)
-            if tag.kind == TagKind::End && matches!(tag.name.as_str(), "optgroup" | "option") =>
-        {
-            handle_in_select_end_tag(parser, &tag.name);
-            Step::Done
-        }
-        Token::EOF => {
-            // Pop until select is popped, then reprocess in the reset mode.
-            if !helpers::has_element_in_select_scope(parser, "select") {
-                parser
-                    .errors
-                    .push(ParseError::Generic("unexpected EOF; no select in scope"));
-                return Step::Done;
-            }
-            while let Some(top) = parser.open_elements.pop() {
-                let is_select = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "select")
-                    .unwrap_or(false);
-                if is_select {
-                    break;
-                }
-            }
-            reset_insertion_mode(parser);
-            Step::Reprocess
-        }
-        _ => {
-            parser
-                .errors
-                .push(ParseError::Generic("unexpected token in select"));
-            Step::Done
-        }
-    }
-}
-
-/// Handle </optgroup> and </option> in InSelect (§13.2.6.4.16).
-fn handle_in_select_end_tag(parser: &mut HtmlTreeConstructor, name: &str) {
-    if name == "optgroup" {
-        // Let current node be the current node. If current node is an
-        // option and its parent is an optgroup, pop the option. Then if
-        // current node is an optgroup, pop it.
-        if let Some(top) = parser.open_elements.last() {
-            let is_option = top
-                .borrow()
-                .kind
-                .as_element()
-                .map(|e| e.local_name == "option")
-                .unwrap_or(false);
-            if is_option && parser.open_elements.len() >= 2 {
-                let parent = &parser.open_elements[parser.open_elements.len() - 2];
-                let parent_is_optgroup = parent
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "optgroup")
-                    .unwrap_or(false);
-                if parent_is_optgroup {
-                    parser.open_elements.pop();
-                }
-            }
-        }
-        if let Some(top) = parser.open_elements.last() {
-            let is_optgroup = top
-                .borrow()
-                .kind
-                .as_element()
-                .map(|e| e.local_name == "optgroup")
-                .unwrap_or(false);
-            if is_optgroup {
-                parser.open_elements.pop();
-            }
-        }
-    } else {
-        // </option>: if current node is an option, pop it.
-        if let Some(top) = parser.open_elements.last() {
-            let is_option = top
-                .borrow()
-                .kind
-                .as_element()
-                .map(|e| e.local_name == "option")
-                .unwrap_or(false);
-            if is_option {
-                parser.open_elements.pop();
-            }
-        }
-    }
-}
-
-// ── InSelectInTable insertion mode (§13.2.6.4.18) ───────────────
-
-fn handle_in_select_in_table(
-    parser: &mut HtmlTreeConstructor,
-    token: &Token,
-    tokenizer: &mut dyn Tokenizer,
-) -> Step {
-    match token {
-        Token::Tag(tag)
-            if tag.kind == TagKind::Start
-                && matches!(
-                    tag.name.as_str(),
-                    "caption" | "table" | "tbody" | "tfoot" | "thead" | "tr" | "td" | "th"
-                ) =>
-        {
-            parser.errors.push(ParseError::Generic(
-                "unexpected table tag in select-in-table",
-            ));
-            // Pop until a select element is popped, then reprocess.
-            while let Some(top) = parser.open_elements.pop() {
-                let is_select = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "select")
-                    .unwrap_or(false);
-                if is_select {
-                    break;
-                }
-            }
-            reset_insertion_mode(parser);
-            Step::Reprocess
-        }
-        Token::Tag(tag)
-            if tag.kind == TagKind::End
-                && matches!(
-                    tag.name.as_str(),
-                    "caption" | "table" | "tbody" | "tfoot" | "thead" | "tr" | "td" | "th"
-                ) =>
-        {
-            parser.errors.push(ParseError::Generic(
-                "unexpected table end tag in select-in-table",
-            ));
-            if helpers::has_element_in_table_scope(parser, &tag.name) {
-                while let Some(top) = parser.open_elements.pop() {
-                    let is_select = top
-                        .borrow()
-                        .kind
-                        .as_element()
-                        .map(|e| e.local_name == "select")
-                        .unwrap_or(false);
-                    if is_select {
-                        break;
-                    }
-                }
-                reset_insertion_mode(parser);
-                Step::Reprocess
-            } else {
-                Step::Done
-            }
-        }
-        _ => handle_in_select(parser, token, tokenizer),
-    }
-}
-
-// ── InTemplate insertion mode (§13.2.6.4.19) ────────────────────
+// ── InTemplate insertion mode (§13.2.6.4.16) ────────────────────
 
 fn handle_in_template(
     parser: &mut HtmlTreeConstructor,
     token: &Token,
     tokenizer: &mut dyn Tokenizer,
 ) -> Step {
+    // §13.2.6.4.16: In template insertion mode.
     match token {
-        Token::Character(c) if is_whitespace(*c) => {
-            helpers::insert_character(parser, *c);
-            Step::Done
-        }
-        Token::Character(_) => {
-            helpers::reconstruct_active_formatting_elements(parser);
-            handle_in_body(parser, token, tokenizer)
-        }
-        Token::Comment(data) => {
-            helpers::insert_comment(parser, data);
-            Step::Done
-        }
-        Token::ProcessingInstruction { target, data } => {
-            helpers::insert_processing_instruction(parser, target, data);
-            Step::Done
-        }
-        Token::Doctype(_) => {
-            parser
-                .errors
-                .push(ParseError::Generic("unexpected DOCTYPE in template"));
-            Step::Done
-        }
-        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
-            handle_in_body(parser, token, tokenizer)
-        }
+        // Character / comment / PI / DOCTYPE → process using InBody rules.
+        Token::Character(_)
+        | Token::Comment(_)
+        | Token::ProcessingInstruction { .. }
+        | Token::Doctype(_) => handle_in_body(parser, token, tokenizer),
+
+        // base/.../template/title start tag, or template end tag → InHead.
         Token::Tag(tag)
             if tag.kind == TagKind::Start
                 && matches!(
@@ -2634,106 +2750,108 @@ fn handle_in_template(
         {
             handle_in_head(parser, token, tokenizer)
         }
-        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "caption" => {
-            pop_until_template_content(parser);
-            helpers::add_formatting_marker(parser);
-            helpers::insert_element(parser, tag);
-            parser.insertion_mode = InsertionMode::InCaption;
-            Step::Done
+        Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "template" => {
+            let _ = tag;
+            handle_in_head(parser, token, tokenizer)
         }
-        Token::Tag(tag)
-            if tag.kind == TagKind::Start && matches!(tag.name.as_str(), "colgroup" | "col") =>
-        {
-            pop_until_template_content(parser);
-            if tag.name == "col" {
-                create_and_push(parser, "colgroup");
-                parser.insertion_mode = InsertionMode::InColumnGroup;
-                Step::Reprocess
-            } else {
-                helpers::insert_element(parser, tag);
-                parser.insertion_mode = InsertionMode::InColumnGroup;
-                Step::Done
-            }
-        }
+
+        // caption/colgroup/tbody/tfoot/thead start tag:
+        // Pop current template insertion mode, push InTable, switch, reprocess.
         Token::Tag(tag)
             if tag.kind == TagKind::Start
                 && matches!(
                     tag.name.as_str(),
-                    "tbody" | "tfoot" | "thead" | "tr" | "td" | "th"
+                    "caption" | "colgroup" | "tbody" | "tfoot" | "thead"
                 ) =>
         {
-            pop_until_template_content(parser);
-            if matches!(tag.name.as_str(), "tbody" | "tfoot" | "thead") {
-                helpers::insert_element(parser, tag);
-                parser.insertion_mode = InsertionMode::InTableBody;
-                Step::Done
-            } else if tag.name == "tr" {
-                helpers::insert_element(parser, tag);
-                parser.insertion_mode = InsertionMode::InRow;
-                Step::Done
-            } else {
-                create_and_push(parser, "tbody");
-                parser.insertion_mode = InsertionMode::InTableBody;
-                Step::Reprocess
-            }
-        }
-        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "table" => {
-            pop_until_template_content(parser);
-            helpers::insert_element(parser, tag);
+            let _ = tag;
+            parser.template_insertion_modes.pop();
+            parser.template_insertion_modes.push(InsertionMode::InTable);
             parser.insertion_mode = InsertionMode::InTable;
+            Step::Reprocess
+        }
+
+        // col start tag: push InColumnGroup, switch, reprocess.
+        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "col" => {
+            let _ = tag;
+            parser.template_insertion_modes.pop();
+            parser
+                .template_insertion_modes
+                .push(InsertionMode::InColumnGroup);
+            parser.insertion_mode = InsertionMode::InColumnGroup;
+            Step::Reprocess
+        }
+
+        // tr start tag: push InTableBody, switch, reprocess.
+        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "tr" => {
+            let _ = tag;
+            parser.template_insertion_modes.pop();
+            parser
+                .template_insertion_modes
+                .push(InsertionMode::InTableBody);
+            parser.insertion_mode = InsertionMode::InTableBody;
+            Step::Reprocess
+        }
+
+        // td/th start tag: push InRow, switch, reprocess.
+        Token::Tag(tag)
+            if tag.kind == TagKind::Start && matches!(tag.name.as_str(), "td" | "th") =>
+        {
+            let _ = tag;
+            parser.template_insertion_modes.pop();
+            parser.template_insertion_modes.push(InsertionMode::InRow);
+            parser.insertion_mode = InsertionMode::InRow;
+            Step::Reprocess
+        }
+
+        // Any other start tag: push InBody, switch, reprocess.
+        Token::Tag(tag) if tag.kind == TagKind::Start => {
+            let _ = tag;
+            parser.template_insertion_modes.pop();
+            parser.template_insertion_modes.push(InsertionMode::InBody);
+            parser.insertion_mode = InsertionMode::InBody;
+            Step::Reprocess
+        }
+
+        // Any other end tag: parse error, ignore.
+        Token::Tag(tag) if tag.kind == TagKind::End => {
+            parser
+                .errors
+                .push(ParseError::Generic("unexpected end tag in template"));
+            let _ = tag;
             Step::Done
         }
-        Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "template" => {
-            handle_in_head(parser, token, tokenizer)
-        }
+
+        // EOF: if no template in stack, stop parsing (fragment case).
+        // Otherwise: parse error, pop until template popped, clear to last
+        // marker, pop template insertion mode, reset insertion mode, reprocess.
         Token::EOF => {
             if !template_in_stack(parser) {
-                parser.insertion_mode = parser
-                    .original_insertion_mode
-                    .take()
-                    .unwrap_or(InsertionMode::InBody);
-                Step::Reprocess
+                Step::Done
             } else {
-                // Parse error. Pop the current template element from the
-                // stack of open elements, remove the current template
-                // insertion mode from the stack of template insertion
-                // modes, and reprocess the EOF token (§13.2.6.4.19).
                 parser
                     .errors
                     .push(ParseError::Generic("unexpected EOF in template"));
-                parser.open_elements.pop();
+                while let Some(top) = parser.open_elements.pop() {
+                    let is_template = top
+                        .borrow()
+                        .kind
+                        .as_element()
+                        .map(|e| e.local_name == "template")
+                        .unwrap_or(false);
+                    if is_template {
+                        break;
+                    }
+                }
+                helpers::clear_active_formatting_to_last_marker(parser);
                 parser.template_insertion_modes.pop();
-                // Reset insertion mode after popping template.
                 reset_insertion_mode(parser);
                 Step::Reprocess
             }
         }
-        _ => {
-            // Any other start/end tag: reconstruct, process as InBody.
-            helpers::reconstruct_active_formatting_elements(parser);
-            parser.insertion_mode = parser
-                .original_insertion_mode
-                .take()
-                .unwrap_or(InsertionMode::InBody);
-            Step::Reprocess
-        }
-    }
-}
 
-/// Pop elements until the template content marker is reached (i.e., the
-/// current node is a template element). Used by InTemplate.
-fn pop_until_template_content(parser: &mut HtmlTreeConstructor) {
-    while let Some(top) = parser.open_elements.last() {
-        let is_template = top
-            .borrow()
-            .kind
-            .as_element()
-            .map(|e| e.local_name == "template")
-            .unwrap_or(false);
-        if is_template {
-            break;
-        }
-        parser.open_elements.pop();
+        // Unreachable: TagKind only has Start and End, both handled above.
+        _ => Step::Done,
     }
 }
 
@@ -2811,26 +2929,11 @@ fn handle_in_frameset(
             parser.frameset_ok = false;
             Step::Done
         }
-        Token::Tag(tag)
-            if tag.kind == TagKind::Start
-                && matches!(
-                    tag.name.as_str(),
-                    "base"
-                        | "basefont"
-                        | "bgsound"
-                        | "link"
-                        | "meta"
-                        | "noframes"
-                        | "script"
-                        | "style"
-                        | "template"
-                        | "title"
-                ) =>
-        {
-            handle_in_head(parser, token, &mut NullTokenizer)
-        }
-        Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "template" => {
-            handle_in_head(parser, token, &mut NullTokenizer)
+        // §13.2.6.4.18: Only <noframes> is delegated to InHead. The real
+        // tokenizer must be passed so that InHead can switch it to RAWTEXT
+        // (§13.2.6.4.4) before entering Text mode.
+        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "noframes" => {
+            handle_in_head(parser, token, tokenizer)
         }
         Token::EOF => {
             if parser.open_elements.len() != 1 {
@@ -2861,6 +2964,14 @@ fn handle_after_frameset(
             helpers::insert_character(parser, *c);
             Step::Done
         }
+        Token::Character('\0') => {
+            // §13.2.6.4.18: Parse error. Insert U+FFFD.
+            parser.errors.push(ParseError::Generic(
+                "unexpected null character after frameset",
+            ));
+            helpers::insert_character(parser, '\u{FFFD}');
+            Step::Done
+        }
         Token::Comment(data) => {
             helpers::insert_comment(parser, data);
             Step::Done
@@ -2882,26 +2993,11 @@ fn handle_after_frameset(
             parser.insertion_mode = InsertionMode::AfterAfterFrameset;
             Step::Done
         }
-        Token::Tag(tag)
-            if tag.kind == TagKind::Start
-                && matches!(
-                    tag.name.as_str(),
-                    "base"
-                        | "basefont"
-                        | "bgsound"
-                        | "link"
-                        | "meta"
-                        | "noframes"
-                        | "script"
-                        | "style"
-                        | "template"
-                        | "title"
-                ) =>
-        {
-            handle_in_head(parser, token, &mut NullTokenizer)
-        }
-        Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "template" => {
-            handle_in_head(parser, token, &mut NullTokenizer)
+        // §13.2.6.4.19: Only <noframes> is delegated to InHead. The real
+        // tokenizer must be passed so that InHead can switch it to RAWTEXT
+        // (§13.2.6.4.4) before entering Text mode.
+        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "noframes" => {
+            handle_in_head(parser, token, tokenizer)
         }
         Token::EOF => Step::Done,
         _ => {
@@ -2943,26 +3039,11 @@ fn handle_after_after_frameset(
         }
         Token::Character(c) if is_whitespace(*c) => handle_in_body(parser, token, tokenizer),
         Token::EOF => Step::Done,
-        Token::Tag(tag)
-            if tag.kind == TagKind::Start
-                && matches!(
-                    tag.name.as_str(),
-                    "base"
-                        | "basefont"
-                        | "bgsound"
-                        | "link"
-                        | "meta"
-                        | "noframes"
-                        | "script"
-                        | "style"
-                        | "template"
-                        | "title"
-                ) =>
-        {
-            handle_in_head(parser, token, &mut NullTokenizer)
-        }
-        Token::Tag(tag) if tag.kind == TagKind::End && tag.name == "template" => {
-            handle_in_head(parser, token, &mut NullTokenizer)
+        // §13.2.6.4.21: Only <noframes> is delegated to InHead. The real
+        // tokenizer must be passed so that InHead can switch it to RAWTEXT
+        // (§13.2.6.4.4) before entering Text mode.
+        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "noframes" => {
+            handle_in_head(parser, token, tokenizer)
         }
         _ => {
             parser
@@ -2994,10 +3075,9 @@ pub fn reset_insertion_mode(parser: &mut HtmlTreeConstructor) {
             .map(|e| e.local_name.clone());
         let local = local.as_deref().unwrap_or("");
         match local {
-            "select" => {
-                parser.insertion_mode = InsertionMode::InSelect;
-                return;
-            }
+            // §13.2.6.4.2: No "select" case — InSelect mode has been removed
+            // from the spec. <select> content is handled by InBody with
+            // "select in scope" checks on specific start tags.
             "td" | "th" => {
                 if !is_last {
                     parser.insertion_mode = InsertionMode::InCell;
@@ -3059,20 +3139,4 @@ pub fn reset_insertion_mode(parser: &mut HtmlTreeConstructor) {
         }
     }
     parser.insertion_mode = InsertionMode::InBody;
-}
-
-/// A null tokenizer used as a placeholder when handlers need a tokenizer
-/// reference but the current dispatch doesn't have one.
-struct NullTokenizer;
-
-impl crate::tokenizer::Tokenizer for NullTokenizer {
-    fn next_token(&mut self) -> Option<Token> {
-        None
-    }
-    fn set_state(&mut self, _state: State) {}
-    fn state(&self) -> State {
-        State::Data
-    }
-    fn reset(&mut self) {}
-    fn set_appropriate_end_tag_name(&mut self, _name: Option<&str>) {}
 }
