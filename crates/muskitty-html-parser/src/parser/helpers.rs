@@ -772,30 +772,33 @@ pub fn close_p_element(parser: &mut HtmlTreeConstructor) {
 /// the last marker) that are elements with the same tag name, namespace, and
 /// attributes as `element`, the earliest such entry is dropped before pushing.
 pub fn push_formatting_element(parser: &mut HtmlTreeConstructor, element: Rc<RefCell<Node>>) {
-    // Noah's Ark clause (§13.2.6.2): count matching entries after the last
-    // marker. If there are already 3, drop the first one before pushing.
+    // Noah's Ark clause (§13.2.4.3): if there are already 3 elements in the
+    // list after the last marker (or anywhere if no marker) that have the
+    // same tag name, namespace, and attributes as `element`, remove the
+    // earliest such element before pushing.
+    //
+    // We iterate in reverse (from the end toward the last marker). The
+    // first match found is the latest in list order; the third match is
+    // the earliest. Per spec, we remove the earliest.
     let mut count = 0;
-    let mut first_match_index: Option<usize> = None;
+    let mut earliest_match_index: Option<usize> = None;
     for (i, entry) in parser.active_formatting_elements.iter().enumerate().rev() {
         match entry {
             ActiveFormattingEntry::Marker => break,
             ActiveFormattingEntry::Element(e) => {
                 if elements_match_for_noahs_ark(e, &element) {
                     count += 1;
-                    if count == 1 {
-                        first_match_index = Some(i);
-                    }
+                    earliest_match_index = Some(i);
                     if count == 3 {
-                        // Drop the earliest (first_match_index is the lowest
-                        // index found while iterating in reverse, so it is
-                        // actually the earliest in list order).
-                        if let Some(idx) = first_match_index {
-                            parser.active_formatting_elements.remove(idx);
-                        }
                         break;
                     }
                 }
             }
+        }
+    }
+    if count >= 3 {
+        if let Some(idx) = earliest_match_index {
+            parser.active_formatting_elements.remove(idx);
         }
     }
     parser
