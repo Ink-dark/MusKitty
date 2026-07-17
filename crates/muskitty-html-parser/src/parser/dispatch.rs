@@ -1379,6 +1379,16 @@ fn handle_in_body_start_tag(
         return Step::Done;
     }
 
+    // applet/marquee/object (§13.2.6.4.7 line 4020-4029): reconstruct,
+    // insert HTML element, insert AFE marker, set frameset_ok=false.
+    if matches!(name, "applet" | "marquee" | "object") {
+        helpers::reconstruct_active_formatting_elements(parser);
+        helpers::insert_element(parser, tag);
+        helpers::add_formatting_marker(parser);
+        parser.frameset_ok = false;
+        return Step::Done;
+    }
+
     // table (§13.2.6.4.7): in no-quirks mode, close <p> if in button
     // scope; insert <table>, switch to InTable, set frameset_ok=false.
     if name == "table" {
@@ -1628,6 +1638,49 @@ fn handle_in_body_end_tag(
             parser.open_elements.push(p);
         }
         helpers::close_p_element(parser);
+        return Step::Done;
+    }
+
+    // </applet>/</marquee>/</object> (§13.2.6.4.7 line 4031-4044): if no
+    // matching element in scope, parse error, ignore. Otherwise: generate
+    // implied end tags, if current node is not target parse error, pop
+    // until target, clear AFE to last marker.
+    if matches!(name, "applet" | "marquee" | "object") {
+        if !helpers::has_element_in_scope(parser, name) {
+            parser
+                .errors
+                .push(ParseError::UnexpectedEndTag(name.to_string()));
+            return Step::Done;
+        }
+        helpers::generate_implied_end_tags(parser, None);
+        let current_is_target = parser
+            .open_elements
+            .last()
+            .map(|n| {
+                n.borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| e.local_name == name)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !current_is_target {
+            parser
+                .errors
+                .push(ParseError::Generic("end tag not at current node"));
+        }
+        while let Some(top) = parser.open_elements.pop() {
+            let is_target = top
+                .borrow()
+                .kind
+                .as_element()
+                .map(|e| e.local_name.as_str())
+                == Some(name);
+            if is_target {
+                break;
+            }
+        }
+        helpers::clear_active_formatting_to_last_marker(parser);
         return Step::Done;
     }
 
