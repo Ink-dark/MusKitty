@@ -1160,8 +1160,12 @@ fn handle_in_body_start_tag(
     }
 
     // noembed (§13.2.6.4.7): always follow the generic raw text element
-    // parsing algorithm (switch to RAWTEXT, insert, enter Text mode).
+    // parsing algorithm (switch to RAWTEXT, insert, enter Text mode). Per
+    // §13.2.6.4.7, the tokenizer's content model must be set to RAWTEXT
+    // AND the appropriate end tag name must be set to "noembed", so that
+    // `</noembed>` is recognized as the section terminator (§13.2.5.12-14).
     if name == "noembed" {
+        tokenizer.set_appropriate_end_tag_name(Some(name));
         tokenizer.set_state(State::RAWTEXT);
         helpers::insert_element(parser, tag);
         parser.original_insertion_mode = Some(parser.insertion_mode);
