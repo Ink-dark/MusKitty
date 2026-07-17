@@ -1682,6 +1682,10 @@ fn handle_in_body_end_tag(
             return Step::Done;
         }
         helpers::generate_implied_end_tags(parser, None);
+        // §13.2.6.4.7: "If the current node is not an HTML element with the
+        // same tag name as that of the token, then this is a parse error."
+        // The HTML-namespace qualifier matters when foreign elements with
+        // matching local names (e.g. `<svg object>`) sit above the target.
         let current_is_target = parser
             .open_elements
             .last()
@@ -1689,7 +1693,9 @@ fn handle_in_body_end_tag(
                 n.borrow()
                     .kind
                     .as_element()
-                    .map(|e| e.local_name == name)
+                    .map(|e| {
+                        e.namespace == muskitty_dom::Namespace::Html && e.local_name == name
+                    })
                     .unwrap_or(false)
             })
             .unwrap_or(false);
@@ -1698,13 +1704,16 @@ fn handle_in_body_end_tag(
                 .errors
                 .push(ParseError::Generic("end tag not at current node"));
         }
+        // Pop until an HTML element with the same tag name is popped.
         while let Some(top) = parser.open_elements.pop() {
             let is_target = top
                 .borrow()
                 .kind
                 .as_element()
-                .map(|e| e.local_name.as_str())
-                == Some(name);
+                .map(|e| {
+                    e.namespace == muskitty_dom::Namespace::Html && e.local_name == name
+                })
+                .unwrap_or(false);
             if is_target {
                 break;
             }
@@ -2796,13 +2805,20 @@ fn handle_in_cell(
                 return Step::Done;
             }
             helpers::generate_implied_end_tags(parser, None);
-            // Pop until the target cell is popped.
+            // Pop until an HTML element with the same tag name is popped
+            // (§13.2.6.4.15 step 3). The namespace check is essential:
+            // foreign elements such as `<svg td>` must NOT match — otherwise
+            // the HTML `<td>` and its foreign subtree remain on the stack,
+            // and subsequent tokens get routed to foreign content instead
+            // of HTML (see namespace-sensitivity.dat #1).
             while let Some(top) = parser.open_elements.pop() {
                 let is_target = top
                     .borrow()
                     .kind
                     .as_element()
-                    .map(|e| e.local_name == name)
+                    .map(|e| {
+                        e.namespace == muskitty_dom::Namespace::Html && e.local_name == name
+                    })
                     .unwrap_or(false);
                 if is_target {
                     break;

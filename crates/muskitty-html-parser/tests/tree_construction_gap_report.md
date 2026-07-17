@@ -1,6 +1,6 @@
 # html5lib Tree Construction Gap Report
 
-**Pass rate: 99.9% (1715/1716)** — 204 skipped — 0 panicked
+**Pass rate: 100.0% (1716/1716)** — 204 skipped — 0 panicked
 
 ## Per-fixture results
 
@@ -21,7 +21,7 @@
 | main-element.dat | 3 | 0 | 0 | 3 |
 | math.dat | 0 | 0 | 8 | 8 |
 | menuitem-element.dat | 20 | 0 | 0 | 20 |
-| namespace-sensitivity.dat | 0 | 1 | 0 | 1 |
+| namespace-sensitivity.dat | 1 | 0 | 0 | 1 |
 | noscript01.dat | 18 | 0 | 0 | 18 |
 | pending-spec-changes-plain-text-unsafe.dat | 1 | 0 | 0 | 1 |
 | pending-spec-changes.dat | 3 | 0 | 0 | 3 |
