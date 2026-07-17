@@ -5,9 +5,11 @@
 //! insertion mode handlers in [`super::dispatch`].
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
-use muskitty_dom::{append_child, Attribute, Node, NodeKind, NodeType};
+use muskitty_dom::{
+    append_child, Attribute, CommentData, ElementData, Node, NodeKind, NodeType, TextData,
+};
 
 use super::ActiveFormattingEntry;
 use super::HtmlTreeConstructor;
@@ -38,6 +40,17 @@ pub fn create_element_for_token(
         let content = Node::new_document_fragment(&parser.document);
         if let NodeKind::Element(ref mut e) = element.borrow_mut().kind {
             e.set_template_content(content);
+        }
+    }
+    // WHATWG §4.10.10: option's selectedness is initially true if the
+    // element has a `selected` attribute. (The selectedness setting
+    // algorithm may later adjust this.)
+    if token.name == "option" {
+        let has_selected = token.attrs.iter().any(|(k, _)| k.eq_ignore_ascii_case("selected"));
+        if has_selected {
+            if let NodeKind::Element(ref mut e) = element.borrow_mut().kind {
+                e.selectedness = true;
+            }
         }
     }
     element
@@ -218,7 +231,19 @@ pub fn insert_node(parser: &HtmlTreeConstructor, node: &Rc<RefCell<Node>>) {
 pub fn insert_element(parser: &mut HtmlTreeConstructor, token: &TagToken) {
     let element = create_element_for_token(parser, token);
     insert_node(parser, &element);
-    parser.open_elements.push(element);
+    parser.open_elements.push(element.clone());
+    // WHATWG §4.10.10: option HTML element insertion steps — run update
+    // an option's nearest ancestor select, which fires the selectedness
+    // setting algorithm on the ancestor select (if any).
+    let is_option = element
+        .borrow()
+        .kind
+        .as_element()
+        .map(|e| e.namespace == muskitty_dom::Namespace::Html && e.local_name == "option")
+        .unwrap_or(false);
+    if is_option {
+        on_option_inserted(&element);
+    }
 }
 
 /// Insert a character token at the current node.
@@ -690,11 +715,30 @@ pub fn generate_implied_end_tags(parser: &mut HtmlTreeConstructor, except: Optio
         let top_name = parser.open_elements.last().and_then(html_local_name);
         match top_name.as_deref() {
             Some(n) if IMPLIED_END.contains(&n) && Some(n) != except => {
-                parser.open_elements.pop();
+                pop_open_element(parser);
             }
             _ => break,
         }
     }
+}
+
+/// Pop the top element from the stack of open elements, firing the
+/// "maybe clone an option into selectedcontent" hook (§4.10.10) if the
+/// popped element is an `<option>`.
+pub fn pop_open_element(parser: &mut HtmlTreeConstructor) -> Option<Rc<RefCell<Node>>> {
+    let node = parser.open_elements.pop();
+    if let Some(ref n) = node {
+        let is_option = n
+            .borrow()
+            .kind
+            .as_element()
+            .map(|e| e.namespace == muskitty_dom::Namespace::Html && e.local_name == "option")
+            .unwrap_or(false);
+        if is_option {
+            maybe_clone_option_into_selectedcontent(n);
+        }
+    }
+    node
 }
 
 /// "Close a p element" (§13.2.6.4.7).
@@ -728,30 +772,33 @@ pub fn close_p_element(parser: &mut HtmlTreeConstructor) {
 /// the last marker) that are elements with the same tag name, namespace, and
 /// attributes as `element`, the earliest such entry is dropped before pushing.
 pub fn push_formatting_element(parser: &mut HtmlTreeConstructor, element: Rc<RefCell<Node>>) {
-    // Noah's Ark clause (§13.2.6.2): count matching entries after the last
-    // marker. If there are already 3, drop the first one before pushing.
+    // Noah's Ark clause (§13.2.4.3): if there are already 3 elements in the
+    // list after the last marker (or anywhere if no marker) that have the
+    // same tag name, namespace, and attributes as `element`, remove the
+    // earliest such element before pushing.
+    //
+    // We iterate in reverse (from the end toward the last marker). The
+    // first match found is the latest in list order; the third match is
+    // the earliest. Per spec, we remove the earliest.
     let mut count = 0;
-    let mut first_match_index: Option<usize> = None;
+    let mut earliest_match_index: Option<usize> = None;
     for (i, entry) in parser.active_formatting_elements.iter().enumerate().rev() {
         match entry {
             ActiveFormattingEntry::Marker => break,
             ActiveFormattingEntry::Element(e) => {
                 if elements_match_for_noahs_ark(e, &element) {
                     count += 1;
-                    if count == 1 {
-                        first_match_index = Some(i);
-                    }
+                    earliest_match_index = Some(i);
                     if count == 3 {
-                        // Drop the earliest (first_match_index is the lowest
-                        // index found while iterating in reverse, so it is
-                        // actually the earliest in list order).
-                        if let Some(idx) = first_match_index {
-                            parser.active_formatting_elements.remove(idx);
-                        }
                         break;
                     }
                 }
             }
+        }
+    }
+    if count >= 3 {
+        if let Some(idx) = earliest_match_index {
+            parser.active_formatting_elements.remove(idx);
         }
     }
     parser
@@ -894,8 +941,13 @@ pub fn reconstruct_active_formatting_elements(parser: &mut HtmlTreeConstructor) 
             )
         };
         let new_element = Node::new_element_html(&local_name, attrs, &parser.document);
-        let current = parser.current_node();
-        let _ = append_child(&current, new_element.clone());
+        // §13.2.6.4.7 reconstruct step 8: "Insert an HTML element for the
+        // token" — this goes through "appropriate place for inserting a
+        // node" (§13.2.6.2), which applies foster parenting when active.
+        // Using insert_node (not direct append_child) ensures reconstructed
+        // formatting elements are foster-parented correctly when the
+        // current node is a table/tbody/tr.
+        insert_node(parser, &new_element);
         parser.open_elements.push(new_element.clone());
         // Replace the entry with the new element.
         parser.active_formatting_elements[index] = ActiveFormattingEntry::Element(new_element);
@@ -1151,7 +1203,10 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
                 n.borrow()
                     .kind
                     .as_element()
-                    .map(|e| SPECIAL_ELEMENTS.contains(&e.local_name.as_str()))
+                    .map(|e| {
+                        e.namespace == muskitty_dom::Namespace::Html
+                            && SPECIAL_ELEMENTS.contains(&e.local_name.as_str())
+                    })
                     .unwrap_or(false)
             })
             .map(|(i, _)| fmt_stack_index + 1 + i);
@@ -1282,22 +1337,59 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
             }
         }
 
-        // 4.9: Insert last_node at the appropriate place for inserting a
-        //      node, using common ancestor as the override target (§13.2.6.4.7
-        //      adoption agency step 7). If the common ancestor is a template
-        //      element, the insertion target is its template content
-        //      DocumentFragment (§13.2.6.2).
+        // 4.9 (§13.2.6.4.7 steps 14-15): Let insertionLocation be
+        //      commonAncestor, after its last child. Insert lastNode at the
+        //      *adjusted insertion location* given insertionLocation.
+        //
+        //      Per §13.2.6.2, the adjusted insertion location uses
+        //      commonAncestor as the override target. If foster parenting is
+        //      enabled AND the override target is a `table`, `tbody`,
+        //      `tfoot`, `thead`, or `tr` element, the foster parenting
+        //      substeps apply (insertion happens before the last table in
+        //      the stack of open elements, not inside the table).
+        //      Otherwise, the insertion location is inside commonAncestor,
+        //      after its last child (or inside its template content if
+        //      commonAncestor is a `template` element — §13.2.6.2 step 3).
         if let Some(ancestor) = common_ancestor {
-            let target = {
-                let anc_ref = ancestor.borrow();
-                match &anc_ref.kind {
-                    NodeKind::Element(e) if e.local_name == "template" => {
-                        e.template_content.clone().unwrap_or_else(|| ancestor.clone())
+            let is_table_like = ancestor
+                .borrow()
+                .kind
+                .as_element()
+                .map(|e| {
+                    matches!(
+                        e.local_name.as_str(),
+                        "table" | "tbody" | "tfoot" | "thead" | "tr"
+                    )
+                })
+                .unwrap_or(false);
+            if parser.foster_parenting && is_table_like {
+                // §13.2.6.2 foster parenting substeps: the location is
+                // determined by the last `table`/`template` in the stack
+                // of open elements, not by the override target itself.
+                match foster_parent_location(parser) {
+                    FosterLocation::Append(parent) => {
+                        let _ = append_child(&parent, last_node.clone());
                     }
-                    _ => ancestor.clone(),
+                    FosterLocation::Before { parent, before } => {
+                        let _ = muskitty_dom::insert_before(
+                            &parent,
+                            last_node.clone(),
+                            Some(&before),
+                        );
+                    }
                 }
-            };
-            let _ = append_child(&target, last_node.clone());
+            } else {
+                let target = {
+                    let anc_ref = ancestor.borrow();
+                    match &anc_ref.kind {
+                        NodeKind::Element(e) if e.local_name == "template" => {
+                            e.template_content.clone().unwrap_or_else(|| ancestor.clone())
+                        }
+                        _ => ancestor.clone(),
+                    }
+                };
+                let _ = append_child(&target, last_node.clone());
+            }
         }
 
         // 4.10: Create a new element with the same tag/attrs as the
@@ -1363,12 +1455,13 @@ fn run_any_other_end_tag(parser: &mut HtmlTreeConstructor, name: &str) {
     // generate implied end tags except `name`, then pop until it is popped.
     // If a special element (that is not the target) is encountered first,
     // parse error, return (ignore the end tag).
+    //
+    // Per §13.2.6.2, "special" elements are HTML-namespace only. Foreign
+    // elements (SVG/MathML) with the same local name (e.g. svg "tr", svg
+    // "input") must NOT be treated as special, and an HTML end tag should
+    // not match a foreign element by local name.
     for (i, node) in parser.open_elements.iter().enumerate().rev() {
-        let node_name = node
-            .borrow()
-            .kind
-            .as_element()
-            .map(|e| e.local_name.clone());
+        let node_name = html_local_name(node);
         if node_name.as_deref() == Some(name) {
             generate_implied_end_tags(parser, Some(name));
             // Pop until the node at index i is popped.
@@ -1385,5 +1478,367 @@ fn run_any_other_end_tag(parser: &mut HtmlTreeConstructor, name: &str) {
                 return;
             }
         }
+    }
+}
+
+// ── selectedcontent support (WHATWG §4.10.17, §4.10.10) ────────────
+//
+// The `<selectedcontent>` element mirrors the contents of a `<select>`
+// element's currently selected `<option>`. The parser hook is:
+//   "When an `option` element is popped off the stack of open elements
+//    ... the user agent must run maybe clone an option into
+//    selectedcontent given the `option` element." (§4.10.10)
+//
+// Selectedness is tracked on `ElementData.selectedness` and maintained by
+// the selectedness setting algorithm (§4.10.10), which runs whenever an
+// option is inserted into (or removed from) a select.
+
+/// Deep-clone a node subtree (DOM §4.4 "clone a node" with subtree=true).
+fn deep_clone_node(node: &Rc<RefCell<Node>>, owner_document: &Rc<RefCell<Node>>) -> Rc<RefCell<Node>> {
+    let n = node.borrow();
+    let clone = match &n.kind {
+        NodeKind::Element(e) => {
+            let new_e = ElementData::new_html(&e.local_name, e.attributes.clone());
+            Rc::new(RefCell::new(Node {
+                node_type: NodeType::Element,
+                node_name: e.local_name.to_ascii_uppercase(),
+                owner_document: Rc::downgrade(owner_document),
+                parent_node: Weak::new(),
+                children: Vec::new(),
+                kind: NodeKind::Element(new_e),
+            }))
+        }
+        NodeKind::Text(t) => {
+            Rc::new(RefCell::new(Node {
+                node_type: NodeType::Text,
+                node_name: "#text".to_string(),
+                owner_document: Rc::downgrade(owner_document),
+                parent_node: Weak::new(),
+                children: Vec::new(),
+                kind: NodeKind::Text(TextData { data: t.data.clone() }),
+            }))
+        }
+        NodeKind::Comment(c) => {
+            Rc::new(RefCell::new(Node {
+                node_type: NodeType::Comment,
+                node_name: "#comment".to_string(),
+                owner_document: Rc::downgrade(owner_document),
+                parent_node: Weak::new(),
+                children: Vec::new(),
+                kind: NodeKind::Comment(CommentData { data: c.data.clone() }),
+            }))
+        }
+        _ => {
+            // Fallback: shallow clone for unusual node types.
+            Rc::new(RefCell::new(Node {
+                node_type: NodeType::Text,
+                node_name: "#text".to_string(),
+                owner_document: Rc::downgrade(owner_document),
+                parent_node: Weak::new(),
+                children: Vec::new(),
+                kind: NodeKind::Text(TextData { data: String::new() }),
+            }))
+        }
+    };
+    // Clone children recursively.
+    for child in &n.children {
+        let child_clone = deep_clone_node(child, owner_document);
+        child_clone.borrow_mut().parent_node = Rc::downgrade(&clone);
+        clone.borrow_mut().children.push(child_clone);
+    }
+    clone
+}
+
+/// "Get the nearest ancestor select" (§4.10.10): walk up the DOM tree
+/// looking for a `<select>` ancestor, returning null if a `datalist`,
+/// `hr`, or `option` element is encountered first, or if optgroup
+/// nesting is invalid.
+fn find_nearest_ancestor_select(element: &Rc<RefCell<Node>>) -> Option<Rc<RefCell<Node>>> {
+    let mut ancestor_optgroup: Option<Rc<RefCell<Node>>> = None;
+    let mut current = element.borrow().parent_node.upgrade();
+    while let Some(node) = current {
+        let is_element = node.borrow().node_type == NodeType::Element;
+        if !is_element {
+            current = node.borrow().parent_node.upgrade();
+            continue;
+        }
+        let local_name = node
+            .borrow()
+            .kind
+            .as_element()
+            .map(|e| e.local_name.clone());
+        match local_name.as_deref() {
+            Some("datalist") | Some("hr") | Some("option") => return None,
+            Some("optgroup") => {
+                if ancestor_optgroup.is_some() {
+                    return None;
+                }
+                ancestor_optgroup = Some(node.clone());
+            }
+            Some("select") => return Some(node),
+            _ => {}
+        }
+        current = node.borrow().parent_node.upgrade();
+    }
+    None
+}
+
+/// "Get the list of options" given a select element (§4.10.10).
+/// Walks descendants in tree order, collecting `<option>` elements.
+fn get_list_of_options(select: &Rc<RefCell<Node>>) -> Vec<Rc<RefCell<Node>>> {
+    let mut options: Vec<Rc<RefCell<Node>>> = Vec::new();
+    // Recursive DFS in document order, skipping subtrees of certain
+    // elements per the spec algorithm.
+    fn walk(
+        node: &Rc<RefCell<Node>>,
+        select: &Rc<RefCell<Node>>,
+        options: &mut Vec<Rc<RefCell<Node>>>,
+    ) {
+        let children: Vec<Rc<RefCell<Node>>> = {
+            let n = node.borrow();
+            n.children.iter().cloned().collect()
+        };
+        for child in &children {
+            let local = child
+                .borrow()
+                .kind
+                .as_element()
+                .map(|e| e.local_name.clone());
+            match local.as_deref() {
+                Some("option") => {
+                    options.push(child.clone());
+                    // Option's descendants are not traversed (per spec: skip
+                    // node's descendants when node is an option).
+                }
+                Some("select") | Some("datalist") | Some("hr") => {
+                    // Skip descendants of these.
+                }
+                Some("optgroup") => {
+                    // Check if this optgroup has an ancestor optgroup
+                    // between itself and select. If so, skip descendants.
+                    let mut has_ancestor_optgroup = false;
+                    let mut walker = child.borrow().parent_node.upgrade();
+                    while let Some(w) = walker {
+                        if Rc::ptr_eq(&w, select) {
+                            break;
+                        }
+                        let w_local = w
+                            .borrow()
+                            .kind
+                            .as_element()
+                            .map(|e| e.local_name.clone());
+                        if w_local.as_deref() == Some("optgroup") {
+                            has_ancestor_optgroup = true;
+                            break;
+                        }
+                        walker = w.borrow().parent_node.upgrade();
+                    }
+                    if has_ancestor_optgroup {
+                        // Skip descendants.
+                    } else {
+                        walk(child, select, options);
+                    }
+                }
+                _ => {
+                    walk(child, select, options);
+                }
+            }
+        }
+    }
+    walk(select, select, &mut options);
+    options
+}
+
+/// "Get a select's enabled selectedcontent" (§4.10.17): if select has
+/// `multiple`, return None; otherwise return the first `selectedcontent`
+/// descendant in tree order.
+fn get_select_enabled_selectedcontent(
+    select: &Rc<RefCell<Node>>,
+) -> Option<Rc<RefCell<Node>>> {
+    let has_multiple = select
+        .borrow()
+        .kind
+        .as_element()
+        .and_then(|e| e.get_attribute("multiple"))
+        .is_some();
+    if has_multiple {
+        return None;
+    }
+    // Find first selectedcontent descendant in tree order (DFS).
+    fn find(node: &Rc<RefCell<Node>>) -> Option<Rc<RefCell<Node>>> {
+        let children: Vec<Rc<RefCell<Node>>> = {
+            let n = node.borrow();
+            n.children.iter().cloned().collect()
+        };
+        for child in &children {
+            let is_sc = child
+                .borrow()
+                .kind
+                .as_element()
+                .map(|e| {
+                    e.namespace == muskitty_dom::Namespace::Html
+                        && e.local_name == "selectedcontent"
+                })
+                .unwrap_or(false);
+            if is_sc {
+                return Some(child.clone());
+            }
+            if let Some(found) = find(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    find(select)
+}
+
+/// "The selectedness setting algorithm" (§4.10.10): given a select
+/// element, adjust option selectedness.
+///
+/// 1. If multiple absent, display size 1, and no option has
+///    selectedness=true → set first non-disabled option's selectedness=true.
+/// 2. If multiple absent and 2+ options have selectedness=true → set all
+///    but last to false.
+fn selectedness_setting_algorithm(select: &Rc<RefCell<Node>>) {
+    let has_multiple = select
+        .borrow()
+        .kind
+        .as_element()
+        .and_then(|e| e.get_attribute("multiple"))
+        .is_some();
+    if has_multiple {
+        return;
+    }
+    // Display size: 1 if size attribute absent or parses to 1.
+    let display_size: u32 = select
+        .borrow()
+        .kind
+        .as_element()
+        .and_then(|e| e.get_attribute("size"))
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(1);
+
+    let options = get_list_of_options(select);
+
+    // Step 1: if display size is 1 and no option has selectedness=true,
+    // set first non-disabled option's selectedness to true.
+    if display_size == 1 {
+        let any_selected = options.iter().any(|opt| {
+            opt.borrow()
+                .kind
+                .as_element()
+                .map(|e| e.selectedness)
+                .unwrap_or(false)
+        });
+        if !any_selected {
+            for opt in &options {
+                let is_disabled = opt
+                    .borrow()
+                    .kind
+                    .as_element()
+                    .and_then(|e| e.get_attribute("disabled"))
+                    .is_some();
+                if !is_disabled {
+                    if let NodeKind::Element(ref mut e) = opt.borrow_mut().kind {
+                        e.selectedness = true;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    // Step 2: if 2+ options have selectedness=true, set all but last to
+    // false.
+    let selected_indices: Vec<usize> = options
+        .iter()
+        .enumerate()
+        .filter(|(_, opt)| {
+            opt.borrow()
+                .kind
+                .as_element()
+                .map(|e| e.selectedness)
+                .unwrap_or(false)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if selected_indices.len() >= 2 {
+        let last = *selected_indices.last().unwrap();
+        for &i in &selected_indices {
+            if i != last {
+                if let NodeKind::Element(ref mut e) = options[i].borrow_mut().kind {
+                    e.selectedness = false;
+                }
+            }
+        }
+    }
+}
+
+/// "Clone an option into a selectedcontent" (§4.10.17): deep-clone all
+/// children of `option` into `selectedcontent`, replacing its existing
+/// content.
+fn clone_option_into_selectedcontent(
+    option: &Rc<RefCell<Node>>,
+    selectedcontent: &Rc<RefCell<Node>>,
+    owner_document: &Rc<RefCell<Node>>,
+) {
+    // Clear existing children of selectedcontent ("replace all").
+    let old_children: Vec<Rc<RefCell<Node>>> = {
+        let mut sc = selectedcontent.borrow_mut();
+        sc.children.drain(..).collect()
+    };
+    for c in &old_children {
+        c.borrow_mut().parent_node = Weak::new();
+    }
+    // Deep-clone each child of option and append to selectedcontent.
+    let option_children: Vec<Rc<RefCell<Node>>> = {
+        let o = option.borrow();
+        o.children.iter().cloned().collect()
+    };
+    for child in &option_children {
+        let clone = deep_clone_node(child, owner_document);
+        clone.borrow_mut().parent_node = Rc::downgrade(selectedcontent);
+        selectedcontent.borrow_mut().children.push(clone);
+    }
+}
+
+/// "Maybe clone an option into selectedcontent" (§4.10.10): the parser
+/// hook called when an option is popped off the stack of open elements.
+///
+/// If the option's nearest ancestor select exists, the option's
+/// selectedness is true, and the select has an enabled selectedcontent,
+/// then clone the option's children into the selectedcontent.
+pub fn maybe_clone_option_into_selectedcontent(option: &Rc<RefCell<Node>>) {
+    let select = match find_nearest_ancestor_select(option) {
+        Some(s) => s,
+        None => return,
+    };
+    let selectedness = option
+        .borrow()
+        .kind
+        .as_element()
+        .map(|e| e.selectedness)
+        .unwrap_or(false);
+    if !selectedness {
+        return;
+    }
+    let selectedcontent = match get_select_enabled_selectedcontent(&select) {
+        Some(sc) => sc,
+        None => return,
+    };
+    let owner_document = option
+        .borrow()
+        .owner_document
+        .upgrade()
+        .unwrap_or_else(|| option.clone());
+    clone_option_into_selectedcontent(option, &selectedcontent, &owner_document);
+}
+
+/// Hook called after an `<option>` element is inserted into the DOM (per
+/// §4.10.10 "option HTML element insertion steps"): runs the selectedness
+/// setting algorithm on the nearest ancestor select.
+pub fn on_option_inserted(option: &Rc<RefCell<Node>>) {
+    if let Some(select) = find_nearest_ancestor_select(option) {
+        selectedness_setting_algorithm(&select);
     }
 }

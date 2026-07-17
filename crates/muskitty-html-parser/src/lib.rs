@@ -54,5 +54,9 @@ pub fn parse(input: &str) -> Rc<RefCell<Node>> {
             break;
         }
     }
+    // §13.2.7 "stop parsing" step 4: pop all nodes off the stack of open
+    // elements. This fires the maybe-clone hook (§4.10.10) for any open
+    // <option> elements, mirroring their content into <selectedcontent>.
+    constructor.finalize();
     document
 }

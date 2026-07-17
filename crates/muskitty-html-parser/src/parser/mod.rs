@@ -184,4 +184,15 @@ impl HtmlTreeConstructor {
             }
         }
     }
+
+    /// Run the "stop parsing" finalization step (§13.2.7 step 4): pop all
+    /// nodes off the stack of open elements. This fires the maybe-clone
+    /// hook (§4.10.10) for any open `<option>` elements, ensuring their
+    /// content is mirrored into `<selectedcontent>` before the document
+    /// is returned.
+    pub fn finalize(&mut self) {
+        while !self.open_elements.is_empty() {
+            helpers::pop_open_element(self);
+        }
+    }
 }

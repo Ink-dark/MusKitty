@@ -79,6 +79,14 @@ impl DatParser {
         if !self.have_test {
             return;
         }
+        // Trim trailing empty lines from #document — they are test
+        // separators (blank lines between tests), not document content.
+        // #data does NOT get trimmed: a trailing blank line in #data
+        // represents an actual newline in the input (e.g. tests16.dat #195
+        // has input "<!doctype html><table>\n" where the \n is significant).
+        while self.doc_lines.last().map_or(false, |l| l.is_empty()) {
+            self.doc_lines.pop();
+        }
         // #data: join lines with LF, drop trailing newline (the last line
         // already has no newline because .lines() strips it).
         let data_str = self.data_lines.join("\n");
@@ -130,14 +138,19 @@ fn parse_dat(content: &str) -> Vec<TestCase> {
         } else if line == "#document" {
             p.field = "document";
         } else if line.is_empty() {
-            // Blank line: test separator. Only flush when we've seen a
-            // #document block (heuristic — avoids mid-data flushes).
-            if p.field == "document" || p.field == "errors" {
+            // Blank line handling depends on the current field:
+            //  - #errors: flush (end of test, separator before next #data)
+            //  - #data / #document: preserve as content (a blank line inside
+            //    these sections is legitimate — e.g. a "\n" inside a text
+            //    node serialized as | " \n ". Trailing blank lines are
+            //    trimmed in flush()).
+            if p.field == "errors" {
                 p.flush();
                 p.field = "";
             } else if p.field == "data" {
-                // Blank line inside #data: preserve it.
                 p.data_lines.push(String::new());
+            } else if p.field == "document" {
+                p.doc_lines.push(String::new());
             }
         } else {
             match p.field {

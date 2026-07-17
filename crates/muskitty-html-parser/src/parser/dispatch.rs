@@ -81,7 +81,7 @@ pub(crate) fn dispatch_in_current_mode(
         InsertionMode::InTableText => handle_in_table_text(parser, token, tokenizer),
         InsertionMode::InCaption => handle_in_caption(parser, token, tokenizer),
         InsertionMode::InColumnGroup => handle_in_column_group(parser, token, tokenizer),
-        InsertionMode::InTableBody => handle_in_table_body(parser, token),
+        InsertionMode::InTableBody => handle_in_table_body(parser, token, tokenizer),
         InsertionMode::InRow => handle_in_row(parser, token, tokenizer),
         InsertionMode::InCell => handle_in_cell(parser, token, tokenizer),
         InsertionMode::InHeadNoscript => handle_in_head_noscript(parser, token, tokenizer),
@@ -828,6 +828,21 @@ fn handle_in_body_start_tag(
 ) -> Step {
     let name = tag.name.as_str();
 
+    // §13.2.6.4.7: A start tag whose tag name is "image": parse error.
+    // Change the token's tag name to "img" and reprocess it. (Don't ask.)
+    if name == "image" {
+        parser
+            .errors
+            .push(ParseError::Generic("image start tag treated as img"));
+        let img_tag = crate::tokenizer::TagToken {
+            kind: tag.kind,
+            name: "img".to_string(),
+            attrs: tag.attrs.clone(),
+            self_closing: tag.self_closing,
+        };
+        return handle_in_body_start_tag(parser, &img_tag, tokenizer);
+    }
+
     // "html" — merge attributes onto the existing <html> element.
     // §13.2.6.4.7: If there is a template element on the stack of open
     // elements, then ignore the token. Otherwise, merge attributes.
@@ -1145,8 +1160,12 @@ fn handle_in_body_start_tag(
     }
 
     // noembed (§13.2.6.4.7): always follow the generic raw text element
-    // parsing algorithm (switch to RAWTEXT, insert, enter Text mode).
+    // parsing algorithm (switch to RAWTEXT, insert, enter Text mode). Per
+    // §13.2.6.4.7, the tokenizer's content model must be set to RAWTEXT
+    // AND the appropriate end tag name must be set to "noembed", so that
+    // `</noembed>` is recognized as the section terminator (§13.2.5.12-14).
     if name == "noembed" {
+        tokenizer.set_appropriate_end_tag_name(Some(name));
         tokenizer.set_state(State::RAWTEXT);
         helpers::insert_element(parser, tag);
         parser.original_insertion_mode = Some(parser.insertion_mode);
@@ -1285,39 +1304,16 @@ fn handle_in_body_start_tag(
     }
 
     // Void elements (area/base/br/col/embed/img/keygen/link/meta/
-    // param/source/track/wbr): reconstruct, insert, pop. img/keygen/wbr
-    // additionally set frameset_ok=false.
+    // param/source/track/wbr): reconstruct, insert, pop. Per §13.2.6.4.7
+    // (line 4063-4072) ALL of area/br/embed/img/keygen/wbr set
+    // frameset_ok=false.
     if VOID_ELEMENTS.contains(&name) {
-        // image → img (parse error).
-        if name == "image" {
-            parser
-                .errors
-                .push(ParseError::Generic("image start tag treated as img"));
-        }
         helpers::reconstruct_active_formatting_elements(parser);
-        // Build the element from the (possibly renamed) tag.
-        let effective_tag = if name == "image" {
-            crate::tokenizer::TagToken {
-                kind: tag.kind,
-                name: "img".to_string(),
-                attrs: tag.attrs.clone(),
-                self_closing: tag.self_closing,
-            }
-        } else {
-            tag.clone()
-        };
-        helpers::insert_element(parser, &effective_tag);
+        helpers::insert_element(parser, tag);
         parser.open_elements.pop();
-        if matches!(effective_tag.name.as_str(), "img" | "keygen" | "wbr") {
+        if matches!(name, "area" | "br" | "embed" | "img" | "keygen" | "wbr") {
             parser.frameset_ok = false;
         }
-        return Step::Done;
-    }
-
-    // image: parse error, act as img (handled above via VOID_ELEMENTS).
-    if name == "image" {
-        // Already handled by the VOID_ELEMENTS branch above; this is a
-        // safety net in case the const list is reordered.
         return Step::Done;
     }
 
@@ -1339,34 +1335,46 @@ fn handle_in_body_start_tag(
             | "tt"
             | "u"
     ) {
-        helpers::reconstruct_active_formatting_elements(parser);
-        // Special case for <a>: if there is an <a> in the active formatting
-        // elements list, run adoption agency for "a", then remove any <a>
-        // from the list (§13.2.6.4.7).
+        // Special case for <a> (§13.2.6.4.7): see below.
         if name == "a" {
-            let has_a_in_afe = parser.active_formatting_elements.iter().any(|e| {
-                matches!(e, ActiveFormattingEntry::Element(el) if {
-                    let l = el.borrow();
-                    l.kind.as_element().map(|e| e.local_name.as_str()) == Some("a")
-                })
-            });
-            if has_a_in_afe {
+            // §13.2.6.4.7: If the list of active formatting elements
+            // contains an <a> element between the end of the list and the
+            // last marker on the list (or the start of the list if there
+            // is no marker), run the adoption agency algorithm for the
+            // token, then remove that element from the list of active
+            // formatting elements and the stack of open elements if the
+            // adoption agency algorithm didn't already remove it (it
+            // might not have if the element is not in table scope).
+            let a_element = parser
+                .active_formatting_elements
+                .iter()
+                .rev()
+                .take_while(|e| !matches!(e, ActiveFormattingEntry::Marker))
+                .find_map(|e| match e {
+                    ActiveFormattingEntry::Element(el) => {
+                        let is_a = el
+                            .borrow()
+                            .kind
+                            .as_element()
+                            .map(|e| e.local_name.as_str() == "a")
+                            .unwrap_or(false);
+                        if is_a {
+                            Some(el.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                });
+            if let Some(a_el) = a_element {
                 helpers::adoption_agency(parser, "a");
-                // §13.2.6.4.7: Remove that <a> element from the list of
-                // active formatting elements and the stack of open elements
-                // if the adoption agency algorithm didn't already remove it.
+                // Remove that specific <a> element (by pointer identity)
+                // from the AFE and the stack of open elements if the
+                // adoption agency algorithm didn't already remove it.
                 parser.active_formatting_elements.retain(|e| {
-                    !matches!(e, ActiveFormattingEntry::Element(el) if {
-                        let l = el.borrow();
-                        l.kind.as_element().map(|e| e.local_name.as_str()) == Some("a")
-                    })
+                    !matches!(e, ActiveFormattingEntry::Element(el) if Rc::ptr_eq(el, &a_el))
                 });
-                // Remove the <a> from the stack WITHOUT truncating elements
-                // above it (e.g. <table> must stay on the stack).
-                parser.open_elements.retain(|n| {
-                    let l = n.borrow();
-                    l.kind.as_element().map(|e| e.local_name.as_str()) != Some("a")
-                });
+                parser.open_elements.retain(|n| !Rc::ptr_eq(n, &a_el));
             }
         }
         // Special case for <nobr> (§13.2.6.4.7): if there is a <nobr> in
@@ -1384,6 +1392,16 @@ fn handle_in_body_start_tag(
         helpers::insert_node(parser, &element);
         parser.open_elements.push(element.clone());
         helpers::push_formatting_element(parser, element);
+        return Step::Done;
+    }
+
+    // applet/marquee/object (§13.2.6.4.7 line 4020-4029): reconstruct,
+    // insert HTML element, insert AFE marker, set frameset_ok=false.
+    if matches!(name, "applet" | "marquee" | "object") {
+        helpers::reconstruct_active_formatting_elements(parser);
+        helpers::insert_element(parser, tag);
+        helpers::add_formatting_marker(parser);
+        parser.frameset_ok = false;
         return Step::Done;
     }
 
@@ -1409,21 +1427,34 @@ fn handle_in_body_start_tag(
                 "unexpected <select> when select in scope",
             ));
             // Pop until select is popped.
-            while let Some(top) = parser.open_elements.pop() {
-                let is_select = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "select")
-                    .unwrap_or(false);
-                if is_select {
-                    break;
+            loop {
+                let popped = helpers::pop_open_element(parser);
+                match popped {
+                    Some(top) => {
+                        let is_select = top
+                            .borrow()
+                            .kind
+                            .as_element()
+                            .map(|e| e.local_name == "select")
+                            .unwrap_or(false);
+                        if is_select {
+                            break;
+                        }
+                    }
+                    None => break,
                 }
             }
             return Step::Done;
         }
         helpers::reconstruct_active_formatting_elements(parser);
         helpers::insert_element(parser, tag);
+        // §13.2.6.4.7: "immediately followed by a marker in the active
+        // formatting elements list." The marker prevents any formatting
+        // element opened before <select> from being reconstructed inside
+        // the select subtree.
+        parser
+            .active_formatting_elements
+            .push(ActiveFormattingEntry::Marker);
         parser.frameset_ok = false;
         return Step::Done;
     }
@@ -1450,7 +1481,7 @@ fn handle_in_body_start_tag(
                     .map(|e| e.local_name == "option")
                     .unwrap_or(false);
                 if is_option {
-                    parser.open_elements.pop();
+                    helpers::pop_open_element(parser);
                 }
             }
         }
@@ -1482,7 +1513,7 @@ fn handle_in_body_start_tag(
                     .map(|e| e.local_name == "option")
                     .unwrap_or(false);
                 if is_option {
-                    parser.open_elements.pop();
+                    helpers::pop_open_element(parser);
                 }
             }
         }
@@ -1639,6 +1670,58 @@ fn handle_in_body_end_tag(
         return Step::Done;
     }
 
+    // </applet>/</marquee>/</object> (§13.2.6.4.7 line 4031-4044): if no
+    // matching element in scope, parse error, ignore. Otherwise: generate
+    // implied end tags, if current node is not target parse error, pop
+    // until target, clear AFE to last marker.
+    if matches!(name, "applet" | "marquee" | "object") {
+        if !helpers::has_element_in_scope(parser, name) {
+            parser
+                .errors
+                .push(ParseError::UnexpectedEndTag(name.to_string()));
+            return Step::Done;
+        }
+        helpers::generate_implied_end_tags(parser, None);
+        // §13.2.6.4.7: "If the current node is not an HTML element with the
+        // same tag name as that of the token, then this is a parse error."
+        // The HTML-namespace qualifier matters when foreign elements with
+        // matching local names (e.g. `<svg object>`) sit above the target.
+        let current_is_target = parser
+            .open_elements
+            .last()
+            .map(|n| {
+                n.borrow()
+                    .kind
+                    .as_element()
+                    .map(|e| {
+                        e.namespace == muskitty_dom::Namespace::Html && e.local_name == name
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !current_is_target {
+            parser
+                .errors
+                .push(ParseError::Generic("end tag not at current node"));
+        }
+        // Pop until an HTML element with the same tag name is popped.
+        while let Some(top) = parser.open_elements.pop() {
+            let is_target = top
+                .borrow()
+                .kind
+                .as_element()
+                .map(|e| {
+                    e.namespace == muskitty_dom::Namespace::Html && e.local_name == name
+                })
+                .unwrap_or(false);
+            if is_target {
+                break;
+            }
+        }
+        helpers::clear_active_formatting_to_last_marker(parser);
+        return Step::Done;
+    }
+
     // </body>: if body not in scope, parse error, ignore. Else: switch to
     // AfterBody.
     if name == "body" {
@@ -1680,7 +1763,7 @@ fn handle_in_body_end_tag(
         while let Some(top) = parser.open_elements.last() {
             let top_name = top.borrow().kind.as_element().map(|e| e.local_name.clone());
             let is_target = top_name.as_deref() == Some(name);
-            parser.open_elements.pop();
+            helpers::pop_open_element(parser);
             if is_target {
                 break;
             }
@@ -1887,7 +1970,7 @@ fn handle_in_body_end_tag(
             helpers::generate_implied_end_tags(parser, Some(name));
             // Pop until we've popped the matching node at index i.
             while parser.open_elements.len() > i {
-                parser.open_elements.pop();
+                helpers::pop_open_element(parser);
             }
             return Step::Done;
         }
@@ -2052,13 +2135,10 @@ fn handle_after_after_body(
 // ── Table insertion modes (§13.2.6.4.9–§13.2.6.4.15) ──────────
 
 /// Pop elements from the open elements stack until a table-context
-/// element is current. The table-context elements are: `table`,
-/// `tbody`, `tfoot`, `thead`, `tr`, `caption`, `colgroup`, `html`,
-/// `template` (§13.2.6.4.9 "clear the stack back to a table context").
+/// element is current. Per §13.2.6.4.9 (line 4638), the table-context
+/// elements are: `table`, `template`, `html` only.
 fn clear_stack_to_table_context(parser: &mut HtmlTreeConstructor) {
-    const TABLE_CONTEXT: &[&str] = &[
-        "table", "tbody", "tfoot", "thead", "tr", "caption", "colgroup", "html", "template",
-    ];
+    const TABLE_CONTEXT: &[&str] = &["table", "template", "html"];
     while let Some(top) = parser.open_elements.last() {
         let is_ctx = top
             .borrow()
@@ -2550,7 +2630,11 @@ fn close_colgroup_and_reprocess(parser: &mut HtmlTreeConstructor) -> Step {
 
 // ── InTableBody insertion mode (§13.2.6.4.13) ───────────────────
 
-fn handle_in_table_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_table_body(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "tr" => {
             clear_stack_to_table_body_context(parser);
@@ -2608,9 +2692,18 @@ fn handle_in_table_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step
             Step::Reprocess
         }
         _ => {
-            // Anything else: process using the rules for InTable.
-            parser.insertion_mode = InsertionMode::InTable;
-            Step::Reprocess
+            // §13.2.6.4.13 "Anything else": Process the token using the
+            // rules for the "in table" insertion mode. Per §13.2.6, "using
+            // the rules for m" means invoking m's handler directly WITHOUT
+            // changing the current insertion mode (unless m's rules
+            // themselves switch it). Switching to InTable and reprocessing
+            // here would break the table body context: a subsequent <tr>
+            // would be handled by InTable's "td/th/tr" branch (which clears
+            // the stack back to a *table* context, popping the existing
+            // tbody, and inserts a *new* tbody), instead of InTableBody's
+            // "tr" branch (which clears back to a *table body* context,
+            // preserving the existing tbody).
+            handle_in_table(parser, token, tokenizer)
         }
     }
 }
@@ -2712,13 +2805,20 @@ fn handle_in_cell(
                 return Step::Done;
             }
             helpers::generate_implied_end_tags(parser, None);
-            // Pop until the target cell is popped.
+            // Pop until an HTML element with the same tag name is popped
+            // (§13.2.6.4.15 step 3). The namespace check is essential:
+            // foreign elements such as `<svg td>` must NOT match — otherwise
+            // the HTML `<td>` and its foreign subtree remain on the stack,
+            // and subsequent tokens get routed to foreign content instead
+            // of HTML (see namespace-sensitivity.dat #1).
             while let Some(top) = parser.open_elements.pop() {
                 let is_target = top
                     .borrow()
                     .kind
                     .as_element()
-                    .map(|e| e.local_name == name)
+                    .map(|e| {
+                        e.namespace == muskitty_dom::Namespace::Html && e.local_name == name
+                    })
                     .unwrap_or(false);
                 if is_target {
                     break;
@@ -3187,13 +3287,17 @@ fn handle_after_after_frameset(
             );
             Step::Done
         }
-        Token::Doctype(_) => {
-            parser.errors.push(ParseError::Generic(
-                "unexpected DOCTYPE after after frameset",
-            ));
-            Step::Done
+        // §13.2.6.4.21 (line 5278-5283): DOCTYPE, whitespace character,
+        // and <html> start tag are all processed using the "in body" rules.
+        Token::Doctype(_)
+        | Token::Character(_)
+            if matches!(token, Token::Character(c) if is_whitespace(*c)) =>
+        {
+            handle_in_body(parser, token, tokenizer)
         }
-        Token::Character(c) if is_whitespace(*c) => handle_in_body(parser, token, tokenizer),
+        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
+            handle_in_body(parser, token, tokenizer)
+        }
         Token::EOF => Step::Done,
         // §13.2.6.4.21: Only <noframes> is delegated to InHead. The real
         // tokenizer must be passed so that InHead can switch it to RAWTEXT
