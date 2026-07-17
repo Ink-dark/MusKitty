@@ -24,7 +24,7 @@
 //! - §4.3.15 Consume the remnants of a bad url — not yet
 
 use super::trait_def::Tokenizer;
-use super::types::{HashType, State, Token};
+use super::types::{HashType, Numeric, State, Token};
 
 /// The CSS tokenizer (§4.3).
 ///
@@ -345,9 +345,116 @@ impl CssTokenizer {
         Token::Hash(name, hash_type)
     }
 
-    /// §4.3.3 Consume a numeric token.
+    /// §4.3.3 (L1011-1042) Consume a numeric token.
+    ///
+    /// Returns a `number-token`, `percentage-token`, or `dimension-token`.
+    /// Per §4.3.3:
+    /// 1. Consume a number (§4.3.13).
+    /// 2. If next 3 would start an ident sequence → dimension-token (consume
+    ///    an ident sequence for the unit).
+    /// 3. Else if next is `%` → percentage-token (consume `%`).
+    /// 4. Else → number-token.
     fn consume_a_numeric_token(&mut self) -> Token {
-        todo!("C-4: numeric token")
+        let (value, is_integer) = self.consume_a_number();
+        let numeric = Numeric { value, is_integer };
+        // §4.3.3 L1019-1029: dimension
+        if self.would_start_ident_sequence_at(0) {
+            let unit = self.consume_an_ident_sequence();
+            return Token::Dimension(numeric, unit);
+        }
+        // §4.3.3 L1032-1036: percentage
+        if self.peek(0) == Some('%') {
+            self.consume();
+            return Token::Percentage(numeric);
+        }
+        // §4.3.3 L1040-1042: number
+        Token::Number(numeric)
+    }
+
+    /// §4.3.13 (L1415-1483) Consume a number.
+    ///
+    /// Returns `(value, is_integer)` where `is_integer` is true when the
+    /// source representation had no fractional part and no exponent (type
+    /// "integer"), false when it had either (type "number"). The sign is
+    /// included in `value`.
+    ///
+    /// Per §4.3.13:
+    /// 1. type = "integer"; number_part = ""; exponent_part = "".
+    /// 2. If next is `+`/`-`, consume, append to number_part.
+    /// 3. While next is digit, consume, append to number_part.
+    /// 4. If next 2 are `.` + digit: consume `.`, consume digits; type = "number".
+    /// 5. If next 2/3 are `e`/`E` + optional `+`/`-` + digit: consume `e`/`E`,
+    ///    optional sign, digits into exponent_part; type = "number".
+    /// 6. value = parse number_part; if exponent_part non-empty, value *= 10^exp.
+    /// 7. Return value, type, sign.
+    fn consume_a_number(&mut self) -> (f64, bool) {
+        let mut type_is_number = false;
+        let mut number_part = String::new();
+        let mut exponent_part = String::new();
+
+        // §4.3.13 L1436-1440: sign
+        if self.peek(0) == Some('+') || self.peek(0) == Some('-') {
+            number_part.push(self.consume().unwrap());
+        }
+
+        // §4.3.13 L1442-1444: integer digits
+        while let Some(d) = self.peek(0) {
+            if is_digit(d) {
+                number_part.push(d);
+                self.consume();
+            } else {
+                break;
+            }
+        }
+
+        // §4.3.13 L1446-1454: fraction part
+        if self.peek(0) == Some('.') && matches!(self.peek(1), Some(d) if is_digit(d)) {
+            number_part.push(self.consume().unwrap()); // consume `.`
+            type_is_number = true;
+            while let Some(d) = self.peek(0) {
+                if is_digit(d) {
+                    number_part.push(d);
+                    self.consume();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // §4.3.13 L1457-1469: exponent part
+        if matches!(self.peek(0), Some('e') | Some('E')) {
+            let p1 = self.peek(1);
+            let p2 = self.peek(2);
+            let valid_exp = match p1 {
+                Some('+') | Some('-') => matches!(p2, Some(d) if is_digit(d)),
+                Some(d) if is_digit(d) => true,
+                _ => false,
+            };
+            if valid_exp {
+                self.consume(); // consume `e`/`E`
+                if self.peek(0) == Some('+') || self.peek(0) == Some('-') {
+                    exponent_part.push(self.consume().unwrap());
+                }
+                while let Some(d) = self.peek(0) {
+                    if is_digit(d) {
+                        exponent_part.push(d);
+                        self.consume();
+                    } else {
+                        break;
+                    }
+                }
+                type_is_number = true;
+            }
+        }
+
+        // §4.3.13 L1472-1480: compute value
+        let mut value: f64 = number_part.parse().unwrap_or(0.0);
+        if !exponent_part.is_empty() {
+            let exp: i32 = exponent_part.parse().unwrap_or(0);
+            value *= 10.0f64.powi(exp);
+        }
+
+        (value, !type_is_number)
     }
 
     /// §4.3.4 Consume an ident-like token.
@@ -568,12 +675,29 @@ impl CssTokenizer {
 
     // ── Predicates (stubs returning false; implemented in C-4/C-6) ──
 
-    /// §4.3.10 Check if three code points would start a number.
+    /// §4.3.10 (L1307-1352) Check if three code points would start a number.
     ///
     /// `first` is the code point already consumed (the caller passes it
-    /// so the predicate can examine the next two without reconsume).
-    fn starts_with_number(&self, _first: char) -> bool {
-        false
+    /// so the predicate can examine the next two without reconsume). The
+    /// three code points examined are `first`, `peek(0)`, `peek(1)`.
+    ///
+    /// Per §4.3.10:
+    /// - `+`/`-`: second is digit → true; second is `.` and third is digit
+    ///   → true; else false.
+    /// - `.`: second is digit → true; else false.
+    /// - digit: true.
+    /// - anything else: false.
+    fn starts_with_number(&self, first: char) -> bool {
+        match first {
+            '+' | '-' => match self.peek(0) {
+                Some(d) if is_digit(d) => true,
+                Some('.') => matches!(self.peek(1), Some(d) if is_digit(d)),
+                _ => false,
+            },
+            '.' => matches!(self.peek(0), Some(d) if is_digit(d)),
+            d if is_digit(d) => true,
+            _ => false,
+        }
     }
 }
 
@@ -1117,5 +1241,95 @@ mod tests {
         let tokens = CssTokenizer::collect("\"\\26\"");
         assert_eq!(tokens.len(), 1);
         assert!(matches!(&tokens[0], Token::String(s) if s == "&"));
+    }
+
+    // ── C-4 tests: §4.3.3/§4.3.10/§4.3.13 number/percentage/dimension ─
+
+    #[test]
+    fn number_integer() {
+        let tokens = CssTokenizer::collect("42");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Number(Numeric { value: 42.0, is_integer: true }));
+    }
+
+    #[test]
+    fn number_decimal() {
+        let tokens = CssTokenizer::collect("3.5");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Number(Numeric { value: 3.5, is_integer: false }));
+    }
+
+    #[test]
+    fn number_signed() {
+        let tokens = CssTokenizer::collect("-5");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Number(Numeric { value: -5.0, is_integer: true }));
+    }
+
+    #[test]
+    fn number_exponent() {
+        // §4.3.13: 1e3 → 1.0 * 10^3 = 1000.0, type "number"
+        let tokens = CssTokenizer::collect("1e3");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Number(Numeric { value: 1000.0, is_integer: false }));
+    }
+
+    #[test]
+    fn number_decimal_exponent() {
+        // §4.3.13: 1.5e2 → 1.5 * 10^2 = 150.0, type "number"
+        let tokens = CssTokenizer::collect("1.5e2");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Number(Numeric { value: 150.0, is_integer: false }));
+    }
+
+    #[test]
+    fn percentage_token() {
+        let tokens = CssTokenizer::collect("50%");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Percentage(Numeric { value: 50.0, is_integer: true }));
+    }
+
+    #[test]
+    fn dimension_px() {
+        let tokens = CssTokenizer::collect("10px");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Dimension(
+            Numeric { value: 10.0, is_integer: true },
+            "px".to_string(),
+        ));
+    }
+
+    #[test]
+    fn dimension_em() {
+        let tokens = CssTokenizer::collect("1.5em");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Dimension(
+            Numeric { value: 1.5, is_integer: false },
+            "em".to_string(),
+        ));
+    }
+
+    #[test]
+    fn dimension_signed() {
+        let tokens = CssTokenizer::collect("-30deg");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Dimension(
+            Numeric { value: -30.0, is_integer: true },
+            "deg".to_string(),
+        ));
+    }
+
+    #[test]
+    fn plus_sign_number() {
+        let tokens = CssTokenizer::collect("+5");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Number(Numeric { value: 5.0, is_integer: true }));
+    }
+
+    #[test]
+    fn dot_starts_number() {
+        let tokens = CssTokenizer::collect(".5");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Number(Numeric { value: 0.5, is_integer: false }));
     }
 }
