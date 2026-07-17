@@ -262,40 +262,60 @@ impl CssTokenizer {
 
     // ── Sub-algorithm stubs (implemented in subsequent commits) ───────
 
-    /// §4.3.5 Consume a string token.
+    /// §4.3.5 (L1081-1128) Consume a string token.
     ///
-    /// `quote` is the opening quote (`"` or `'`).
+    /// `quote` is the ending code point (the opening quote `"` or `'`).
+    /// Returns a `string-token` (normal or EOF-terminated) or a
+    /// `bad-string-token` (unescaped newline).
+    ///
+    /// Per §4.3.5:
+    /// - ending code point (L1097-1099) → return string-token.
+    /// - EOF (L1101-1104) → parse error, return string-token.
+    /// - newline (L1106-1110) → parse error, reconsume, return bad-string.
+    /// - `\` (L1112-1124):
+    ///   - next EOF → do nothing (loop; next consume hits EOF → string).
+    ///   - next newline → consume it (line continuation).
+    ///   - otherwise (valid escape) → consume an escaped code point, append.
+    /// - anything else (L1126-1128) → append.
     fn consume_a_string_token(&mut self, quote: char) -> Token {
-        // C-3: full implementation pending. For now consume until
-        // matching quote / newline / EOF.
         let mut value = String::new();
         loop {
             match self.consume() {
                 None => {
-                    // EOF in string: parse error, return string token
-                    // (§4.3.5 step 4).
+                    // §4.3.5 L1101-1104: EOF → parse error, return string-token.
+                    return Token::String(value);
+                }
+                Some(c) if c == quote => {
+                    // §4.3.5 L1097-1099: ending code point → return string-token.
                     return Token::String(value);
                 }
                 Some('\n') => {
-                    // Unescaped newline: parse error, return <bad-string-token>
-                    // (§4.3.5 step 3).
+                    // §4.3.5 L1106-1110: newline → parse error, reconsume, return bad-string.
+                    self.reconsume();
                     return Token::BadString;
                 }
-                Some(c) if c == quote => {
-                    return Token::String(value);
-                }
                 Some('\\') => {
-                    // §4.3.5 step: escape handling. C-3 pending.
-                    // For now, just consume the next char literally.
-                    if let Some(next) = self.consume() {
-                        if next == '\n' {
-                            // escaped newline: continue (line continuation)
-                        } else {
-                            value.push(next);
+                    // §4.3.5 L1112-1124: escape handling.
+                    match self.peek(0) {
+                        None => {
+                            // §4.3.5 L1114-1115: next is EOF, do nothing.
+                            // Loop continues; next consume() returns None → String.
+                        }
+                        Some('\n') => {
+                            // §4.3.5 L1117-1119: next is newline, consume it (line continuation).
+                            self.consume();
+                        }
+                        Some(_) => {
+                            // §4.3.5 L1121-1124: valid escape, consume escaped code point.
+                            let escaped = self.consume_an_escaped_code_point();
+                            value.push(escaped);
                         }
                     }
                 }
-                Some(c) => value.push(c),
+                Some(c) => {
+                    // §4.3.5 L1126-1128: anything else → append.
+                    value.push(c);
+                }
             }
         }
     }
@@ -1034,5 +1054,68 @@ mod tests {
         assert_eq!(tokens.len(), 2);
         assert!(matches!(tokens[0], Token::Delim('#')));
         assert!(matches!(tokens[1], Token::Delim('@')));
+    }
+
+    // ── C-3 tests: §4.3.5 string + bad-string ────────────────────────
+
+    #[test]
+    fn string_double_quoted() {
+        // §4.3.5: "hello" → String("hello")
+        let tokens = CssTokenizer::collect("\"hello\"");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::String(s) if s == "hello"));
+    }
+
+    #[test]
+    fn string_single_quoted() {
+        // §4.3.5: 'hello' → String("hello")
+        let tokens = CssTokenizer::collect("'hello'");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::String(s) if s == "hello"));
+    }
+
+    #[test]
+    fn string_with_escape() {
+        // §4.3.5 + §4.3.7: "a\z" → String("az") (z is non-hex → literal)
+        let tokens = CssTokenizer::collect("\"a\\z\"");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::String(s) if s == "az"));
+    }
+
+    #[test]
+    fn string_unterminated_eof() {
+        // §4.3.5 L1101-1104: EOF before closing quote → parse error,
+        // return string-token with value accumulated so far.
+        let tokens = CssTokenizer::collect("\"hello");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::String(s) if s == "hello"));
+    }
+
+    #[test]
+    fn string_unescaped_newline_is_bad_string() {
+        // §4.3.5 L1106-1110: unescaped newline → parse error, reconsume,
+        // return bad-string. The reconsumed newline is then tokenized as
+        // whitespace by the next consume_a_token call.
+        let tokens = CssTokenizer::collect("\"\n");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0], Token::BadString));
+        assert!(matches!(tokens[1], Token::Whitespace));
+    }
+
+    #[test]
+    fn string_line_continuation() {
+        // §4.3.5 L1117-1119: backslash followed by newline → line
+        // continuation (newline consumed, no char appended).
+        let tokens = CssTokenizer::collect("\"a\\\nb\"");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::String(s) if s == "ab"));
+    }
+
+    #[test]
+    fn string_hex_escape() {
+        // §4.3.5 + §4.3.7: "\26" → String("&") (U+0026)
+        let tokens = CssTokenizer::collect("\"\\26\"");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::String(s) if s == "&"));
     }
 }
