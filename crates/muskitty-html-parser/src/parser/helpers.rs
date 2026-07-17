@@ -894,8 +894,13 @@ pub fn reconstruct_active_formatting_elements(parser: &mut HtmlTreeConstructor) 
             )
         };
         let new_element = Node::new_element_html(&local_name, attrs, &parser.document);
-        let current = parser.current_node();
-        let _ = append_child(&current, new_element.clone());
+        // §13.2.6.4.7 reconstruct step 8: "Insert an HTML element for the
+        // token" — this goes through "appropriate place for inserting a
+        // node" (§13.2.6.2), which applies foster parenting when active.
+        // Using insert_node (not direct append_child) ensures reconstructed
+        // formatting elements are foster-parented correctly when the
+        // current node is a table/tbody/tr.
+        insert_node(parser, &new_element);
         parser.open_elements.push(new_element.clone());
         // Replace the entry with the new element.
         parser.active_formatting_elements[index] = ActiveFormattingEntry::Element(new_element);
