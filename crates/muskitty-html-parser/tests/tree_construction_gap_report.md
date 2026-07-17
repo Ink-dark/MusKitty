@@ -1,6 +1,6 @@
 # html5lib Tree Construction Gap Report
 
-**Pass rate: 99.8% (1713/1716)** — 204 skipped — 0 panicked
+**Pass rate: 99.9% (1714/1716)** — 204 skipped — 0 panicked
 
 ## Per-fixture results
 
@@ -63,7 +63,7 @@
 | tests8.dat | 10 | 0 | 0 | 10 |
 | tests9.dat | 27 | 0 | 0 | 27 |
 | tests_innerHTML_1.dat | 0 | 0 | 81 | 81 |
-| tricky01.dat | 8 | 1 | 0 | 9 |
+| tricky01.dat | 9 | 0 | 0 | 9 |
 | void-in-phrasing.dat | 13 | 0 | 0 | 13 |
 | webkit01.dat | 52 | 0 | 0 | 52 |
 | webkit02.dat | 44 | 0 | 5 | 49 |
