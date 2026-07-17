@@ -81,7 +81,7 @@ pub(crate) fn dispatch_in_current_mode(
         InsertionMode::InTableText => handle_in_table_text(parser, token, tokenizer),
         InsertionMode::InCaption => handle_in_caption(parser, token, tokenizer),
         InsertionMode::InColumnGroup => handle_in_column_group(parser, token, tokenizer),
-        InsertionMode::InTableBody => handle_in_table_body(parser, token),
+        InsertionMode::InTableBody => handle_in_table_body(parser, token, tokenizer),
         InsertionMode::InRow => handle_in_row(parser, token, tokenizer),
         InsertionMode::InCell => handle_in_cell(parser, token, tokenizer),
         InsertionMode::InHeadNoscript => handle_in_head_noscript(parser, token, tokenizer),
@@ -2101,13 +2101,10 @@ fn handle_after_after_body(
 // ── Table insertion modes (§13.2.6.4.9–§13.2.6.4.15) ──────────
 
 /// Pop elements from the open elements stack until a table-context
-/// element is current. The table-context elements are: `table`,
-/// `tbody`, `tfoot`, `thead`, `tr`, `caption`, `colgroup`, `html`,
-/// `template` (§13.2.6.4.9 "clear the stack back to a table context").
+/// element is current. Per §13.2.6.4.9 (line 4638), the table-context
+/// elements are: `table`, `template`, `html` only.
 fn clear_stack_to_table_context(parser: &mut HtmlTreeConstructor) {
-    const TABLE_CONTEXT: &[&str] = &[
-        "table", "tbody", "tfoot", "thead", "tr", "caption", "colgroup", "html", "template",
-    ];
+    const TABLE_CONTEXT: &[&str] = &["table", "template", "html"];
     while let Some(top) = parser.open_elements.last() {
         let is_ctx = top
             .borrow()
@@ -2599,7 +2596,11 @@ fn close_colgroup_and_reprocess(parser: &mut HtmlTreeConstructor) -> Step {
 
 // ── InTableBody insertion mode (§13.2.6.4.13) ───────────────────
 
-fn handle_in_table_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step {
+fn handle_in_table_body(
+    parser: &mut HtmlTreeConstructor,
+    token: &Token,
+    tokenizer: &mut dyn Tokenizer,
+) -> Step {
     match token {
         Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "tr" => {
             clear_stack_to_table_body_context(parser);
@@ -2657,9 +2658,18 @@ fn handle_in_table_body(parser: &mut HtmlTreeConstructor, token: &Token) -> Step
             Step::Reprocess
         }
         _ => {
-            // Anything else: process using the rules for InTable.
-            parser.insertion_mode = InsertionMode::InTable;
-            Step::Reprocess
+            // §13.2.6.4.13 "Anything else": Process the token using the
+            // rules for the "in table" insertion mode. Per §13.2.6, "using
+            // the rules for m" means invoking m's handler directly WITHOUT
+            // changing the current insertion mode (unless m's rules
+            // themselves switch it). Switching to InTable and reprocessing
+            // here would break the table body context: a subsequent <tr>
+            // would be handled by InTable's "td/th/tr" branch (which clears
+            // the stack back to a *table* context, popping the existing
+            // tbody, and inserts a *new* tbody), instead of InTableBody's
+            // "tr" branch (which clears back to a *table body* context,
+            // preserving the existing tbody).
+            handle_in_table(parser, token, tokenizer)
         }
     }
 }
