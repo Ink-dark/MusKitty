@@ -3232,13 +3232,17 @@ fn handle_after_after_frameset(
             );
             Step::Done
         }
-        Token::Doctype(_) => {
-            parser.errors.push(ParseError::Generic(
-                "unexpected DOCTYPE after after frameset",
-            ));
-            Step::Done
+        // §13.2.6.4.21 (line 5278-5283): DOCTYPE, whitespace character,
+        // and <html> start tag are all processed using the "in body" rules.
+        Token::Doctype(_)
+        | Token::Character(_)
+            if matches!(token, Token::Character(c) if is_whitespace(*c)) =>
+        {
+            handle_in_body(parser, token, tokenizer)
         }
-        Token::Character(c) if is_whitespace(*c) => handle_in_body(parser, token, tokenizer),
+        Token::Tag(tag) if tag.kind == TagKind::Start && tag.name == "html" => {
+            handle_in_body(parser, token, tokenizer)
+        }
         Token::EOF => Step::Done,
         // §13.2.6.4.21: Only <noframes> is delegated to InHead. The real
         // tokenizer must be passed so that InHead can switch it to RAWTEXT
