@@ -1300,13 +1300,14 @@ fn handle_in_body_start_tag(
     }
 
     // Void elements (area/base/br/col/embed/img/keygen/link/meta/
-    // param/source/track/wbr): reconstruct, insert, pop. img/keygen/wbr
-    // additionally set frameset_ok=false.
+    // param/source/track/wbr): reconstruct, insert, pop. Per §13.2.6.4.7
+    // (line 4063-4072) ALL of area/br/embed/img/keygen/wbr set
+    // frameset_ok=false.
     if VOID_ELEMENTS.contains(&name) {
         helpers::reconstruct_active_formatting_elements(parser);
         helpers::insert_element(parser, tag);
         parser.open_elements.pop();
-        if matches!(name, "img" | "keygen" | "wbr") {
+        if matches!(name, "area" | "br" | "embed" | "img" | "keygen" | "wbr") {
             parser.frameset_ok = false;
         }
         return Step::Done;
