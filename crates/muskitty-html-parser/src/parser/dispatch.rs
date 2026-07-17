@@ -1436,6 +1436,13 @@ fn handle_in_body_start_tag(
         }
         helpers::reconstruct_active_formatting_elements(parser);
         helpers::insert_element(parser, tag);
+        // §13.2.6.4.7: "immediately followed by a marker in the active
+        // formatting elements list." The marker prevents any formatting
+        // element opened before <select> from being reconstructed inside
+        // the select subtree.
+        parser
+            .active_formatting_elements
+            .push(ActiveFormattingEntry::Marker);
         parser.frameset_ok = false;
         return Step::Done;
     }
