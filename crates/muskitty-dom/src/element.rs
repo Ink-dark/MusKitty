@@ -25,8 +25,12 @@ pub struct ElementData {
     ///
     /// 参见 WHATWG HTML §13.2.6.2：创建 template 元素时同时创建一个
     /// DocumentFragment 作为其 template content。所有插入到 template
-    /// 的节点都挂在 content 下，而非 template 元素本身。
+    /// 的节点都挂在该 content 下，而非 template 元素本身。
     pub template_content: Option<Rc<RefCell<Node>>>,
+    /// `<option>` 元素的 selectedness 状态（WHATWG §4.10.10）。
+    /// 初始为 false；若 option 创建时有 `selected` 属性则为 true。
+    /// 由 selectedness setting algorithm 维护。仅对 `<option>` 有意义。
+    pub selectedness: bool,
 }
 
 impl ElementData {
@@ -39,6 +43,7 @@ impl ElementData {
             prefix: None,
             attributes,
             template_content: None,
+            selectedness: false,
         }
     }
 
@@ -56,6 +61,7 @@ impl ElementData {
             prefix,
             attributes,
             template_content: None,
+            selectedness: false,
         }
     }
 

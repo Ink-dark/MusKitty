@@ -1415,15 +1415,21 @@ fn handle_in_body_start_tag(
                 "unexpected <select> when select in scope",
             ));
             // Pop until select is popped.
-            while let Some(top) = parser.open_elements.pop() {
-                let is_select = top
-                    .borrow()
-                    .kind
-                    .as_element()
-                    .map(|e| e.local_name == "select")
-                    .unwrap_or(false);
-                if is_select {
-                    break;
+            loop {
+                let popped = helpers::pop_open_element(parser);
+                match popped {
+                    Some(top) => {
+                        let is_select = top
+                            .borrow()
+                            .kind
+                            .as_element()
+                            .map(|e| e.local_name == "select")
+                            .unwrap_or(false);
+                        if is_select {
+                            break;
+                        }
+                    }
+                    None => break,
                 }
             }
             return Step::Done;
@@ -1456,7 +1462,7 @@ fn handle_in_body_start_tag(
                     .map(|e| e.local_name == "option")
                     .unwrap_or(false);
                 if is_option {
-                    parser.open_elements.pop();
+                    helpers::pop_open_element(parser);
                 }
             }
         }
@@ -1488,7 +1494,7 @@ fn handle_in_body_start_tag(
                     .map(|e| e.local_name == "option")
                     .unwrap_or(false);
                 if is_option {
-                    parser.open_elements.pop();
+                    helpers::pop_open_element(parser);
                 }
             }
         }
@@ -1729,7 +1735,7 @@ fn handle_in_body_end_tag(
         while let Some(top) = parser.open_elements.last() {
             let top_name = top.borrow().kind.as_element().map(|e| e.local_name.clone());
             let is_target = top_name.as_deref() == Some(name);
-            parser.open_elements.pop();
+            helpers::pop_open_element(parser);
             if is_target {
                 break;
             }
@@ -1936,7 +1942,7 @@ fn handle_in_body_end_tag(
             helpers::generate_implied_end_tags(parser, Some(name));
             // Pop until we've popped the matching node at index i.
             while parser.open_elements.len() > i {
-                parser.open_elements.pop();
+                helpers::pop_open_element(parser);
             }
             return Step::Done;
         }
