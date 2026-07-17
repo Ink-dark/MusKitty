@@ -828,6 +828,21 @@ fn handle_in_body_start_tag(
 ) -> Step {
     let name = tag.name.as_str();
 
+    // §13.2.6.4.7: A start tag whose tag name is "image": parse error.
+    // Change the token's tag name to "img" and reprocess it. (Don't ask.)
+    if name == "image" {
+        parser
+            .errors
+            .push(ParseError::Generic("image start tag treated as img"));
+        let img_tag = crate::tokenizer::TagToken {
+            kind: tag.kind,
+            name: "img".to_string(),
+            attrs: tag.attrs.clone(),
+            self_closing: tag.self_closing,
+        };
+        return handle_in_body_start_tag(parser, &img_tag, tokenizer);
+    }
+
     // "html" — merge attributes onto the existing <html> element.
     // §13.2.6.4.7: If there is a template element on the stack of open
     // elements, then ignore the token. Otherwise, merge attributes.
@@ -1288,36 +1303,12 @@ fn handle_in_body_start_tag(
     // param/source/track/wbr): reconstruct, insert, pop. img/keygen/wbr
     // additionally set frameset_ok=false.
     if VOID_ELEMENTS.contains(&name) {
-        // image → img (parse error).
-        if name == "image" {
-            parser
-                .errors
-                .push(ParseError::Generic("image start tag treated as img"));
-        }
         helpers::reconstruct_active_formatting_elements(parser);
-        // Build the element from the (possibly renamed) tag.
-        let effective_tag = if name == "image" {
-            crate::tokenizer::TagToken {
-                kind: tag.kind,
-                name: "img".to_string(),
-                attrs: tag.attrs.clone(),
-                self_closing: tag.self_closing,
-            }
-        } else {
-            tag.clone()
-        };
-        helpers::insert_element(parser, &effective_tag);
+        helpers::insert_element(parser, tag);
         parser.open_elements.pop();
-        if matches!(effective_tag.name.as_str(), "img" | "keygen" | "wbr") {
+        if matches!(name, "img" | "keygen" | "wbr") {
             parser.frameset_ok = false;
         }
-        return Step::Done;
-    }
-
-    // image: parse error, act as img (handled above via VOID_ELEMENTS).
-    if name == "image" {
-        // Already handled by the VOID_ELEMENTS branch above; this is a
-        // safety net in case the const list is reordered.
         return Step::Done;
     }
 
