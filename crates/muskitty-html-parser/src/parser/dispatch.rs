@@ -1335,34 +1335,46 @@ fn handle_in_body_start_tag(
             | "tt"
             | "u"
     ) {
-        helpers::reconstruct_active_formatting_elements(parser);
-        // Special case for <a>: if there is an <a> in the active formatting
-        // elements list, run adoption agency for "a", then remove any <a>
-        // from the list (§13.2.6.4.7).
+        // Special case for <a> (§13.2.6.4.7): see below.
         if name == "a" {
-            let has_a_in_afe = parser.active_formatting_elements.iter().any(|e| {
-                matches!(e, ActiveFormattingEntry::Element(el) if {
-                    let l = el.borrow();
-                    l.kind.as_element().map(|e| e.local_name.as_str()) == Some("a")
-                })
-            });
-            if has_a_in_afe {
+            // §13.2.6.4.7: If the list of active formatting elements
+            // contains an <a> element between the end of the list and the
+            // last marker on the list (or the start of the list if there
+            // is no marker), run the adoption agency algorithm for the
+            // token, then remove that element from the list of active
+            // formatting elements and the stack of open elements if the
+            // adoption agency algorithm didn't already remove it (it
+            // might not have if the element is not in table scope).
+            let a_element = parser
+                .active_formatting_elements
+                .iter()
+                .rev()
+                .take_while(|e| !matches!(e, ActiveFormattingEntry::Marker))
+                .find_map(|e| match e {
+                    ActiveFormattingEntry::Element(el) => {
+                        let is_a = el
+                            .borrow()
+                            .kind
+                            .as_element()
+                            .map(|e| e.local_name.as_str() == "a")
+                            .unwrap_or(false);
+                        if is_a {
+                            Some(el.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                });
+            if let Some(a_el) = a_element {
                 helpers::adoption_agency(parser, "a");
-                // §13.2.6.4.7: Remove that <a> element from the list of
-                // active formatting elements and the stack of open elements
-                // if the adoption agency algorithm didn't already remove it.
+                // Remove that specific <a> element (by pointer identity)
+                // from the AFE and the stack of open elements if the
+                // adoption agency algorithm didn't already remove it.
                 parser.active_formatting_elements.retain(|e| {
-                    !matches!(e, ActiveFormattingEntry::Element(el) if {
-                        let l = el.borrow();
-                        l.kind.as_element().map(|e| e.local_name.as_str()) == Some("a")
-                    })
+                    !matches!(e, ActiveFormattingEntry::Element(el) if Rc::ptr_eq(el, &a_el))
                 });
-                // Remove the <a> from the stack WITHOUT truncating elements
-                // above it (e.g. <table> must stay on the stack).
-                parser.open_elements.retain(|n| {
-                    let l = n.borrow();
-                    l.kind.as_element().map(|e| e.local_name.as_str()) != Some("a")
-                });
+                parser.open_elements.retain(|n| !Rc::ptr_eq(n, &a_el));
             }
         }
         // Special case for <nobr> (§13.2.6.4.7): if there is a <nobr> in
