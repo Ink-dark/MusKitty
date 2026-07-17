@@ -2,3 +2,9 @@
 crates/*/target
 *.lock
 .zcode/
+
+# muskitty-html-parser 作为独立 git 仓库，由 crates/muskitty-html-parser/.git
+# 自行追踪。主仓库 workspace 仍把它作为 cargo member，但版本控制层面已剥离。
+# 单独克隆 muskitty-html-parser 时，需先放置到主仓库 crates/ 下才能构建
+# （因为 Cargo.toml 通过 path = "../muskitty-dom" 依赖同级 dom crate）。
+crates/muskitty-html-parser/
