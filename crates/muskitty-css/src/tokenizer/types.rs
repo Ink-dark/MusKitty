@@ -118,6 +118,17 @@ pub enum Token {
     /// `<}-token>` (§4.1). `}`.
     CloseBrace,
 
+    /// `<CDO-token>` (§4.1). The literal `<!--` (Comment Declaration
+    /// Open). Kept for backwards compatibility with CSS 1/2.1's practice
+    /// of wrapping stylesheets in `<!--` ... `-->` to hide them from
+    /// ancient browsers. At the tokenizer level this is a single token
+    /// spanning all four code points.
+    Cdo,
+
+    /// `<CDC-token>` (§4.1). The literal `-->` (Comment Declaration
+    /// Close). See [`Token::Cdo`].
+    Cdc,
+
     /// `<EOF-token>` (§5.3). Emitted once when the input stream is
     /// exhausted. [`Tokenizer::next_token`] returns `None` after this.
     Eof,

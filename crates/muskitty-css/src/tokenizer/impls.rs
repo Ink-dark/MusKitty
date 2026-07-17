@@ -101,91 +101,158 @@ impl CssTokenizer {
     /// the current input code point to one of the sub-algorithms (§4.3.2
     /// through §4.3.6) or emits a simple token directly.
     ///
-    /// **Current coverage** (C-1): whitespace, colon, semicolon, comma,
-    /// brackets, EOF. Other code points emit `<delim-token>` for now;
-    /// sub-algorithm dispatch is added in subsequent commits (C-2 onwards).
+    /// **Current coverage** (C-0 + C-1): whitespace, colon, semicolon,
+    /// comma, brackets, EOF, comments (§4.3.2), legacy `<!--` / `-->`
+    /// comment forms. Other code points dispatch to sub-algorithm stubs
+    /// (C-2 onwards) or emit `<delim-token>`.
     fn consume_a_token(&mut self) -> Token {
-        let Some(c) = self.consume() else {
-            // §5.3: end of stream → <EOF-token>
-            self.eof_emitted = true;
-            self.state = State::Eof;
-            return Token::Eof;
-        };
+        // §4.3.2: If the next two input code points are U+002F SOLIDUS
+        // (`/`) and U+002A ASTERISK (`*`), consume comments and
+        // recursively consume the next token. We implement this as a
+        // loop: any leading run of `/* ... */` comments is skipped before
+        // producing the next real token.
+        loop {
+            let Some(c) = self.consume() else {
+                // §5.3: end of stream → <EOF-token>
+                self.eof_emitted = true;
+                self.state = State::Eof;
+                return Token::Eof;
+            };
 
-        match c {
-            // §4.3.1: whitespace → <whitespace-token>
-            ' ' | '\t' | '\n' | '\r' | '\u{000C}' => {
-                // Consume all consecutive whitespace.
-                while let Some(next) = self.peek(0) {
-                    if matches!(next, ' ' | '\t' | '\n' | '\r' | '\u{000C}') {
-                        self.consume();
+            // §4.3.2 comment dispatch: `/` followed by `*`.
+            if c == '/' && self.peek(0) == Some('*') {
+                self.consume(); // consume `*`
+                self.consume_comments_body();
+                // Loop back to consume the next token (which may itself
+                // be preceded by another comment).
+                continue;
+            }
+
+            return match c {
+                // §4.3.1: whitespace → <whitespace-token>
+                ' ' | '\t' | '\n' | '\r' | '\u{000C}' => {
+                    // Consume all consecutive whitespace.
+                    while let Some(next) = self.peek(0) {
+                        if matches!(next, ' ' | '\t' | '\n' | '\r' | '\u{000C}') {
+                            self.consume();
+                        } else {
+                            break;
+                        }
+                    }
+                    Token::Whitespace
+                }
+                // §4.3.1: `"` or `'` → consume a string token (§4.3.5)
+                '"' | '\'' => self.consume_a_string_token(c),
+                // §4.3.1: `#` → consume an ident-like token (§4.3.4) for hash
+                '#' => self.consume_a_hash_token(),
+                // §4.3.1: `(` → <(-token>
+                '(' => Token::OpenParen,
+                // §4.3.1: `)` → <)-token>
+                ')' => Token::CloseParen,
+                // §4.3.1: `+` or `-` → if would-start-a-number, consume a
+                // numeric token (§4.3.3); else <delim-token>.
+                // §4.3.1: `-` additionally: if next two are `-` and `>`
+                // (i.e. `-->`), consume them and return <CDC-token>.
+                // §4.3.1: `.` → if would-start-a-number, consume a numeric
+                // token; else <delim-token>.
+                '-' => {
+                    if self.starts_with_number(c) {
+                        self.reconsume();
+                        self.consume_a_numeric_token()
+                    } else if self.peek(0) == Some('-') && self.peek(1) == Some('>') {
+                        // §4.3.1: `-->` → <CDC-token>
+                        self.consume(); // consume second `-`
+                        self.consume(); // consume `>`
+                        Token::Cdc
                     } else {
-                        break;
+                        // would-start-an-ident-sequence handling is C-2.
+                        Token::Delim(c)
                     }
                 }
-                Token::Whitespace
-            }
-            // §4.3.1: `"` or `'` → consume a string token (§4.3.5)
-            '"' | '\'' => self.consume_a_string_token(c),
-            // §4.3.1: `#` → consume an ident-like token (§4.3.4) for hash
-            '#' => self.consume_a_hash_token(),
-            // §4.3.1: `(` → <(-token>
-            '(' => Token::OpenParen,
-            // §4.3.1: `)` → <)-token>
-            ')' => Token::CloseParen,
-            // §4.3.1: `+` or `-` → if would-start-a-number, consume a
-            // numeric token (§4.3.3); else <delim-token>.
-            // §4.3.1: `.` → if would-start-a-number, consume a numeric
-            // token; else <delim-token>.
-            '+' | '-' | '.' => {
-                if self.starts_with_number(c) {
+                '+' | '.' => {
+                    if self.starts_with_number(c) {
+                        self.reconsume();
+                        self.consume_a_numeric_token()
+                    } else {
+                        Token::Delim(c)
+                    }
+                }
+                // §4.3.1: `<` → if next three are `!`, `-`, `-` (i.e.
+                // `<!--`), consume them and return <CDO-token>. Otherwise
+                // emit <delim-token>.
+                '<' => {
+                    if self.peek(0) == Some('!')
+                        && self.peek(1) == Some('-')
+                        && self.peek(2) == Some('-')
+                    {
+                        // Consume `!`, `-`, `-`.
+                        self.consume();
+                        self.consume();
+                        self.consume();
+                        Token::Cdo
+                    } else {
+                        Token::Delim(c)
+                    }
+                }
+                // §4.3.1: `@` → if next would-start-an-ident-sequence,
+                // consume an ident-like token (§4.3.4) for at-keyword.
+                '@' => self.consume_an_at_keyword_token(),
+                // §4.3.1: `[` → <[-token>
+                '[' => Token::OpenBracket,
+                // §4.3.1: `\` → if would-start-an-escape (§4.3.8), reconsume
+                // and consume an ident-like token (§4.3.4); else parse error,
+                // <delim-token>.
+                '\\' => self.consume_ident_or_delim(),
+                // §4.3.1: `]` → <]-token>
+                ']' => Token::CloseBracket,
+                // §4.3.1: `{` → <{-token>
+                '{' => Token::OpenBrace,
+                // §4.3.1: `}` → <}-token>
+                '}' => Token::CloseBrace,
+                // §4.3.1: digit → reconsume and consume a numeric token (§4.3.3)
+                '0'..='9' => {
                     self.reconsume();
                     self.consume_a_numeric_token()
-                } else {
-                    Token::Delim(c)
                 }
+                // §4.3.1: `U+` or `u+` → if would-start-a-unicode-range (§4.3.11),
+                // consume a unicode-range token (§4.3.14).
+                'u' | 'U' => self.consume_u_or_unicode_range(),
+                // §4.3.1: ident-start code point → reconsume and consume an
+                // ident-like token (§4.3.4)
+                _ if is_ident_start_code_point(c) => {
+                    self.reconsume();
+                    self.consume_an_ident_like_token()
+                }
+                // §4.3.1: `:` → <colon-token>
+                ':' => Token::Colon,
+                // §4.3.1: `;` → <semicolon-token>
+                ';' => Token::Semicolon,
+                // §4.3.1: `,` → <comma-token>
+                ',' => Token::Comma,
+                // §4.3.1: anything else → <delim-token>
+                _ => Token::Delim(c),
+            };
+        }
+    }
+
+    /// §4.3.2 Consume comments — body only.
+    ///
+    /// Precondition: the opening `/*` has already been consumed. Consume
+    /// code points until the closing `*/` or EOF. Per §4.3.2, an
+    /// unterminated comment (EOF before `*/`) is a parse error; we
+    /// silently consume to EOF in that case (no error reporting yet).
+    fn consume_comments_body(&mut self) {
+        loop {
+            match self.consume() {
+                None => return, // EOF in comment: parse error (unreported)
+                Some('*') => {
+                    if self.peek(0) == Some('/') {
+                        self.consume(); // consume `/`
+                        return;
+                    }
+                }
+                Some(_) => {}
             }
-            // §4.3.1: `<` → if next two are `!` and `-`, consume a
-            // `<!--` as a `<delim-token>` sequence (legacy). For now,
-            // emit `<delim-token>`.
-            '<' => Token::Delim(c),
-            // §4.3.1: `@` → if next would-start-an-ident-sequence,
-            // consume an ident-like token (§4.3.4) for at-keyword.
-            '@' => self.consume_an_at_keyword_token(),
-            // §4.3.1: `[` → <[-token>
-            '[' => Token::OpenBracket,
-            // §4.3.1: `\` → if would-start-an-escape (§4.3.8), reconsume
-            // and consume an ident-like token (§4.3.4); else parse error,
-            // <delim-token>.
-            '\\' => self.consume_ident_or_delim(),
-            // §4.3.1: `]` → <]-token>
-            ']' => Token::CloseBracket,
-            // §4.3.1: `{` → <{-token>
-            '{' => Token::OpenBrace,
-            // §4.3.1: `}` → <}-token>
-            '}' => Token::CloseBrace,
-            // §4.3.1: digit → reconsume and consume a numeric token (§4.3.3)
-            '0'..='9' => {
-                self.reconsume();
-                self.consume_a_numeric_token()
-            }
-            // §4.3.1: `U+` or `u+` → if would-start-a-unicode-range (§4.3.11),
-            // consume a unicode-range token (§4.3.14).
-            'u' | 'U' => self.consume_u_or_unicode_range(),
-            // §4.3.1: ident-start code point → reconsume and consume an
-            // ident-like token (§4.3.4)
-            _ if is_ident_start_code_point(c) => {
-                self.reconsume();
-                self.consume_an_ident_like_token()
-            }
-            // §4.3.1: `:` → <colon-token>
-            ':' => Token::Colon,
-            // §4.3.1: `;` → <semicolon-token>
-            ';' => Token::Semicolon,
-            // §4.3.1: `,` → <comma-token>
-            ',' => Token::Comma,
-            // §4.3.1: anything else → <delim-token>
-            _ => Token::Delim(c),
         }
     }
 
@@ -484,5 +551,82 @@ mod tests {
         assert!(matches!(t1, Some(Token::Comma)));
         assert!(matches!(t2, Some(Token::Eof)));
         assert!(t3.is_none());
+    }
+
+    #[test]
+    fn block_comment_is_skipped() {
+        // §4.3.2: `/* ... */` is consumed and no token is emitted.
+        let tokens = CssTokenizer::collect("/* hello */:/*x*/;");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0], Token::Colon));
+        assert!(matches!(tokens[1], Token::Semicolon));
+    }
+
+    #[test]
+    fn unterminated_comment_consumes_to_eof() {
+        // §4.3.2: EOF before `*/` is a parse error; we consume to EOF.
+        let tokens = CssTokenizer::collect("/* unfinished");
+        assert_eq!(tokens.len(), 0, "unterminated comment → no tokens");
+    }
+
+    #[test]
+    fn comment_between_tokens() {
+        // C-2 not yet: `a`/`b` would be ident tokens (todo!()). Verify
+        // comment is consumed without affecting surrounding simple tokens
+        // by using only punctuation.
+        let tokens = CssTokenizer::collect(":/*c*/;");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0], Token::Colon));
+        assert!(matches!(tokens[1], Token::Semicolon));
+    }
+
+    #[test]
+    fn cdo_token_emitted() {
+        // §4.3.1: `<!--` → <CDO-token>
+        let tokens = CssTokenizer::collect("<!--");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0], Token::Cdo));
+    }
+
+    #[test]
+    fn cdc_token_emitted() {
+        // §4.3.1: `-->` → <CDC-token>
+        let tokens = CssTokenizer::collect("-->");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0], Token::Cdc));
+    }
+
+    #[test]
+    fn cdo_cdc_wrapping_stylesheet() {
+        // Legacy CSS 1/2.1 stylesheet wrapping.
+        // `<!-- : ; -->`
+        // tokens: Cdo, WS, Colon, WS, Semicolon, WS, Cdc = 7
+        let tokens = CssTokenizer::collect("<!-- : ; -->");
+        assert_eq!(tokens.len(), 7);
+        assert!(matches!(tokens[0], Token::Cdo));
+        assert!(matches!(tokens[1], Token::Whitespace));
+        assert!(matches!(tokens[2], Token::Colon));
+        assert!(matches!(tokens[3], Token::Whitespace));
+        assert!(matches!(tokens[4], Token::Semicolon));
+        assert!(matches!(tokens[5], Token::Whitespace));
+        assert!(matches!(tokens[6], Token::Cdc));
+    }
+
+    #[test]
+    fn less_than_alone_is_delim() {
+        // §4.3.1: `<` not followed by `!-` → <delim-token>
+        let tokens = CssTokenizer::collect("< ");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0], Token::Delim('<')));
+        assert!(matches!(tokens[1], Token::Whitespace));
+    }
+
+    #[test]
+    fn hyphen_alone_is_delim() {
+        // §4.3.1: `-` not followed by number/ident/`->` → <delim-token>
+        let tokens = CssTokenizer::collect("- ");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0], Token::Delim('-')));
+        assert!(matches!(tokens[1], Token::Whitespace));
     }
 }
