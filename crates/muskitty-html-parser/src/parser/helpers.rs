@@ -1203,7 +1203,10 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
                 n.borrow()
                     .kind
                     .as_element()
-                    .map(|e| SPECIAL_ELEMENTS.contains(&e.local_name.as_str()))
+                    .map(|e| {
+                        e.namespace == muskitty_dom::Namespace::Html
+                            && SPECIAL_ELEMENTS.contains(&e.local_name.as_str())
+                    })
                     .unwrap_or(false)
             })
             .map(|(i, _)| fmt_stack_index + 1 + i);
@@ -1452,12 +1455,13 @@ fn run_any_other_end_tag(parser: &mut HtmlTreeConstructor, name: &str) {
     // generate implied end tags except `name`, then pop until it is popped.
     // If a special element (that is not the target) is encountered first,
     // parse error, return (ignore the end tag).
+    //
+    // Per §13.2.6.2, "special" elements are HTML-namespace only. Foreign
+    // elements (SVG/MathML) with the same local name (e.g. svg "tr", svg
+    // "input") must NOT be treated as special, and an HTML end tag should
+    // not match a foreign element by local name.
     for (i, node) in parser.open_elements.iter().enumerate().rev() {
-        let node_name = node
-            .borrow()
-            .kind
-            .as_element()
-            .map(|e| e.local_name.clone());
+        let node_name = html_local_name(node);
         if node_name.as_deref() == Some(name) {
             generate_implied_end_tags(parser, Some(name));
             // Pop until the node at index i is popped.
