@@ -457,28 +457,50 @@ impl CssTokenizer {
         (value, !type_is_number)
     }
 
-    /// §4.3.4 Consume an ident-like token.
+    /// §4.3.4 (L1045-1078) Consume an ident-like token.
     ///
     /// Precondition: the current position is at the start of an ident
     /// sequence (the caller has not consumed anything; or has reconsumed
-    /// the first code point). Per §4.3.4:
-    /// 1. Consume an ident sequence (§4.3.12), yielding `name`.
-    /// 2. If the next code point is `(`, consume it and return a
-    ///    `<function-token>` with value `name`.
-    /// 3. Otherwise return an `<ident-token>` with value `name`.
+    /// the first code point). Returns an `ident-token`, `function-token`,
+    /// `url-token`, or `bad-url-token`.
     ///
-    /// Note: the `url(` special case (which would consume a `<url-token>`
-    /// via §4.3.6 instead of a `<function-token>`) is implemented in C-5;
-    /// for now `url(` produces a `<function-token>`.
+    /// Per §4.3.4:
+    /// 1. Consume an ident sequence (§4.3.12), yielding `name`.
+    /// 2. If `name` is ASCII-case-insensitive "url" and next is `(`:
+    ///    consume `(`, collapse leading whitespace pairs, then if the
+    ///    next 1-2 code points are a quote (or whitespace+quote) return
+    ///    a `function-token`; otherwise consume a url token (§4.3.6).
+    /// 3. Else if next is `(`: consume it, return `function-token`.
+    /// 4. Else return `ident-token`.
     fn consume_an_ident_like_token(&mut self) -> Token {
         let name = self.consume_an_ident_sequence();
-        if self.peek(0) == Some('(') {
+        // §4.3.4 L1053-1066: url( special case
+        if name.eq_ignore_ascii_case("url") && self.peek(0) == Some('(') {
             self.consume(); // consume `(`
-            // C-5: special-case `url(` here to consume a url token.
-            Token::Function(name)
-        } else {
-            Token::Ident(name)
+            // §4.3.4 L1056-1057: while next two are whitespace, consume one
+            while self.peek(0).map_or(false, is_whitespace)
+                && self.peek(1).map_or(false, is_whitespace)
+            {
+                self.consume();
+            }
+            // §4.3.4 L1058-1063: if next 1-2 are " / ' / ws+" / ws+' → Function
+            let p0 = self.peek(0);
+            let p1 = self.peek(1);
+            let is_quote_case = matches!(p0, Some('"') | Some('\''))
+                || (p0.map_or(false, is_whitespace) && matches!(p1, Some('"') | Some('\'')));
+            if is_quote_case {
+                return Token::Function(name);
+            }
+            // §4.3.4 L1064-1066: otherwise consume a url token
+            return self.consume_a_url_token();
         }
+        // §4.3.4 L1068-1073: ordinary function
+        if self.peek(0) == Some('(') {
+            self.consume();
+            return Token::Function(name);
+        }
+        // §4.3.4 L1075-1078: ident
+        Token::Ident(name)
     }
 
     /// §4.3.4 (at-keyword branch) Consume an at-keyword token.
@@ -503,6 +525,95 @@ impl CssTokenizer {
             self.consume_an_ident_like_token()
         } else {
             Token::Delim('\\')
+        }
+    }
+
+    /// §4.3.6 (L1132-1203) Consume a url token.
+    ///
+    /// Precondition: `url(` has been consumed by the caller (§4.3.4
+    /// L1053-1066). This algorithm consumes the "unquoted" url body and
+    /// returns a `url-token` or `bad-url-token`. A quoted value like
+    /// `url("foo")` is handled by §4.3.4 as a `function-token` and never
+    /// reaches here.
+    ///
+    /// Per §4.3.6:
+    /// - `)` → return url-token.
+    /// - EOF → parse error, return url-token.
+    /// - whitespace → consume trailing whitespace; if next is `)` or EOF
+    ///   return url-token, else bad-url.
+    /// - `"` / `'` / `(` / non-printable → parse error, bad-url.
+    /// - `\` → if valid escape, consume escaped and append; else bad-url.
+    /// - anything else → append.
+    fn consume_a_url_token(&mut self) -> Token {
+        let mut value = String::new();
+        // §4.3.6 L1151: consume as much whitespace as possible
+        while self.peek(0).map_or(false, is_whitespace) {
+            self.consume();
+        }
+        loop {
+            match self.consume() {
+                // §4.3.6 L1157-1159: `)` → return url-token
+                Some(')') => return Token::Url(value),
+                // §4.3.6 L1161-1164: EOF → parse error, return url-token
+                None => return Token::Url(value),
+                // §4.3.6 L1166-1175: whitespace → consume trailing ws, then check
+                Some(c) if is_whitespace(c) => {
+                    while self.peek(0).map_or(false, is_whitespace) {
+                        self.consume();
+                    }
+                    match self.peek(0) {
+                        Some(')') => {
+                            self.consume();
+                            return Token::Url(value);
+                        }
+                        None => return Token::Url(value), // parse error
+                        _ => {
+                            self.consume_the_remnants_of_a_bad_url();
+                            return Token::BadUrl;
+                        }
+                    }
+                }
+                // §4.3.6 L1177-1185: " / ' / ( / non-printable → bad url
+                Some(c) if c == '"' || c == '\'' || c == '(' || is_non_printable(c) => {
+                    self.consume_the_remnants_of_a_bad_url();
+                    return Token::BadUrl;
+                }
+                // §4.3.6 L1187-1197: `\`
+                Some('\\') => {
+                    if self.is_valid_escape_next() {
+                        let escaped = self.consume_an_escaped_code_point();
+                        value.push(escaped);
+                    } else {
+                        self.consume_the_remnants_of_a_bad_url();
+                        return Token::BadUrl;
+                    }
+                }
+                // §4.3.6 L1199-1202: anything else → append
+                Some(c) => value.push(c),
+            }
+        }
+    }
+
+    /// §4.3.15 (L1551-1577) Consume the remnants of a bad url.
+    ///
+    /// Consumes code points until `)` or EOF, allowing an escaped `)`
+    /// (`\)`) to be consumed without ending the bad-url. Per §4.3.15:
+    /// - `)` or EOF → return.
+    /// - valid escape (stream starts with `\` + non-newline non-EOF) →
+    ///   consume an escaped code point.
+    /// - anything else → do nothing.
+    fn consume_the_remnants_of_a_bad_url(&mut self) {
+        loop {
+            match self.consume() {
+                // §4.3.15 L1563-1566: `)` or EOF → return
+                Some(')') | None => return,
+                // §4.3.15 L1568-1572: valid escape → consume escaped code point
+                Some('\\') if self.is_valid_escape_next() => {
+                    let _ = self.consume_an_escaped_code_point();
+                }
+                // §4.3.15 L1574-1576: anything else → do nothing
+                Some(_) => {}
+            }
         }
     }
 
@@ -733,6 +844,26 @@ fn is_digit(c: char) -> bool {
 /// §4.2 Whether `c` is a hex digit (ASCII 0-9, A-F, a-f).
 fn is_hex_digit(c: char) -> bool {
     c.is_ascii_hexdigit()
+}
+
+/// §4.2 Whether `c` is a whitespace code point.
+///
+/// Per §4.2: U+0009 TAB, U+000A LF, U+000C FF, U+000D CR, U+0020 SPACE.
+/// (After §5.3 preprocessing, U+000C FF and lone U+000D CR have been
+/// normalized to U+000A LF, but the helper follows the full §4.2
+/// definition for correctness when called on arbitrary input.)
+fn is_whitespace(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\u{000C}' | '\r' | ' ')
+}
+
+/// §4.2 Whether `c` is a non-printable code point.
+///
+/// Per §4.2: U+0000-U+0008, U+000B, U+000E-U+001F, U+007F-U+009F.
+fn is_non_printable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0000}'..='\u{0008}' | '\u{000B}' | '\u{000E}'..='\u{001F}' | '\u{007F}'..='\u{009F}'
+    )
 }
 
 /// §5.3 input preprocessing.
@@ -1331,5 +1462,99 @@ mod tests {
         let tokens = CssTokenizer::collect(".5");
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0], Token::Number(Numeric { value: 0.5, is_integer: false }));
+    }
+
+    // ── C-5 tests: §4.3.4 url( special case + §4.3.6 Url + §4.3.15 BadUrl ─
+
+    #[test]
+    fn url_unquoted_simple() {
+        // §4.3.6: url(foo) → Url("foo")
+        let tokens = CssTokenizer::collect("url(foo)");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Url("foo".to_string()));
+    }
+
+    #[test]
+    fn url_unquoted_with_spaces() {
+        // §4.3.6: leading/trailing whitespace consumed; url( foo ) → Url("foo")
+        let tokens = CssTokenizer::collect("url( foo )");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Url("foo".to_string()));
+    }
+
+    #[test]
+    fn url_empty() {
+        // §4.3.6: url() → Url("")
+        let tokens = CssTokenizer::collect("url()");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Url(String::new()));
+    }
+
+    #[test]
+    fn url_eof_unterminated() {
+        // §4.3.6 L1161-1164: EOF → parse error, return url-token with value so far
+        let tokens = CssTokenizer::collect("url(foo");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Url("foo".to_string()));
+    }
+
+    #[test]
+    fn url_quoted_is_function() {
+        // §4.3.4 L1058-1063: url("foo") → Function("url"); the body
+        // `"foo")` remains in the stream → String("foo") + CloseParen.
+        let tokens = CssTokenizer::collect("url(\"foo\")");
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(tokens[0], Token::Function("url".to_string()));
+        assert_eq!(tokens[1], Token::String("foo".to_string()));
+        assert_eq!(tokens[2], Token::CloseParen);
+    }
+
+    #[test]
+    fn url_single_quoted_is_function() {
+        // §4.3.4 L1058-1063: url('foo') → Function("url") + String + CloseParen
+        let tokens = CssTokenizer::collect("url('foo')");
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(tokens[0], Token::Function("url".to_string()));
+        assert_eq!(tokens[1], Token::String("foo".to_string()));
+        assert_eq!(tokens[2], Token::CloseParen);
+    }
+
+    #[test]
+    fn url_ws_then_quote_is_function() {
+        // §4.3.4 L1058-1063: url( "foo") → whitespace+quote → Function.
+        // L1056-1057 only collapses when *two* consecutive whitespace
+        // follow `(`; here only one space precedes `"`, so it is NOT
+        // consumed and becomes a Whitespace token.
+        let tokens = CssTokenizer::collect("url( \"foo\")");
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[0], Token::Function("url".to_string()));
+        assert_eq!(tokens[1], Token::Whitespace);
+        assert_eq!(tokens[2], Token::String("foo".to_string()));
+        assert_eq!(tokens[3], Token::CloseParen);
+    }
+
+    #[test]
+    fn url_with_escape() {
+        // §4.3.6 + §4.3.7: url(foo\29 bar) → \29 consumes trailing space,
+        // decodes to `)`, then `bar` appended → Url("foo)bar")
+        let tokens = CssTokenizer::collect("url(foo\\29 bar)");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Url("foo)bar".to_string()));
+    }
+
+    #[test]
+    fn url_bad_paren_in_unquoted() {
+        // §4.3.6 L1177-1185: `(` in unquoted url → BadUrl
+        let tokens = CssTokenizer::collect("url(foo(bar)");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::BadUrl);
+    }
+
+    #[test]
+    fn url_bad_quote_in_unquoted() {
+        // §4.3.6 L1177-1185: `"` in unquoted url → BadUrl
+        let tokens = CssTokenizer::collect("url(foo\"bar)");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::BadUrl);
     }
 }
