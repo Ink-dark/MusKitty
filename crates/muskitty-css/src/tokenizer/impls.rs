@@ -24,7 +24,7 @@
 //! - §4.3.15 Consume the remnants of a bad url — not yet
 
 use super::trait_def::Tokenizer;
-use super::types::{State, Token};
+use super::types::{HashType, State, Token};
 
 /// The CSS tokenizer (§4.3).
 ///
@@ -164,8 +164,12 @@ impl CssTokenizer {
                         self.consume(); // consume second `-`
                         self.consume(); // consume `>`
                         Token::Cdc
+                    } else if self.would_start_ident_sequence_at(0) {
+                        // §4.3.1: `-` starting an ident sequence → reconsume
+                        // and consume an ident-like token.
+                        self.reconsume();
+                        self.consume_an_ident_like_token()
                     } else {
-                        // would-start-an-ident-sequence handling is C-2.
                         Token::Delim(c)
                     }
                 }
@@ -296,9 +300,29 @@ impl CssTokenizer {
         }
     }
 
-    /// §4.3.4 (hash branch) Consume a hash token.
+    /// §4.3.1 (L801-826) `#` branch: Consume a hash token.
+    ///
+    /// Precondition: `#` has been consumed. Per §4.3.1 L801-826:
+    /// - If the next code point is an ident code point OR the next two
+    ///   are a valid escape, then create a `hash-token` (type "id" if
+    ///   would-start-ident-sequence, else "unrestricted"), consume an
+    ///   ident sequence for the value, and return it.
+    /// - Otherwise, return a `delim-token` with value `#`.
     fn consume_a_hash_token(&mut self) -> Token {
-        todo!("C-2: hash token")
+        // §4.3.1 L803-805: next is ident code point OR next two are valid escape.
+        let next_is_ident = self.peek(0).map_or(false, is_ident_code_point);
+        let next_is_valid_escape = self.is_valid_escape_at(0);
+        if !next_is_ident && !next_is_valid_escape {
+            // §4.3.1 L824-826: return delim-token with value `#`.
+            return Token::Delim('#');
+        }
+        let hash_type = if self.would_start_ident_sequence_at(0) {
+            HashType::Id
+        } else {
+            HashType::Unrestricted
+        };
+        let name = self.consume_an_ident_sequence();
+        Token::Hash(name, hash_type)
     }
 
     /// §4.3.3 Consume a numeric token.
@@ -307,13 +331,41 @@ impl CssTokenizer {
     }
 
     /// §4.3.4 Consume an ident-like token.
+    ///
+    /// Precondition: the current position is at the start of an ident
+    /// sequence (the caller has not consumed anything; or has reconsumed
+    /// the first code point). Per §4.3.4:
+    /// 1. Consume an ident sequence (§4.3.12), yielding `name`.
+    /// 2. If the next code point is `(`, consume it and return a
+    ///    `<function-token>` with value `name`.
+    /// 3. Otherwise return an `<ident-token>` with value `name`.
+    ///
+    /// Note: the `url(` special case (which would consume a `<url-token>`
+    /// via §4.3.6 instead of a `<function-token>`) is implemented in C-5;
+    /// for now `url(` produces a `<function-token>`.
     fn consume_an_ident_like_token(&mut self) -> Token {
-        todo!("C-2: ident-like token")
+        let name = self.consume_an_ident_sequence();
+        if self.peek(0) == Some('(') {
+            self.consume(); // consume `(`
+            // C-5: special-case `url(` here to consume a url token.
+            Token::Function(name)
+        } else {
+            Token::Ident(name)
+        }
     }
 
     /// §4.3.4 (at-keyword branch) Consume an at-keyword token.
+    ///
+    /// Precondition: `@` has been consumed. Per §4.3.1, if the next code
+    /// points would start an ident sequence, consume it and return an
+    /// `<at-keyword-token>`; otherwise return a `<delim-token>` with `@`.
     fn consume_an_at_keyword_token(&mut self) -> Token {
-        todo!("C-2: at-keyword token")
+        if self.would_start_ident_sequence_at(0) {
+            let name = self.consume_an_ident_sequence();
+            Token::AtKeyword(name)
+        } else {
+            Token::Delim('@')
+        }
     }
 
     /// §4.3.1 (backslash branch): if would-start-an-escape, consume an
@@ -336,7 +388,165 @@ impl CssTokenizer {
         self.consume_an_ident_like_token()
     }
 
-    // ── Predicates (stubs returning false; implemented in C-2/C-4/C-6) ─
+    // ── §4.3.12 Consume an ident sequence ────────────────────────────
+
+    /// §4.3.12 Consume an ident sequence.
+    ///
+    /// Repeatedly consume code points as long as they form an ident
+    /// sequence: ident code points, valid escapes (consumed via
+    /// §4.3.7), or `\`-`-` (for `--`-prefixed names). Returns the
+    /// decoded name with escapes resolved.
+    ///
+    /// Per §4.3.12, the loop terminates when:
+    /// - EOF is reached, or
+    /// - the next code point is not an ident code point, not a valid
+    ///   escape, and not part of a `\`-`-` continuation.
+    fn consume_an_ident_sequence(&mut self) -> String {
+        let mut result = String::new();
+        loop {
+            let Some(c) = self.consume() else {
+                return result;
+            };
+            if is_ident_code_point(c) {
+                result.push(c);
+            } else if c == '\\' && self.is_valid_escape_next() {
+                // §4.3.12: valid escape → consume the escaped code point
+                // and append it.
+                let escaped = self.consume_an_escaped_code_point();
+                result.push(escaped);
+            } else {
+                // Not part of the ident sequence: reconsume and stop.
+                self.reconsume();
+                return result;
+            }
+        }
+    }
+
+    // ── §4.3.7 Consume an escaped code point ────────────────────────
+
+    /// §4.3.7 Consume an escaped code point.
+    ///
+    /// Precondition: the `\` has been consumed. Returns the decoded code
+    /// point.
+    ///
+    /// Per §4.3.7 (L1207-1240):
+    /// - EOF (L1233-1236) → parse error, return U+FFFD REPLACEMENT CHARACTER.
+    /// - newline → parse error, reconsume (invalid escape; the caller
+    ///   should have checked §4.3.8 first, but we handle defensively).
+    /// - hex digit(s) (L1219-1231) → consume 1-6 hex digits, optionally
+    ///   followed by whitespace, and return the code point with that
+    ///   value. U+0000 NULL or out-of-range → replacement character U+FFFD.
+    /// - anything else (L1238-1240) → return the consumed code point.
+    fn consume_an_escaped_code_point(&mut self) -> char {
+        let Some(c) = self.consume() else {
+            // §4.3.7 L1233-1236: EOF → parse error, return U+FFFD.
+            return '\u{FFFD}';
+        };
+        if is_hex_digit(c) {
+            // §4.3.7 step 4: consume up to 5 more hex digits (total ≤ 6).
+            let mut hex = String::new();
+            hex.push(c);
+            while hex.len() < 6 {
+                match self.peek(0) {
+                    Some(next) if is_hex_digit(next) => {
+                        hex.push(next);
+                        self.consume();
+                    }
+                    _ => break,
+                }
+            }
+            // §4.3.7 step 4: consume one trailing whitespace.
+            if self.peek(0) == Some(' ') || self.peek(0) == Some('\t') || self.peek(0) == Some('\n')
+            {
+                self.consume();
+            }
+            // Parse the hex value.
+            let value = u32::from_str_radix(&hex, 16).unwrap_or(0);
+            // §4.3.7 step 4: 0 or > 0x10FFFF → U+FFFD. Also surrogates
+            // (0xD800–0xDFFF) → U+FFFD.
+            if value == 0 || value > 0x10FFFF || (0xD800..=0xDFFF).contains(&value) {
+                '\u{FFFD}'
+            } else {
+                char::from_u32(value).unwrap_or('\u{FFFD}')
+            }
+        } else if c == '\n' {
+            // §4.3.7 step 3: newline after `\` is a parse error. This
+            // should not happen if the caller checked §4.3.8, but handle
+            // defensively by returning `\` and reconsuming the newline.
+            self.reconsume();
+            '\\'
+        } else {
+            // §4.3.7 step 5: any other code point → return it.
+            c
+        }
+    }
+
+    // ── §4.3.8 / §4.3.9 Predicates ──────────────────────────────────
+
+    /// §4.3.8 Check if two code points are a valid escape.
+    ///
+    /// Precondition: the `\` has been consumed. Returns true if the next
+    /// code point forms a valid escape with the consumed `\` (i.e. the
+    /// next code point is not a newline and not EOF).
+    fn is_valid_escape_next(&self) -> bool {
+        match self.peek(0) {
+            None => false,
+            Some('\n') => false,
+            Some(_) => true,
+        }
+    }
+
+    /// §4.3.9 Check if three code points would start an ident sequence,
+    /// examining code points starting at `offset` from the current
+    /// position.
+    ///
+    /// Per §4.3.9:
+    /// - U+002D HYPHEN-MINUS (`-`):
+    ///   - If the next is also `-`, true (start of `--...`).
+    ///   - If the next is an ident-start code point (or a valid escape),
+    ///     true.
+    ///   - Else false.
+    /// - U+005C REVERSE SOLIDUS (`\`): true if valid escape.
+    /// - ident-start code point: true.
+    /// - Else false.
+    fn would_start_ident_sequence_at(&self, offset: usize) -> bool {
+        let first = match self.peek(offset) {
+            Some(c) => c,
+            None => return false,
+        };
+        match first {
+            '-' => {
+                // §4.3.9: if next is `-`, true.
+                match self.peek(offset + 1) {
+                    Some('-') => true,
+                    Some(next) if is_ident_start_code_point(next) => true,
+                    Some('\\') => {
+                        // §4.3.9: if `\` and the following forms a valid escape.
+                        self.is_valid_escape_at(offset + 1)
+                    }
+                    _ => false,
+                }
+            }
+            '\\' => self.is_valid_escape_at(offset),
+            _ if is_ident_start_code_point(first) => true,
+            _ => false,
+        }
+    }
+
+    /// §4.3.8 Check if the code point at `offset` starts a valid escape
+    /// (i.e. `offset` points at `\` and `offset+1` is not newline/EOF).
+    fn is_valid_escape_at(&self, offset: usize) -> bool {
+        if self.peek(offset) != Some('\\') {
+            return false;
+        }
+        match self.peek(offset + 1) {
+            None => false,
+            Some('\n') => false,
+            Some(_) => true,
+        }
+    }
+
+    // ── Predicates (stubs returning false; implemented in C-4/C-6) ──
 
     /// §4.3.10 Check if three code points would start a number.
     ///
@@ -344,21 +554,6 @@ impl CssTokenizer {
     /// so the predicate can examine the next two without reconsume).
     fn starts_with_number(&self, _first: char) -> bool {
         false
-    }
-
-    /// §4.3.8 Check if the next code point starts a valid escape.
-    ///
-    /// The current code point is `\`; this returns true if the escape is
-    /// valid (i.e. the next code point is not a newline and not EOF).
-    fn is_valid_escape_next(&self) -> bool {
-        // §4.3.8: "If the next input code point is ... EOF, return false.
-        // Otherwise, return true." (Newline after `\` is not a valid
-        // escape.)
-        match self.peek(0) {
-            None => false,
-            Some('\n') => false,
-            _ => true,
-        }
     }
 }
 
@@ -628,5 +823,216 @@ mod tests {
         assert_eq!(tokens.len(), 2);
         assert!(matches!(tokens[0], Token::Delim('-')));
         assert!(matches!(tokens[1], Token::Whitespace));
+    }
+
+    // ── C-2 tests: ident / function / at-keyword / hash ──────────────
+
+    #[test]
+    fn simple_ident() {
+        let tokens = CssTokenizer::collect("color");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "color"));
+    }
+
+    #[test]
+    fn ident_with_hyphen_prefix() {
+        let tokens = CssTokenizer::collect("-webkit-flex");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "-webkit-flex"));
+    }
+
+    #[test]
+    fn ident_with_double_hyphen() {
+        // §4.3.9: `--` starts an ident sequence (custom properties).
+        let tokens = CssTokenizer::collect("--my-var");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "--my-var"));
+    }
+
+    #[test]
+    fn ident_with_underscore() {
+        let tokens = CssTokenizer::collect("_private");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "_private"));
+    }
+
+    #[test]
+    fn ident_with_escape() {
+        // §4.3.7: `\26` → '&' (U+0026)
+        let tokens = CssTokenizer::collect("color\\26 B");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "color&B"));
+    }
+
+    #[test]
+    fn function_token() {
+        let tokens = CssTokenizer::collect("translate(");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Function(s) if s == "translate"));
+    }
+
+    #[test]
+    fn at_keyword_token() {
+        let tokens = CssTokenizer::collect("@media");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::AtKeyword(s) if s == "media"));
+    }
+
+    #[test]
+    fn at_keyword_with_hyphen() {
+        let tokens = CssTokenizer::collect("@-webkit-keyframes");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::AtKeyword(s) if s == "-webkit-keyframes"));
+    }
+
+    #[test]
+    fn at_sign_alone_is_delim() {
+        // §4.3.1: `@` not followed by ident-start → <delim-token>
+        let tokens = CssTokenizer::collect("@ ");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0], Token::Delim('@')));
+        assert!(matches!(tokens[1], Token::Whitespace));
+    }
+
+    #[test]
+    fn hash_id_type() {
+        // §4.3.1 / §4.3.4: `#main` → <hash-token> with type "id"
+        let tokens = CssTokenizer::collect("#main");
+        assert_eq!(tokens.len(), 1);
+        match &tokens[0] {
+            Token::Hash(s, t) => {
+                assert_eq!(s, "main");
+                assert_eq!(*t, crate::tokenizer::types::HashType::Id);
+            }
+            _ => panic!("expected Hash, got {:?}", tokens[0]),
+        }
+    }
+
+    #[test]
+    fn hash_unrestricted_type() {
+        // §4.3.1 L801-826 + §4.3.4: `#123` → next `1` is an ident code
+        // point (digits are ident code points per §4.2), so a hash-token
+        // is created. `123` does not would-start-an-ident-sequence (digit
+        // is not ident-start), so type is "unrestricted". The value is
+        // "123" (consume_an_ident_sequence consumes all ident code points).
+        let tokens = CssTokenizer::collect("#123");
+        assert_eq!(tokens.len(), 1);
+        match &tokens[0] {
+            Token::Hash(s, t) => {
+                assert_eq!(s, "123");
+                assert_eq!(*t, crate::tokenizer::types::HashType::Unrestricted);
+            }
+            _ => panic!("expected Hash, got {:?}", tokens[0]),
+        }
+    }
+
+    #[test]
+    fn hash_hex_color_is_unrestricted() {
+        // §4.3.4: `#ff00aa` → starts with `f` which IS ident-start, so
+        // this is actually type "id" (the hex digits form a valid ident).
+        let tokens = CssTokenizer::collect("#ff00aa");
+        assert_eq!(tokens.len(), 1);
+        match &tokens[0] {
+            Token::Hash(s, t) => {
+                assert_eq!(s, "ff00aa");
+                assert_eq!(*t, crate::tokenizer::types::HashType::Id);
+            }
+            _ => panic!("expected Hash, got {:?}", tokens[0]),
+        }
+    }
+
+    #[test]
+    fn backslash_escape_in_ident() {
+        // §4.3.7: `\` followed by non-hex → literal char. Use `z` (not
+        // `b`, which is a hex digit and would decode to U+000B).
+        let tokens = CssTokenizer::collect("a\\z");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "az"));
+    }
+
+    #[test]
+    fn backslash_alone_is_delim() {
+        // §4.3.1: `\` not followed by valid escape (EOF or newline) →
+        // <delim-token>
+        let tokens = CssTokenizer::collect("\\");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0], Token::Delim('\\')));
+    }
+
+    #[test]
+    fn backslash_newline_is_delim() {
+        // §4.3.8: `\` followed by newline is not a valid escape.
+        let tokens = CssTokenizer::collect("\\\n");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0], Token::Delim('\\')));
+        assert!(matches!(tokens[1], Token::Whitespace));
+    }
+
+    #[test]
+    fn declaration_with_ident_and_value() {
+        let tokens = CssTokenizer::collect("color: red");
+        assert_eq!(tokens.len(), 4);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "color"));
+        assert!(matches!(tokens[1], Token::Colon));
+        assert!(matches!(&tokens[2], Token::Whitespace));
+        assert!(matches!(&tokens[3], Token::Ident(s) if s == "red"));
+    }
+
+    #[test]
+    fn unicode_escape_in_ident() {
+        // §4.3.7 L1223-1225: `\000026` → '&' (U+0026); after 6 hex digits,
+        // if next is whitespace, consume it. So `\000026 B` → the space is
+        // consumed as trailing whitespace, `B` joins the ident sequence →
+        // single token Ident("&B").
+        let tokens = CssTokenizer::collect("\\000026 B");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "&B"));
+    }
+
+    #[test]
+    fn null_escape_becomes_replacement_char() {
+        // §4.3.7: `\0` → U+FFFD (NULL is not allowed)
+        let tokens = CssTokenizer::collect("\\0");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "\u{FFFD}"));
+    }
+
+    #[test]
+    fn surrogate_escape_becomes_replacement_char() {
+        // §4.3.7: `\D800` → U+FFFD (surrogates not allowed)
+        let tokens = CssTokenizer::collect("\\D800");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0], Token::Ident(s) if s == "\u{FFFD}"));
+    }
+
+    // ── C-2 Bug 1 回归测试: # Delim 回退 (§4.3.1 L824-826) ────────────
+
+    #[test]
+    fn hash_alone_is_delim() {
+        // §4.3.1 L824-826: `#` followed by EOF → next is not ident code
+        // point, not valid escape → return delim-token with value `#`.
+        let tokens = CssTokenizer::collect("#");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0], Token::Delim('#')));
+    }
+
+    #[test]
+    fn hash_followed_by_space_is_delim() {
+        // §4.3.1 L824-826: `#` followed by space (not ident code point,
+        // not valid escape) → delim-token with value `#`.
+        let tokens = CssTokenizer::collect("# ");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0], Token::Delim('#')));
+        assert!(matches!(tokens[1], Token::Whitespace));
+    }
+
+    #[test]
+    fn hash_followed_by_at_is_delim() {
+        // §4.3.1 L824-826: `#` followed by `@` (not ident code point,
+        // not valid escape) → delim-token with value `#`.
+        let tokens = CssTokenizer::collect("#@");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(tokens[0], Token::Delim('#')));
+        assert!(matches!(tokens[1], Token::Delim('@')));
     }
 }

@@ -47,13 +47,11 @@ use crate::tokenizer::{CssTokenizer, Token, Tokenizer};
 /// use muskitty_css::tokenize;
 /// use muskitty_css::tokenizer::Token;
 ///
-/// // C-0: only whitespace and simple punctuation tokens are implemented;
-/// // ident/number/string/etc. are added in subsequent commits.
-/// let tokens = tokenize(": , ;");
-/// assert!(matches!(tokens[0], Token::Colon));
-/// assert!(matches!(tokens[1], Token::Whitespace));
-/// assert!(matches!(tokens[2], Token::Comma));
-/// assert!(matches!(tokens[3], Token::Whitespace));
+/// let tokens = tokenize("color: red;");
+/// assert!(matches!(tokens[0], Token::Ident(_)));
+/// assert!(matches!(tokens[1], Token::Colon));
+/// assert!(matches!(tokens[2], Token::Whitespace));
+/// assert!(matches!(tokens[3], Token::Ident(_)));
 /// assert!(matches!(tokens[4], Token::Semicolon));
 /// ```
 pub fn tokenize(input: &str) -> Vec<Token> {
