@@ -1287,22 +1287,59 @@ pub fn adoption_agency(parser: &mut HtmlTreeConstructor, subject: &str) {
             }
         }
 
-        // 4.9: Insert last_node at the appropriate place for inserting a
-        //      node, using common ancestor as the override target (§13.2.6.4.7
-        //      adoption agency step 7). If the common ancestor is a template
-        //      element, the insertion target is its template content
-        //      DocumentFragment (§13.2.6.2).
+        // 4.9 (§13.2.6.4.7 steps 14-15): Let insertionLocation be
+        //      commonAncestor, after its last child. Insert lastNode at the
+        //      *adjusted insertion location* given insertionLocation.
+        //
+        //      Per §13.2.6.2, the adjusted insertion location uses
+        //      commonAncestor as the override target. If foster parenting is
+        //      enabled AND the override target is a `table`, `tbody`,
+        //      `tfoot`, `thead`, or `tr` element, the foster parenting
+        //      substeps apply (insertion happens before the last table in
+        //      the stack of open elements, not inside the table).
+        //      Otherwise, the insertion location is inside commonAncestor,
+        //      after its last child (or inside its template content if
+        //      commonAncestor is a `template` element — §13.2.6.2 step 3).
         if let Some(ancestor) = common_ancestor {
-            let target = {
-                let anc_ref = ancestor.borrow();
-                match &anc_ref.kind {
-                    NodeKind::Element(e) if e.local_name == "template" => {
-                        e.template_content.clone().unwrap_or_else(|| ancestor.clone())
+            let is_table_like = ancestor
+                .borrow()
+                .kind
+                .as_element()
+                .map(|e| {
+                    matches!(
+                        e.local_name.as_str(),
+                        "table" | "tbody" | "tfoot" | "thead" | "tr"
+                    )
+                })
+                .unwrap_or(false);
+            if parser.foster_parenting && is_table_like {
+                // §13.2.6.2 foster parenting substeps: the location is
+                // determined by the last `table`/`template` in the stack
+                // of open elements, not by the override target itself.
+                match foster_parent_location(parser) {
+                    FosterLocation::Append(parent) => {
+                        let _ = append_child(&parent, last_node.clone());
                     }
-                    _ => ancestor.clone(),
+                    FosterLocation::Before { parent, before } => {
+                        let _ = muskitty_dom::insert_before(
+                            &parent,
+                            last_node.clone(),
+                            Some(&before),
+                        );
+                    }
                 }
-            };
-            let _ = append_child(&target, last_node.clone());
+            } else {
+                let target = {
+                    let anc_ref = ancestor.borrow();
+                    match &anc_ref.kind {
+                        NodeKind::Element(e) if e.local_name == "template" => {
+                            e.template_content.clone().unwrap_or_else(|| ancestor.clone())
+                        }
+                        _ => ancestor.clone(),
+                    }
+                };
+                let _ = append_child(&target, last_node.clone());
+            }
         }
 
         // 4.10: Create a new element with the same tag/attrs as the

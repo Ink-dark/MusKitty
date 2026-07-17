@@ -1,12 +1,12 @@
 # html5lib Tree Construction Gap Report
 
-**Pass rate: 99.0% (1698/1716)** — 204 skipped — 0 panicked
+**Pass rate: 99.2% (1702/1716)** — 204 skipped — 0 panicked
 
 ## Per-fixture results
 
 | Fixture | Pass | Fail | Skip | Total |
 |---------|-----:|-----:|-----:|------:|
-| adoption01.dat | 15 | 2 | 1 | 18 |
+| adoption01.dat | 16 | 1 | 1 | 18 |
 | adoption02.dat | 3 | 0 | 0 | 3 |
 | blocks.dat | 48 | 0 | 0 | 48 |
 | comments01.dat | 16 | 0 | 0 | 16 |
@@ -46,7 +46,7 @@
 | tests16.dat | 191 | 0 | 6 | 197 |
 | tests17.dat | 13 | 0 | 0 | 13 |
 | tests18.dat | 36 | 0 | 0 | 36 |
-| tests19.dat | 100 | 3 | 0 | 103 |
+| tests19.dat | 103 | 0 | 0 | 103 |
 | tests2.dat | 63 | 0 | 0 | 63 |
 | tests20.dat | 64 | 0 | 0 | 64 |
 | tests21.dat | 23 | 0 | 0 | 23 |
