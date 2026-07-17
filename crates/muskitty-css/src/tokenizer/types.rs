@@ -188,18 +188,13 @@ impl fmt::Display for Numeric {
 /// therefore minimal — it only tracks the top-level position (consuming
 /// tokens vs. EOF emitted) for the [`Tokenizer::next_token`] iterator
 /// protocol.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum State {
     /// The tokenizer is at the top level, ready to consume the next token
     /// via §4.3.1.
+    #[default]
     Data,
     /// The tokenizer has emitted `<EOF-token>`; subsequent
     /// `next_token()` calls return `None`.
     Eof,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        State::Data
-    }
 }

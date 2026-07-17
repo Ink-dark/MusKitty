@@ -5,23 +5,24 @@
 //! [`consume_a_token`](CssTokenizer::consume_a_token) (§4.3.1), which
 //! dispatches to sub-algorithms based on the current input code point.
 //!
-//! # Current coverage
+//! # Coverage
 //!
-//! - §4.3.1 Consume a token (Data-state dispatch) — partial, simple tokens only
-//! - §4.3.2 Consume comments — not yet
-//! - §4.3.3 Consume a numeric token — not yet
-//! - §4.3.4 Consume an ident-like token — not yet
-//! - §4.3.5 Consume a string token — not yet
-//! - §4.3.6 Consume a url token — not yet
-//! - §4.3.7 Consume an escaped code point — not yet
-//! - §4.3.8 Check if two code points are a valid escape — not yet
-//! - §4.3.9 Check if three code points would start an ident sequence — not yet
-//! - §4.3.10 Check if three code points would start a number — not yet
-//! - §4.3.11 Check if three code points would start a unicode-range — not yet
-//! - §4.3.12 Consume an ident sequence — not yet
-//! - §4.3.13 Consume a number — not yet
-//! - §4.3.14 Consume a unicode-range token — not yet
-//! - §4.3.15 Consume the remnants of a bad url — not yet
+//! All §4.3 sub-algorithms are implemented:
+//! - §4.3.1 Consume a token (full dispatch, incl. `unicode_ranges_allowed`)
+//! - §4.3.2 Consume comments
+//! - §4.3.3 Consume a numeric token
+//! - §4.3.4 Consume an ident-like token (incl. `url(` special case)
+//! - §4.3.5 Consume a string token
+//! - §4.3.6 Consume a url token
+//! - §4.3.7 Consume an escaped code point
+//! - §4.3.8 Check if two code points are a valid escape
+//! - §4.3.9 Check if three code points would start an ident sequence
+//! - §4.3.10 Check if three code points would start a number
+//! - §4.3.11 Check if three code points would start a unicode-range
+//! - §4.3.12 Consume an ident sequence
+//! - §4.3.13 Consume a number
+//! - §4.3.14 Consume a unicode-range token
+//! - §4.3.15 Consume the remnants of a bad url
 
 use super::trait_def::Tokenizer;
 use super::types::{HashType, Numeric, State, Token};
@@ -105,12 +106,9 @@ impl CssTokenizer {
     ///
     /// This is the main entry point of the tokenizer. Dispatches based on
     /// the current input code point to one of the sub-algorithms (§4.3.2
-    /// through §4.3.6) or emits a simple token directly.
-    ///
-    /// **Current coverage** (C-0 + C-1): whitespace, colon, semicolon,
-    /// comma, brackets, EOF, comments (§4.3.2), legacy `<!--` / `-->`
-    /// comment forms. Other code points dispatch to sub-algorithm stubs
-    /// (C-2 onwards) or emit `<delim-token>`.
+    /// through §4.3.6) or emits a simple token directly. The optional
+    /// `unicode_ranges_allowed` flag (§4.3.1 L782-783, default `false`)
+    /// gates the `U+`/`u+` unicode-range branch.
     fn consume_a_token(&mut self) -> Token {
         // §4.3.2: If the next two input code points are U+002F SOLIDUS
         // (`/`) and U+002A ASTERISK (`*`), consume comments and
@@ -336,7 +334,7 @@ impl CssTokenizer {
     /// - Otherwise, return a `delim-token` with value `#`.
     fn consume_a_hash_token(&mut self) -> Token {
         // §4.3.1 L803-805: next is ident code point OR next two are valid escape.
-        let next_is_ident = self.peek(0).map_or(false, is_ident_code_point);
+        let next_is_ident = self.peek(0).is_some_and(is_ident_code_point);
         let next_is_valid_escape = self.is_valid_escape_at(0);
         if !next_is_ident && !next_is_valid_escape {
             // §4.3.1 L824-826: return delim-token with value `#`.
@@ -484,8 +482,8 @@ impl CssTokenizer {
         if name.eq_ignore_ascii_case("url") && self.peek(0) == Some('(') {
             self.consume(); // consume `(`
             // §4.3.4 L1056-1057: while next two are whitespace, consume one
-            while self.peek(0).map_or(false, is_whitespace)
-                && self.peek(1).map_or(false, is_whitespace)
+            while self.peek(0).is_some_and(is_whitespace)
+                && self.peek(1).is_some_and(is_whitespace)
             {
                 self.consume();
             }
@@ -493,7 +491,7 @@ impl CssTokenizer {
             let p0 = self.peek(0);
             let p1 = self.peek(1);
             let is_quote_case = matches!(p0, Some('"') | Some('\''))
-                || (p0.map_or(false, is_whitespace) && matches!(p1, Some('"') | Some('\'')));
+                || (p0.is_some_and(is_whitespace) && matches!(p1, Some('"') | Some('\'')));
             if is_quote_case {
                 return Token::Function(name);
             }
@@ -553,7 +551,7 @@ impl CssTokenizer {
     fn consume_a_url_token(&mut self) -> Token {
         let mut value = String::new();
         // §4.3.6 L1151: consume as much whitespace as possible
-        while self.peek(0).map_or(false, is_whitespace) {
+        while self.peek(0).is_some_and(is_whitespace) {
             self.consume();
         }
         loop {
@@ -564,7 +562,7 @@ impl CssTokenizer {
                 None => return Token::Url(value),
                 // §4.3.6 L1166-1175: whitespace → consume trailing ws, then check
                 Some(c) if is_whitespace(c) => {
-                    while self.peek(0).map_or(false, is_whitespace) {
+                    while self.peek(0).is_some_and(is_whitespace) {
                         self.consume();
                     }
                     match self.peek(0) {
@@ -726,7 +724,7 @@ impl CssTokenizer {
         let start = u32::from_str_radix(&first_segment, 16).unwrap_or(0);
 
         // §4.3.14 step 5: if next two are `-` + hex digit
-        if self.peek(0) == Some('-') && self.peek(1).map_or(false, is_hex_digit) {
+        if self.peek(0) == Some('-') && self.peek(1).is_some_and(is_hex_digit) {
             self.consume(); // consume `-`
             let mut end_segment = String::new();
             while end_segment.len() < 6 {
@@ -950,12 +948,6 @@ fn is_ident_code_point(c: char) -> bool {
     matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_' | '-' | '\u{0080}'..=char::MAX)
 }
 
-/// Allow `is_ident_code_point` to be used by future sub-algorithms.
-#[allow(dead_code)]
-fn _ident_code_point_used(c: char) -> bool {
-    is_ident_code_point(c)
-}
-
 /// §4.2 Whether `c` is a digit (ASCII 0-9).
 fn is_digit(c: char) -> bool {
     c.is_ascii_digit()
@@ -1010,12 +1002,6 @@ fn preprocess_input(s: &str) -> Vec<char> {
         }
     }
     out
-}
-
-// Allow helpers to be referenced from later commits without warnings.
-#[allow(dead_code)]
-fn _helpers_used() {
-    let _ = (is_digit, is_hex_digit, _ident_code_point_used);
 }
 
 impl Tokenizer for CssTokenizer {
