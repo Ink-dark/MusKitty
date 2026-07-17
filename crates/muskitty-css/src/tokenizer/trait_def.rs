@@ -53,4 +53,14 @@ pub trait Tokenizer {
     /// Clears any partial token state and resets position to 0. Used by
     /// future CSSOM incremental parsing and by test harnesses.
     fn reset(&mut self);
+
+    /// §4.3.1 L782-783: Set the `unicode_ranges_allowed` flag.
+    ///
+    /// Defaults to `false`. The `U+`/`u+` branch of §4.3.1 only produces a
+    /// `<unicode-range-token>` (§4.3.14) when this flag is `true`; otherwise
+    /// `U`/`u` is tokenized as an ident-like token. Per §4.3.14 L1500-1506,
+    /// unicode-range tokens are not produced by the top-level tokenizer under
+    /// normal circumstances — the flag is set to `true` only when parsing the
+    /// value of the `@font-face/unicode-range` descriptor.
+    fn set_unicode_ranges_allowed(&mut self, allowed: bool);
 }

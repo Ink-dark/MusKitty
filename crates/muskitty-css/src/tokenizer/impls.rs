@@ -43,6 +43,11 @@ pub struct CssTokenizer {
     /// Whether `<EOF-token>` has been emitted. After this is `true`,
     /// [`next_token`](Tokenizer::next_token) returns `None`.
     eof_emitted: bool,
+    /// §4.3.1 L782-783: `unicode_ranges_allowed` flag, default `false`.
+    /// When `true`, the `U+`/`u+` branch of §4.3.1 produces a
+    /// `<unicode-range-token>` (§4.3.14); otherwise `U`/`u` is tokenized
+    /// as an ident-like token.
+    unicode_ranges_allowed: bool,
 }
 
 impl CssTokenizer {
@@ -59,6 +64,7 @@ impl CssTokenizer {
             pos: 0,
             state: State::Data,
             eof_emitted: false,
+            unicode_ranges_allowed: false,
         }
     }
 
@@ -617,13 +623,127 @@ impl CssTokenizer {
         }
     }
 
-    /// §4.3.1 (u/U branch): consume an ident-like token, or if it matches
-    /// the `U+` form, consume a unicode-range token (§4.3.14).
+    /// §4.3.1 (L960-972) U/u branch: if `unicode_ranges_allowed` is true
+    /// and the stream would start a unicode-range (§4.3.11), consume a
+    /// unicode-range token (§4.3.14); otherwise consume an ident-like token.
+    ///
+    /// Precondition: `u`/`U` has been consumed, `pos` points just past it.
+    /// This method reconsumes back to `u` before dispatching.
     fn consume_u_or_unicode_range(&mut self) -> Token {
-        // C-6: full unicode-range detection pending. For now treat as
-        // ident-like.
-        self.reconsume();
+        self.reconsume(); // pos back to `u`/`U`
+        // §4.3.1 L963-967: unicode_ranges_allowed && would-start-unicode-range
+        if self.unicode_ranges_allowed && self.would_start_unicode_range_at(0) {
+            return self.consume_a_unicode_range_token();
+        }
+        // §4.3.1 L969-972: otherwise ident-like
         self.consume_an_ident_like_token()
+    }
+
+    /// §4.3.11 (L1356-1378) Check if three code points would start a
+    /// unicode-range, examining code points starting at `offset` from the
+    /// current position.
+    ///
+    /// Per §4.3.11: true iff first is `U`/`u`, second is `+`, third is `?`
+    /// or a hex digit.
+    fn would_start_unicode_range_at(&self, offset: usize) -> bool {
+        let first = match self.peek(offset) {
+            Some(c) => c,
+            None => return false,
+        };
+        if !matches!(first, 'U' | 'u') {
+            return false;
+        }
+        if self.peek(offset + 1) != Some('+') {
+            return false;
+        }
+        match self.peek(offset + 2) {
+            Some('?') => true,
+            Some(c) if is_hex_digit(c) => true,
+            _ => false,
+        }
+    }
+
+    /// §4.3.14 (L1487-1548) Consume a unicode-range token.
+    ///
+    /// Precondition: the stream starts with `u`/`U` + `+` + (`?` or hex
+    /// digit) (i.e. [`would_start_unicode_range_at`](Self::would_start_unicode_range_at)
+    /// returns true at the current position).
+    ///
+    /// Returns `UnicodeRange(Some(start), Some(end))`.
+    ///
+    /// Per §4.3.14:
+    /// 1. Consume and discard `u`/`U` and `+`.
+    /// 2. Consume up to 6 hex digits; if fewer than 6, consume `?` up to a
+    ///    total of 6 → `first_segment`.
+    /// 3. If `first_segment` contains `?`: start = `?`→`0`, end = `?`→`F`.
+    /// 4. Else start = hex value of `first_segment`.
+    /// 5. If next two are `-` + hex digit: consume `-`, consume up to 6 hex
+    ///    → end.
+    /// 6. Else end = start.
+    fn consume_a_unicode_range_token(&mut self) -> Token {
+        // §4.3.14 step 1: consume and discard `u`/`U` + `+`
+        self.consume(); // `u`/`U`
+        self.consume(); // `+`
+
+        // §4.3.14 step 2: consume up to 6 hex digits
+        let mut first_segment = String::new();
+        while first_segment.len() < 6 {
+            match self.peek(0) {
+                Some(c) if is_hex_digit(c) => {
+                    first_segment.push(c);
+                    self.consume();
+                }
+                _ => break,
+            }
+        }
+        // then consume `?` up to a total of 6
+        while first_segment.len() < 6 {
+            match self.peek(0) {
+                Some('?') => {
+                    first_segment.push('?');
+                    self.consume();
+                }
+                _ => break,
+            }
+        }
+
+        // §4.3.14 step 3: if first_segment contains `?`
+        if first_segment.contains('?') {
+            let start_str: String = first_segment
+                .chars()
+                .map(|c| if c == '?' { '0' } else { c })
+                .collect();
+            let start = u32::from_str_radix(&start_str, 16).unwrap_or(0);
+            let end_str: String = first_segment
+                .chars()
+                .map(|c| if c == '?' { 'F' } else { c })
+                .collect();
+            let end = u32::from_str_radix(&end_str, 16).unwrap_or(0);
+            return Token::UnicodeRange(Some(start), Some(end));
+        }
+
+        // §4.3.14 step 4: first_segment as hex → start
+        let start = u32::from_str_radix(&first_segment, 16).unwrap_or(0);
+
+        // §4.3.14 step 5: if next two are `-` + hex digit
+        if self.peek(0) == Some('-') && self.peek(1).map_or(false, is_hex_digit) {
+            self.consume(); // consume `-`
+            let mut end_segment = String::new();
+            while end_segment.len() < 6 {
+                match self.peek(0) {
+                    Some(c) if is_hex_digit(c) => {
+                        end_segment.push(c);
+                        self.consume();
+                    }
+                    _ => break,
+                }
+            }
+            let end = u32::from_str_radix(&end_segment, 16).unwrap_or(0);
+            return Token::UnicodeRange(Some(start), Some(end));
+        }
+
+        // §4.3.14 step 6: otherwise start == end
+        Token::UnicodeRange(Some(start), Some(start))
     }
 
     // ── §4.3.12 Consume an ident sequence ────────────────────────────
@@ -923,6 +1043,10 @@ impl Tokenizer for CssTokenizer {
         self.pos = 0;
         self.state = State::Data;
         self.eof_emitted = false;
+    }
+
+    fn set_unicode_ranges_allowed(&mut self, allowed: bool) {
+        self.unicode_ranges_allowed = allowed;
     }
 }
 
@@ -1556,5 +1680,66 @@ mod tests {
         let tokens = CssTokenizer::collect("url(foo\"bar)");
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0], Token::BadUrl);
+    }
+
+    // ── C-6 tests: §4.3.1 unicode_ranges_allowed + §4.3.11 + §4.3.14 ──
+
+    #[test]
+    fn unicode_range_disabled_by_default() {
+        // §4.3.1 L782-783: default unicode_ranges_allowed=false.
+        // `U+1234` → `U` ident-start → Ident("U") (`+` stops ident seq);
+        // then `+1234` → starts_with_number (`+`+digit) → Number(1234).
+        let tokens = CssTokenizer::collect("U+1234");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0], Token::Ident("U".to_string()));
+        assert_eq!(
+            tokens[1],
+            Token::Number(Numeric { value: 1234.0, is_integer: true })
+        );
+    }
+
+    #[test]
+    fn unicode_range_simple() {
+        // §4.3.14: U+1234 → UnicodeRange(0x1234, 0x1234)
+        let mut tz = CssTokenizer::new("U+1234");
+        tz.set_unicode_ranges_allowed(true);
+        let t = tz.next_token().unwrap();
+        assert_eq!(t, Token::UnicodeRange(Some(0x1234), Some(0x1234)));
+    }
+
+    #[test]
+    fn unicode_range_question_marks() {
+        // §4.3.14 step 3: U+12?? → start=0x1200 (?→0), end=0x12FF (?→F)
+        let mut tz = CssTokenizer::new("U+12??");
+        tz.set_unicode_ranges_allowed(true);
+        let t = tz.next_token().unwrap();
+        assert_eq!(t, Token::UnicodeRange(Some(0x1200), Some(0x12FF)));
+    }
+
+    #[test]
+    fn unicode_range_range() {
+        // §4.3.14 step 5: U+12-34FF → start=0x12, end=0x34FF
+        let mut tz = CssTokenizer::new("U+12-34FF");
+        tz.set_unicode_ranges_allowed(true);
+        let t = tz.next_token().unwrap();
+        assert_eq!(t, Token::UnicodeRange(Some(0x12), Some(0x34FF)));
+    }
+
+    #[test]
+    fn unicode_range_max_hex() {
+        // §4.3.14: U+10FFFF → UnicodeRange(0x10FFFF, 0x10FFFF)
+        let mut tz = CssTokenizer::new("U+10FFFF");
+        tz.set_unicode_ranges_allowed(true);
+        let t = tz.next_token().unwrap();
+        assert_eq!(t, Token::UnicodeRange(Some(0x10FFFF), Some(0x10FFFF)));
+    }
+
+    #[test]
+    fn unicode_range_lowercase_u() {
+        // §4.3.11: lowercase u also triggers; u+abc → UnicodeRange(0xABC, 0xABC)
+        let mut tz = CssTokenizer::new("u+abc");
+        tz.set_unicode_ranges_allowed(true);
+        let t = tz.next_token().unwrap();
+        assert_eq!(t, Token::UnicodeRange(Some(0xABC), Some(0xABC)));
     }
 }
