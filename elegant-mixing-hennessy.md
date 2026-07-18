@@ -209,7 +209,7 @@ Token 流完备后，开始消费 token 构建 DOM。
 
 ## 验证方式
 
-- **每步**：`cargo test -p muskitty-html-parser --lib` 全绿
+- **每步**：`cargo test -p muskitty-html5-parser --lib` 全绿
 - **每步**：`cargo check` 零 warning
 - **Phase 1 完结**：WPT tokenizer JSON 测试套件全过
 - **Phase 3 完结**：简单 HTML 文档 → 正确 DOM 树

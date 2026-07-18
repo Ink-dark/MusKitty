@@ -1,6 +1,6 @@
 # Tokenizer 规范审查报告
 
-> 审查对象：`crates/muskitty-html-parser/src/tokenizer/impls.rs`
+> 审查对象：`crates/muskitty-html5-parser/src/tokenizer/impls.rs`
 > 审查依据：WHATWG HTML Standard §13.2.5
 > 审查立场：预设代码错误，逐行对照规范找茬
 

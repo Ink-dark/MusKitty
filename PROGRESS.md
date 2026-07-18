@@ -61,11 +61,11 @@
 
 ### Phase 5 — html5lib Tree Construction 测试集成 ✅
 
-- 测试 fixture：`crates/muskitty-html-parser/tests/data/tree-construction/*.dat`（56 个 .dat 文件）
-- 测试 harness：`crates/muskitty-html-parser/tests/html5lib_tree_construction.rs`
+- 测试 fixture：`crates/muskitty-html5-parser/tests/data/tree-construction/*.dat`（56 个 .dat 文件）
+- 测试 harness：`crates/muskitty-html5-parser/tests/html5lib_tree_construction.rs`
 - DOM 序列化器（html5lib `#document` 格式）
 - **通过率：100% (1716/1716)**，204 skipped（document-fragment 192 + script-on 12）
-- gap report：`crates/muskitty-html-parser/tests/tree_construction_gap_report.md`
+- gap report：`crates/muskitty-html5-parser/tests/tree_construction_gap_report.md`
 
 ### Phase 6 — DOM 完整 API 扩展 ⬜ 推迟
 
@@ -136,7 +136,7 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 仓库策略
 
-- **暂不拆分独立 crate**：`muskitty-dom` + `muskitty-html-parser` 保留在主仓库 `d:\Muskitty` 的 workspace 内，成熟后再拆。
+- **暂不拆分独立 crate**：`muskitty-dom` + `muskitty-html5-parser` 保留在主仓库 `d:\Muskitty` 的 workspace 内，成熟后再拆。
 - **主仓库保留为 workspace 协调中心**：后续 CSS/Network/Layout/Renderer crate 在主仓库开发。
 - **后续计划**：开发一个工具统一拉取各 crate 源代码（具体形式待定，可能为 git submodule / cargo workspace / vendoring 工具）。
 - **远期目标**：`https://github.com/muskitty-dev/muskitty-html5-parser` 仍为预留仓库名，待 HTML Parser + DOM 成熟后再推送。
@@ -220,7 +220,7 @@ d:\Muskitty\
 │   │   │   └── error.rs                (DomError)
 │   │   └── tests/
 │   │       └── node.rs
-│   ├── muskitty-html-parser/           (Layer 1 主模块)
+│   ├── muskitty-html5-parser/           (Layer 1 主模块)
 │   │   ├── Cargo.toml                  (依赖 muskitty-dom)
 │   │   ├── src/
 │   │   │   ├── lib.rs                  (parse() 入口)
