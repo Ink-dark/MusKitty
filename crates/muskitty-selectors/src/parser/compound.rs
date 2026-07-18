@@ -9,15 +9,17 @@
 //! The `!` indicates the production is required to be non-empty: a
 //! compound selector must contain at least one simple selector.
 //!
-//! SP-2 scope: subclass-selector supports `id` and `class` only.
-//! `attribute` (SP-3) and `pseudo-class` (SP-4) are added in later
-//! batches; pseudo-compound selectors (pseudo-element + trailing
-//! pseudo-classes) are added in SP-4 / SP-6.
+//! SP-3 scope: subclass-selector supports `id`, `class`, and
+//! `attribute`. `pseudo-class` (SP-4) is added in the next batch;
+//! pseudo-compound selectors (pseudo-element + trailing pseudo-classes)
+//! are added in SP-4 / SP-6.
 //!
 //! Spec source: `D:\CSSWG\selectors-4\Overview.md`, §3 L4671 + L4684.
 
 use crate::error::SelectorParseError;
-use crate::parser::simple::{parse_class_selector, parse_id_selector, parse_type_selector};
+use crate::parser::simple::{
+    parse_attribute_selector, parse_class_selector, parse_id_selector, parse_type_selector,
+};
 use crate::types::{CompoundSelector, SubclassSelector};
 use muskitty_css::parser::TokenStream;
 use muskitty_css::tokenizer::Token;
@@ -27,9 +29,9 @@ use muskitty_css::tokenizer::Token;
 /// Returns `Ok(CompoundSelector)` containing at least one simple
 /// selector (type selector or subclass selector). Returns
 /// `Err(InvalidSelector)` if the input at the current position does
-/// not start a compound selector (i.e. none of type/class/id matches
-/// and there is no attribute/pseudo-class either — the latter two are
-/// SP-3/SP-4 extensions and currently fall through to "not a compound
+/// not start a compound selector (i.e. none of type/class/id/attribute
+/// matches and there is no pseudo-class either — the latter is an
+/// SP-4 extension and currently falls through to "not a compound
 /// selector").
 pub fn parse_compound_selector(
     stream: &mut TokenStream,
@@ -54,7 +56,10 @@ pub fn parse_compound_selector(
             compound.subclasses.push(SubclassSelector::Class(class));
             continue;
         }
-        // SP-3: parse_attribute_selector here.
+        if let Some(attr) = parse_attribute_selector(stream)? {
+            compound.subclasses.push(SubclassSelector::Attribute(attr));
+            continue;
+        }
         // SP-4: parse_pseudo_class / parse_pseudo_element here.
         break;
     }
