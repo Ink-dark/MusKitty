@@ -10,6 +10,7 @@ pub mod an_plus_b;
 pub mod complex;
 pub mod compound;
 pub mod list;
+pub mod relative;
 pub mod simple;
 
 use crate::error::SelectorParseError;

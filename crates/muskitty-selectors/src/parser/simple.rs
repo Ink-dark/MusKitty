@@ -36,6 +36,8 @@
 
 use crate::error::SelectorParseError;
 use crate::parser::an_plus_b::parse_an_plus_b;
+use crate::parser::list::{parse_forgiving_selector_list, parse_selector_list};
+use crate::parser::relative::parse_relative_selector_list;
 use crate::types::{
     AttrMatcher, AttrModifier, AttrValue, AttributeSelector, ClassSelector, IdSelector, NsPrefix,
     NsPrefixKind, PseudoClass, PseudoClassArgument, PseudoElement, TypeSelector, TypeSelectorName,
@@ -491,6 +493,12 @@ const KNOWN_PSEUDO_CLASSES: &[&str] = &[
     "future",
     "host",
     "host-context",
+    // §4 logical combinations (parameterised; argument dispatch in
+    // parse_pseudo_class_argument).
+    "is",
+    "not",
+    "where",
+    "has",
 ];
 
 /// §14 L4476-4535: Pseudo-elements that accept the legacy single-colon
@@ -670,35 +678,71 @@ pub fn parse_pseudo_class_or_legacy(
 /// Dispatches based on the pseudo-class name:
 /// - `nth-child`, `nth-last-child`, `nth-of-type`, `nth-last-of-type`
 ///   → parse an `<an-plus-b>` (§13.5).
+/// - `is`, `where` → parse a `<forgiving-selector-list>` (§4.2/§4.4
+///   L1497-1499 + L1617, §3 L4765-4813). Failed selectors are
+///   silently dropped.
+/// - `not` → parse a `<complex-selector-list>` (§4.3 L1564-1607).
+///   Non-forgiving: any invalid selector fails the whole pseudo-class.
+///   Level 4 allows complex selectors as the argument (Level 3 only
+///   permitted simple selectors).
+/// - `has` → parse a `<relative-selector-list>` (§4.5 L1700).
+///   Non-forgiving. Each relative selector may begin with an optional
+///   combinator (default descendant) and is anchored against an
+///   implicit `:scope`.
 /// - All other known pseudo-classes → preserve the raw token stream
-///   until the closing `)`. SP-5 will replace this with proper
-///   selector-list parsing for `:is` / `:not` / `:where` / `:has`.
+///   until the closing `)`.
+///
+/// The closing `)` is left unconsumed for the caller
+/// ([`parse_pseudo_class_or_legacy`]) to verify.
 fn parse_pseudo_class_argument(
     stream: &mut TokenStream,
     name: &str,
 ) -> Result<PseudoClassArgument, SelectorParseError> {
-    if matches!(
-        name,
-        "nth-child" | "nth-last-child" | "nth-of-type" | "nth-last-of-type"
-    ) {
-        let an_plus_b = parse_an_plus_b(stream)?;
-        return Ok(PseudoClassArgument::AnPlusB(an_plus_b));
-    }
-    // Other parameterised pseudo-classes: capture raw component values
-    // until the closing `)`. The closing `)` is left unconsumed for
-    // the caller ([`parse_pseudo_class_or_legacy`]) to verify.
-    let mut tokens = Vec::new();
-    loop {
-        match stream.next_token() {
-            Token::CloseParen => break,
-            Token::Eof => return Err(SelectorParseError::UnclosedBlock),
-            t => {
-                tokens.push(t);
-                stream.discard_token();
+    match name {
+        "nth-child" | "nth-last-child" | "nth-of-type" | "nth-last-of-type" => {
+            let an_plus_b = parse_an_plus_b(stream)?;
+            Ok(PseudoClassArgument::AnPlusB(an_plus_b))
+        }
+        // §4.2 L1497-1499 + §4.4 L1617: forgiving-selector-list. Each
+        // complex selector parsed independently; failures silently
+        // dropped (§3 L4765-4813).
+        "is" | "where" => {
+            let list = parse_forgiving_selector_list(stream)?;
+            Ok(PseudoClassArgument::SelectorList(list))
+        }
+        // §4.3 L1564-1607: complex-selector-list, non-forgiving.
+        // Level 4 permits complex selectors as the argument.
+        "not" => {
+            let list = parse_selector_list(stream)?;
+            Ok(PseudoClassArgument::SelectorList(list))
+        }
+        // §4.5 L1700: relative-selector-list, non-forgiving. Each
+        // relative selector may begin with an optional combinator
+        // (default descendant) and is anchored against an implicit
+        // :scope.
+        "has" => {
+            let list = parse_relative_selector_list(stream)?;
+            Ok(PseudoClassArgument::SelectorList(list))
+        }
+        _ => {
+            // Other parameterised pseudo-classes: capture raw
+            // component values until the closing `)`. The closing `)`
+            // is left unconsumed for the caller
+            // ([`parse_pseudo_class_or_legacy`]) to verify.
+            let mut tokens = Vec::new();
+            loop {
+                match stream.next_token() {
+                    Token::CloseParen => break,
+                    Token::Eof => return Err(SelectorParseError::UnclosedBlock),
+                    t => {
+                        tokens.push(t);
+                        stream.discard_token();
+                    }
+                }
             }
+            Ok(PseudoClassArgument::Raw(tokens))
         }
     }
-    Ok(PseudoClassArgument::Raw(tokens))
 }
 
 /// §3 L4671 + §14: Parse an optional modern pseudo-element (`::name`).
