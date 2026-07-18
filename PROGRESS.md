@@ -1,8 +1,8 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-07-17 | 基于 git commit `5f767da`
+> 最后更新: 2026-07-18 | 基于 git commit `b1e15f4` (CP-7, v0.2.0 待 commit)
 >
-> Phase 1 (HTML 解析层) 收尾：html5lib tree construction **84.8% → 100%**。
+> Phase 2 子阶段 1（CSS Syntax tokenizer + parser）收尾：§4.3 + §5 全部完成。
 
 ## 总览
 
@@ -12,8 +12,9 @@
 | **Tree Construction** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | 100% (1716/1716, 204 skipped) | skipped = fragment 解析 + script-on 模式（未实现） |
 | **DOM Core** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | `muskitty-dom` 独立 crate |
 | **HTML Parser (整体)** | ✅ Phase 1 收尾 | — | — | 作为独立 crate 已可用 |
+| **CSS Tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) | 单元测试全绿 | `muskitty-css` crate 内 |
+| **CSS Parser** | ✅ 完成 | CSS Syntax §5 (§5.2, §5.3, §5.4.3–§5.4.10, §5.5.1–§5.5.11) | 55 单元 + 7 doctest | 9/10 entry points；§5.4.1/§5.4.2 grammar hooks 延后到 Selectors 阶段 |
 | DOM 完整 API (Events/Selectors/Style) | ⬜ 推迟 | — | — | 推迟到 Phase 2 (CSS) 之后 |
-| muskitty-css | ⬜ Phase 2 | — | — | 下一个重点 |
 | muskitty-network / muskitty-layout / muskitty-renderer | ⬜ 远期 | — | — | roadmap Layer 3–5 |
 
 ## Phase 1 (HTML 解析层) — 已收尾
@@ -70,6 +71,73 @@
 ### Phase 6 — DOM 完整 API 扩展 ⬜ 推迟
 
 Events / Selectors / Style / innerHTML 推迟到 Phase 2 (CSS) 之后。理由：tree construction 只需要 DOM Core 子集；Selectors/Style 依赖 muskitty-css，提前做会返工。
+
+## Phase 2 (CSS 解析层) — 子阶段 1 已完成
+
+按 [roadmap](.trae/documents/muskitty-browser-roadmap.md) Layer 2 推进。子阶段 1（CSS Syntax Module §4.3 tokenizer + §5 parser）按 [phase2-css-parser-cp1-to-cp8.md](.trae/documents/phase2-css-parser-cp1-to-cp8.md) 完成。
+
+### Tokenizer (§4.3) — 早期 commits
+
+CSS Syntax Module §4.3.1–§4.3.13 全部实现，详见 C-2 至 C-7 commits 历史。Token 类型：ident/function/at-keyword/hash/string/url/number/unicode-range/delim/whitespace/colon/semicolon/comma/`{`/`}`/`[`/`]`/`(`/`)`/EOF/CDO/CDC。
+
+### Parser (§5) — CP-1 至 CP-8
+
+| 批次 | 内容 | 规范 | commit |
+|------|------|------|--------|
+| CP-1 | §5.2 CSS Parsing Results 数据结构 (Stylesheet/Rule/AtRule/QualifiedRule/Declaration/ComponentValue/Function/SimpleBlock/BlockKind) | Overview.md L1625-1721 | `fcb35e6` |
+| CP-2 | §5.3 TokenStream struct + 9 操作 (next_token/is_empty/consume_token/discard_token/mark/restore_mark/discard_mark/discard_whitespace + new 构造器) | L1722-1814 | `ab82733` |
+| CP-3 | §5.5.7-§5.5.11 底层算法 (consume_a_list_of_component_values / consume_a_component_value / consume_a_simple_block / consume_a_function / consume_a_unicode_range_value) | L2745-2872 | `239cd34` |
+| CP-4 | §5.5.6 declaration 算法 (consume_a_declaration + consume_the_remnants_of_a_bad_declaration + strip_important + is_custom_property_name + has_top_level_curly_block_with_other_values) | L2639-2741 | `7f143b7` |
+| CP-5 | §5.5.1-§5.5.5 上层算法 (consume_a_stylesheets_contents / consume_an_at_rule / consume_a_qualified_rule / consume_a_block / consume_a_blocks_contents + BlockContents + split_block_contents + looks_like_custom_property_in_prelude + ParseError 标记类型) | L2223-2562 | `980e429` |
+| CP-6 | §5.4.3-§5.4.10 entry points (parse_a_stylesheet / parse_a_stylesheets_contents / parse_a_blocks_contents / parse_a_rule / parse_a_declaration / parse_a_component_value / parse_a_list_of_component_values / parse_a_comma_separated_list_of_component_values + normalize_from_string) | L2005-2204 | `cacad17` |
+| CP-7 | lib.rs 顶层 API (parse_stylesheet / parse_rule / parse_declaration / parse_component_value / parse_list_of_component_values / parse_comma_separated_list_of_component_values) + crate-level doc | — | `b1e15f4` |
+| CP-8 | cleanup + Cargo.toml v0.2.0 (MSRV 1.82) + README + PROGRESS.md 更新 | — | (本 commit) |
+
+### 延后项（标注在代码中，待后续阶段补回）
+
+- **§5.4.1 / §5.4.2 grammar hooks**：`parse something according to a CSS grammar` / `parse a comma-separated list according to a CSS grammar` 需要 Selectors / Values grammar 知识。等 Selectors Level 4 阶段需要时再补。
+- **§5.5.6 `original_text` for custom property**：`consume_a_declaration` 暂不捕获 `original_text`。需要 `TokenStream` 保留原始 source text 与 token range 映射，是 TokenStream 的扩展。代码中留 TODO 注释，等 var() 实现需求出现后补。
+- **§5.5.6 `unicode-range` descriptor re-tokenization**：需要 source-text tracking 用于重新分词。代码中留 TODO 注释。
+
+### 子阶段 1 测试矩阵
+
+| 测试文件 | 测试数 | 覆盖内容 |
+|---------|------|---------|
+| `tests/parser_types.rs` | 6 | §5.2 数据结构构造 + Default |
+| `tests/token_stream.rs` | 8 | §5.3 TokenStream 9 操作 |
+| `tests/parser_algorithms_cp3.rs` | 10 | §5.5.7-§5.5.11 底层算法 |
+| `tests/parser_algorithms_cp4.rs` | 8 | §5.5.6 declaration 算法 |
+| `tests/parser_algorithms_cp5.rs` | 12 | §5.5.1-§5.5.5 上层算法 |
+| `tests/parser_entry_points.rs` | 11 | §5.4.3-§5.4.10 entry points |
+| `src/lib.rs` doctests | 7 | 顶层 API 集成测试 |
+| **总计** | **62** | 全部通过 |
+
+### 质量门禁
+
+每个 CP commit 前依次执行（任一失败不提交）：
+
+```powershell
+cargo fmt -p muskitty-css -- --check
+cargo test -p muskitty-css
+cargo check -p muskitty-css
+cargo clippy -p muskitty-css --all-targets -- -D warnings
+```
+
+CP-1 至 CP-7 全部满足零 fmt diff、零 warning、全部测试通过。
+
+### TokenStream 设计要点
+
+`consume_a_qualified_rule` 返回 `Result<Option<QualifiedRule>, ParseError>` 三态：
+
+- `Ok(Some(rule))` — 成功消费一个 rule。
+- `Ok(None)` — "return nothing"（EOF 或 stop_token 触发）。
+- `Err(ParseError)` — "invalid rule error"（如 top-level 的 `--foo: ...` 形 prelude 触发 §5.5.3 L2377-2383）。
+
+`consume_a_blocks_contents` 用 mark/restore_mark 模式处理 declaration 与 qualified-rule prelude 的歧义：先尝试按 declaration 解析；若返回 `None`（不是 declaration），restore_mark 回到 mark 位置再按 qualified-rule 解析。
+
+### `Rule::Declarations` 变体
+
+§5.5.5 的输出是 rules 与 declaration-lists 的混合 list。`Rule` enum 加 `Declarations(Vec<Declaration>)` variant 精确建模。`consume_a_blocks_contents` 返回时把所有 pending decls flush 为 `Rule::Declarations`。后续 CSSOM 可以将其 materialize 为 `CSSStyleDeclaration` 或 `CSSNestedDeclarations`。
 
 ## Tokenizer 状态详情
 
@@ -245,7 +313,29 @@ d:\Muskitty\
 │   │       ├── html5lib_tree_construction.rs
 │   │       ├── html5lib_gap_report.md
 │   │       └── tree_construction_gap_report.md
-│   ├── muskitty-css/                   (Layer 2 — Phase 2 待开始)
+│   ├── muskitty-css/                   (Layer 2 — Phase 2 子阶段 1 已完成)
+│   │   ├── Cargo.toml                  (v0.2.0，独立无依赖)
+│   │   ├── README.md
+│   │   ├── src/
+│   │   │   ├── lib.rs                  (顶层 API: tokenize/parse_stylesheet/parse_rule/...)
+│   │   │   ├── tokenizer/              (CSS Syntax §4.3)
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── types.rs            (Token: Ident/Function/AtKeyword/Hash/String/Url/Number/...)
+│   │   │   │   ├── trait_def.rs        (Tokenizer trait)
+│   │   │   │   └── impls.rs            (CssTokenizer)
+│   │   │   └── parser/                 (CSS Syntax §5)
+│   │   │       ├── mod.rs              (pub use 重新导出)
+│   │   │       ├── types.rs            (§5.2 Stylesheet/Rule/AtRule/QualifiedRule/Declaration/...)
+│   │   │       ├── token_stream.rs     (§5.3 TokenStream + 9 操作)
+│   │   │       ├── algorithms.rs       (§5.5.1-§5.5.11 共 11 个算法)
+│   │   │       └── entry_points.rs     (§5.4.3-§5.4.10 共 8 个 entry points)
+│   │   └── tests/
+│   │       ├── parser_types.rs         (CP-1: §5.2 数据结构测试)
+│   │       ├── token_stream.rs         (CP-2: §5.3 TokenStream 测试)
+│   │       ├── parser_algorithms_cp3.rs
+│   │       ├── parser_algorithms_cp4.rs
+│   │       ├── parser_algorithms_cp5.rs
+│   │       └── parser_entry_points.rs  (CP-6: §5.4 entry points 测试)
 │   ├── muskitty-network/               (Layer 5 — 远期)
 │   ├── muskitty-layout/                (Layer 3 — 远期)
 │   └── muskitty-renderer/              (Layer 4 — 远期)
@@ -258,6 +348,16 @@ d:\Muskitty\
 ## Git 提交历史（近期）
 
 ```
+b1e15f4 [css-parser] CP-7: lib.rs top-level API + crate-level doc
+cacad17 [css-parser] CP-6: 5.4 Parser Entry Points (9 of 10)
+980e429 [css-parser] CP-5: 5.5.1-5.5.5 stylesheet/rule/block algorithms
+7f143b7 [css-parser] CP-4: 5.5.6 consume_a_declaration + remnants_of_bad_decl
+239cd34 [css-parser] CP-3: 5.5.7-5.5.11 lower-level parser algorithms
+ab82733 [css-parser] CP-2: 5.3 TokenStream struct + 8 operations
+fcb35e6 [css-parser] CP-1: 5.2 CSS Parsing Results data structures
+d3dba7d [workspace] Untrack crates/muskitty-html5-tokenizer/ (already .gitignored)
+7e4a19c [workspace] Split muskitty-html5-tokenizer into standalone git repo
+c233c74 [tokenizer] Extract muskitty-html5-tokenizer as standalone crate
 5f767da P3-d-10: fix in-cell/applet/marquee/object end-tag namespace check
 1b889fc P3-d-9: fix adoption agency furthest block matching SVG elements as special
 d7c4eb2 P3-d-8: fix harness parse_dat truncating #document on embedded blank lines
@@ -273,17 +373,12 @@ e0b5828 fix(parser): InTableBody "anything else" 直接调用 InTable 处理器
 85e13cd fix(parser): area/br/embed 起始标签设 frameset-ok 为 not ok
 b55e31a feat(parser): 实现 Foreign Content (SVG/MathML) 与 Template 交互修复
 f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixes
-523d816 feat: 实现处理指令（ProcessingInstruction）节点支持
-57eb748 fix(tokenizer): 字符引用属性上下文与命名实体规范合规修复
-7296810 style: cargo fmt 格式化
-9042c78 [parser] implement remaining 7 insertion modes + template content (Phase 3.5)
-14b96c8 [parser] implement table insertion modes + foster parenting skeleton
 ... (完整历史见 git log)
 ```
 
 ## 下一步
 
-1. **muskitty-css 启动**：建立 `crates/muskitty-css/` 骨架，实现 CSS Syntax Module §5 tokenizer
+1. **Phase 2 子阶段 2 — Selectors Level 4**：基于 `D:\CSSWG\selectors-4\Overview.md` 起草计划文档，进入 plan 模式。覆盖：简单选择器（类型/通用/类/ID/属性）+ 组合器（后代/子代/相邻兄弟/一般兄弟）+ 伪类（结构性、UI、动态 stub）+ 伪元素 + selector 匹配引擎（基于 muskitty-dom）。完成后回头补 §5.4.1 / §5.4.2 grammar hooks。
 2. **Tokenizer 遗留**：11 个 `<?...>` 处理指令边界失败，CSS 阶段顺带修
 3. **DOM 完整 API**：推迟到 CSS 阶段后，避免返工
 4. **拉取工具**：待 crate 数量增多后再做
