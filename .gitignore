@@ -9,6 +9,10 @@ crates/*/target
 # （因为 Cargo.toml 通过 path = "../muskitty-dom" 依赖同级 dom crate）。
 crates/muskitty-html5-parser/
 
+# muskitty-html5-tokenizer 同样作为独立 git 仓库剥离，
+# 由 crates/muskitty-html5-tokenizer/.git 自行追踪。
+crates/muskitty-html5-tokenizer/
+
 # muskitty-dom 同样作为独立 git 仓库剥离，由 crates/muskitty-dom/.git 自行追踪。
 # 主仓库 workspace 仍把它作为 cargo member，但版本控制层面已剥离。
 crates/muskitty-dom/

@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/muskitty-html5-parser",
-    "crates/muskitty-html5-tokenizer",
     "crates/muskitty-dom",
     "crates/muskitty-css",
     # 未来成员预留:
