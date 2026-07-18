@@ -481,9 +481,8 @@ impl CssTokenizer {
         // §4.3.4 L1053-1066: url( special case
         if name.eq_ignore_ascii_case("url") && self.peek(0) == Some('(') {
             self.consume(); // consume `(`
-            // §4.3.4 L1056-1057: while next two are whitespace, consume one
-            while self.peek(0).is_some_and(is_whitespace)
-                && self.peek(1).is_some_and(is_whitespace)
+                            // §4.3.4 L1056-1057: while next two are whitespace, consume one
+            while self.peek(0).is_some_and(is_whitespace) && self.peek(1).is_some_and(is_whitespace)
             {
                 self.consume();
             }
@@ -629,7 +628,7 @@ impl CssTokenizer {
     /// This method reconsumes back to `u` before dispatching.
     fn consume_u_or_unicode_range(&mut self) -> Token {
         self.reconsume(); // pos back to `u`/`U`
-        // §4.3.1 L963-967: unicode_ranges_allowed && would-start-unicode-range
+                          // §4.3.1 L963-967: unicode_ranges_allowed && would-start-unicode-range
         if self.unicode_ranges_allowed && self.would_start_unicode_range_at(0) {
             return self.consume_a_unicode_range_token();
         }
@@ -1490,21 +1489,39 @@ mod tests {
     fn number_integer() {
         let tokens = CssTokenizer::collect("42");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Number(Numeric { value: 42.0, is_integer: true }));
+        assert_eq!(
+            tokens[0],
+            Token::Number(Numeric {
+                value: 42.0,
+                is_integer: true
+            })
+        );
     }
 
     #[test]
     fn number_decimal() {
         let tokens = CssTokenizer::collect("3.5");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Number(Numeric { value: 3.5, is_integer: false }));
+        assert_eq!(
+            tokens[0],
+            Token::Number(Numeric {
+                value: 3.5,
+                is_integer: false
+            })
+        );
     }
 
     #[test]
     fn number_signed() {
         let tokens = CssTokenizer::collect("-5");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Number(Numeric { value: -5.0, is_integer: true }));
+        assert_eq!(
+            tokens[0],
+            Token::Number(Numeric {
+                value: -5.0,
+                is_integer: true
+            })
+        );
     }
 
     #[test]
@@ -1512,7 +1529,13 @@ mod tests {
         // §4.3.13: 1e3 → 1.0 * 10^3 = 1000.0, type "number"
         let tokens = CssTokenizer::collect("1e3");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Number(Numeric { value: 1000.0, is_integer: false }));
+        assert_eq!(
+            tokens[0],
+            Token::Number(Numeric {
+                value: 1000.0,
+                is_integer: false
+            })
+        );
     }
 
     #[test]
@@ -1520,58 +1543,100 @@ mod tests {
         // §4.3.13: 1.5e2 → 1.5 * 10^2 = 150.0, type "number"
         let tokens = CssTokenizer::collect("1.5e2");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Number(Numeric { value: 150.0, is_integer: false }));
+        assert_eq!(
+            tokens[0],
+            Token::Number(Numeric {
+                value: 150.0,
+                is_integer: false
+            })
+        );
     }
 
     #[test]
     fn percentage_token() {
         let tokens = CssTokenizer::collect("50%");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Percentage(Numeric { value: 50.0, is_integer: true }));
+        assert_eq!(
+            tokens[0],
+            Token::Percentage(Numeric {
+                value: 50.0,
+                is_integer: true
+            })
+        );
     }
 
     #[test]
     fn dimension_px() {
         let tokens = CssTokenizer::collect("10px");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Dimension(
-            Numeric { value: 10.0, is_integer: true },
-            "px".to_string(),
-        ));
+        assert_eq!(
+            tokens[0],
+            Token::Dimension(
+                Numeric {
+                    value: 10.0,
+                    is_integer: true
+                },
+                "px".to_string(),
+            )
+        );
     }
 
     #[test]
     fn dimension_em() {
         let tokens = CssTokenizer::collect("1.5em");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Dimension(
-            Numeric { value: 1.5, is_integer: false },
-            "em".to_string(),
-        ));
+        assert_eq!(
+            tokens[0],
+            Token::Dimension(
+                Numeric {
+                    value: 1.5,
+                    is_integer: false
+                },
+                "em".to_string(),
+            )
+        );
     }
 
     #[test]
     fn dimension_signed() {
         let tokens = CssTokenizer::collect("-30deg");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Dimension(
-            Numeric { value: -30.0, is_integer: true },
-            "deg".to_string(),
-        ));
+        assert_eq!(
+            tokens[0],
+            Token::Dimension(
+                Numeric {
+                    value: -30.0,
+                    is_integer: true
+                },
+                "deg".to_string(),
+            )
+        );
     }
 
     #[test]
     fn plus_sign_number() {
         let tokens = CssTokenizer::collect("+5");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Number(Numeric { value: 5.0, is_integer: true }));
+        assert_eq!(
+            tokens[0],
+            Token::Number(Numeric {
+                value: 5.0,
+                is_integer: true
+            })
+        );
     }
 
     #[test]
     fn dot_starts_number() {
         let tokens = CssTokenizer::collect(".5");
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0], Token::Number(Numeric { value: 0.5, is_integer: false }));
+        assert_eq!(
+            tokens[0],
+            Token::Number(Numeric {
+                value: 0.5,
+                is_integer: false
+            })
+        );
     }
 
     // ── C-5 tests: §4.3.4 url( special case + §4.3.6 Url + §4.3.15 BadUrl ─
@@ -1680,7 +1745,10 @@ mod tests {
         assert_eq!(tokens[0], Token::Ident("U".to_string()));
         assert_eq!(
             tokens[1],
-            Token::Number(Numeric { value: 1234.0, is_integer: true })
+            Token::Number(Numeric {
+                value: 1234.0,
+                is_integer: true
+            })
         );
     }
 

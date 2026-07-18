@@ -1,16 +1,16 @@
 //! MusKitty CSS Parser
 //!
 //! Implements the CSS Syntax Module Level 3 tokenization and parsing
-//! algorithm.
+//! algorithms.
 //!
 //! # Architecture
 //!
 //! The parser follows the two-stage model described in CSS Syntax §3.1:
-//! 1. **Tokenization** ([`tokenizer`]) — consumes a stream of Unicode code
-//!    points and emits tokens (ident, function, at-keyword, hash, string,
-//!    number, dimension, etc.).
-//! 2. **Tree construction** (deferred to Phase 2 sub-stage 4, CSSOM) —
-//!    consumes tokens and builds the stylesheet object model.
+//! 1. **Tokenization** ([`tokenizer`]) — consumes a stream of Unicode
+//!    code points and emits tokens (§4.3, fully implemented).
+//! 2. **Parsing** ([`parser`]) — consumes tokens and produces CSS
+//!    objects: stylesheets, rules, declarations, component values
+//!    (§5, in progress; §5.2 data structures done in CP-1).
 //!
 //! Unlike the HTML tokenizer (which is a state machine with ~80 explicit
 //! states per WHATWG §13.2.5), the CSS tokenizer is a recursive-descent
@@ -27,6 +27,7 @@
 //! - CSS Syntax Module Level 3: <https://drafts.csswg.org/css-syntax-3/>
 //! - WPT CSS test suite: <https://github.com/web-platform-tests/wpt/tree/master/css>
 
+pub mod parser;
 pub mod tokenizer;
 
 use crate::tokenizer::{CssTokenizer, Token, Tokenizer};
