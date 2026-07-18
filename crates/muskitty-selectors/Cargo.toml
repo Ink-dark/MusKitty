@@ -12,6 +12,6 @@ categories = ["parser-implementations", "web-programming"]
 rust-version = "1.82"
 
 [dependencies]
-muskitty-css = { path = "../muskitty-css", version = "0.3.0" }
+muskitty-css = { path = "../muskitty-css", version = "0.4.0" }
 
 [dev-dependencies]
