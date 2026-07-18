@@ -12,13 +12,21 @@
 //!   ComponentValue, Function, SimpleBlock, BlockKind).
 //! - [`token_stream`] — §5.3 "Token Streams" (TokenStream struct +
 //!   8 operations).
+//! - [`algorithms`] — §5.5 "Parser Algorithms" (CP-3 covers
+//!   §5.5.7-§5.5.11; CP-4 will add §5.5.6; CP-5 will add
+//!   §5.5.1-§5.5.5).
 //!
-//! Future batches (CP-3 onward) will add the `algorithms` (§5.5)
-//! and `entry_points` (§5.4) submodules.
+//! Future batches (CP-6 onward) will add the `entry_points` (§5.4)
+//! submodule.
 
+pub mod algorithms;
 pub mod token_stream;
 pub mod types;
 
+pub use algorithms::{
+    consume_a_component_value, consume_a_function, consume_a_list_of_component_values,
+    consume_a_simple_block, consume_a_unicode_range_value,
+};
 pub use token_stream::TokenStream;
 pub use types::{
     AtRule, BlockKind, ComponentValue, Declaration, Function, QualifiedRule, Rule, SimpleBlock,
