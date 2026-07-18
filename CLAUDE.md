@@ -12,10 +12,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo check                          # 检查整个 workspace（必须零 warning）
-cargo check -p muskitty-html-parser  # 只检查 html-parser crate
+cargo check -p muskitty-html5-parser  # 只检查 html-parser crate
 cargo test                           # 运行全部测试
-cargo test -p muskitty-html-parser   # 只跑 html-parser crate 测试
-cargo test -p muskitty-html-parser --lib  # 只跑 lib tests
+cargo test -p muskitty-html5-parser   # 只跑 html-parser crate 测试
+cargo test -p muskitty-html5-parser --lib  # 只跑 lib tests
 cargo test --test html5lib_tokenizer -- --nocapture  # html5lib 套件
 ```
 
@@ -25,7 +25,7 @@ cargo test --test html5lib_tokenizer -- --nocapture  # html5lib 套件
 muskitty/                          (Cargo workspace root)
   Cargo.toml                       (workspace 定义)
   crates/
-    muskitty-html-parser/          # WHATWG HTML parser (tokenizer + tree construction)
+    muskitty-html5-parser/          # WHATWG HTML parser (tokenizer + tree construction)
       src/
         tokenizer/                 # §13.2.5 tokenization 状态机
           types.rs                 # Token, TagToken, DoctypeToken, State

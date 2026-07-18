@@ -21,7 +21,7 @@ MusKitty 是从零用 Rust 重写的浏览器核心模块集合。当前 HTML to
 ## 二、当前状态分析
 
 ### 已完成
-- `crates/muskitty-html-parser/src/tokenizer/`：完整实现 WHATWG §13.2.5 状态机，80 个状态
+- `crates/muskitty-html5-parser/src/tokenizer/`：完整实现 WHATWG §13.2.5 状态机，80 个状态
   - `types.rs`：Token/TagToken/DoctypeToken/State 类型定义
   - `trait_def.rs`：Tokenizer trait（支持 reentrancy：set_state/reset）
   - `impls.rs`：~3900 行状态机实现，html5lib 通过率 99.5%
@@ -29,9 +29,9 @@ MusKitty 是从零用 Rust 重写的浏览器核心模块集合。当前 HTML to
 - `tests/html5lib_tokenizer.rs` + `tests/data/tokenizer/*.test`：测试套件与 fixture
 
 ### 占位待实现
-- `crates/muskitty-html-parser/src/dom/mod.rs`：仅一行 doc comment
-- `crates/muskitty-html-parser/src/parser/mod.rs`：仅一行 doc comment
-- `crates/muskitty-html-parser/src/error/mod.rs`：仅一行 doc comment
+- `crates/muskitty-html5-parser/src/dom/mod.rs`：仅一行 doc comment
+- `crates/muskitty-html5-parser/src/parser/mod.rs`：仅一行 doc comment
+- `crates/muskitty-html5-parser/src/error/mod.rs`：仅一行 doc comment
 
 ### 遗留问题（32 个 tokenizer 失败）
 - 14 个：属性值 `&` 字符引用（需重构 CharacterReference emit 路径，区分 return_state 上下文）
@@ -40,7 +40,7 @@ MusKitty 是从零用 Rust 重写的浏览器核心模块集合。当前 HTML to
 - 9 个：实体边界、CDATA NUL、RAWTEXT EOF 等零散场景
 
 ### 架构现状
-- Workspace 单成员 `muskitty-html-parser`，无依赖（dev-dep: serde_json）
+- Workspace 单成员 `muskitty-html5-parser`，无依赖（dev-dep: serde_json）
 - Cargo.toml 已预留 5 个未来 crate：dom/css/network/layout/renderer
 - CLAUDE.md 硬约束：Rust stable、零 unsafe、零 C/C++ 依赖、每模块独立 crate、≥80% 测试覆盖、公共 API 必须有 doc comment 引用规范条款
 
@@ -49,9 +49,9 @@ MusKitty 是从零用 Rust 重写的浏览器核心模块集合。当前 HTML to
 ## 三、关键决策
 
 ### 决策 1：DOM 作为独立 crate
-**决定**：新建 `crates/muskitty-dom/` 作为独立 crate，`muskitty-html-parser` 依赖它。
+**决定**：新建 `crates/muskitty-dom/` 作为独立 crate，`muskitty-html5-parser` 依赖它。
 **理由**：CLAUDE.md 明确"每个模块独立 crate"，Cargo.toml 已预留。DOM 类型将被 layout/renderer 等下游层复用，必须与 parser 解耦。
-**影响**：`muskitty-html-parser/src/dom/mod.rs` 的占位将被删除，改为从 `muskitty-dom` re-export 或直接依赖。
+**影响**：`muskitty-html5-parser/src/dom/mod.rs` 的占位将被删除，改为从 `muskitty-dom` re-export 或直接依赖。
 
 ### 决策 2：DOM 完整 API 分子阶段实现
 **决定**："完整 DOM API"作为 DOM 层的总目标，但内部分子阶段推进，每个子阶段独立测试。
@@ -82,7 +82,7 @@ MusKitty 是从零用 Rust 重写的浏览器核心模块集合。当前 HTML to
 ```
 Layer 1: HTML 解析层（当前重点）
   ├─ DOM Core 类型 (muskitty-dom crate)
-  ├─ Tree Construction (muskitty-html-parser/parser)
+  ├─ Tree Construction (muskitty-html5-parser/parser)
   ├─ Insertion Modes × 13
   ├─ 关键算法 (adoption agency, foster parenting)
   ├─ html5lib tree construction 测试通过
@@ -163,14 +163,14 @@ Layer 5: Network 层 (muskitty-network crate，可与上述并行)
    - 建树、插入、删除、替换的规范化测试
    - 覆盖率目标 ≥80%
 
-7. **更新 `muskitty-html-parser`**
+7. **更新 `muskitty-html5-parser`**
    - `Cargo.toml` 增加 `muskitty-dom = { path = "../muskitty-dom" }`
    - 删除 `src/dom/mod.rs` 占位，从 `muskitty-dom` re-export 或直接引用
 
 **验证**：
 - `cargo check -p muskitty-dom` 零 warning
 - `cargo test -p muskitty-dom` 全绿，覆盖率 ≥80%
-- `cargo check -p muskitty-html-parser` 仍通过（依赖未使用，不破坏现状）
+- `cargo check -p muskitty-html5-parser` 仍通过（依赖未使用，不破坏现状）
 
 ---
 
@@ -182,7 +182,7 @@ Layer 5: Network 层 (muskitty-network crate，可与上述并行)
 
 **具体改动**：
 
-1. **Parser 类型** `crates/muskitty-html-parser/src/parser/mod.rs`
+1. **Parser 类型** `crates/muskitty-html5-parser/src/parser/mod.rs`
    - `HtmlTreeConstructor` 结构体：
      - `tokenizer: HtmlTokenizer`（持有，可暂停/恢复）
      - `document: Rc<RefCell<Document>>`（输出根）
@@ -198,15 +198,15 @@ Layer 5: Network 层 (muskitty-network crate，可与上述并行)
    - `step(&mut self)`：取一个 token，按 insertion_mode 分发到 handler
    - `consume_token(token)`：主入口，由 tokenizer next_token 喂入
 
-2. **InsertionMode 枚举** `crates/muskitty-html-parser/src/parser/insertion_mode.rs`
+2. **InsertionMode 枚举** `crates/muskitty-html5-parser/src/parser/insertion_mode.rs`
    - 13 个变体：Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody / Text / InTable / InTableText / InCaption / InColumnGroup / InTableBody / InRow / InCell / InSelect / InSelectInTable / InTemplate / AfterBody / InFrameset / AfterFrameset / AfterAfterBody / AfterAfterFrameset
    - 实际变体数按 §13.2.6.1 列表为准
 
-3. **模式分发器** `crates/muskitty-html-parser/src/parser/dispatch.rs`
+3. **模式分发器** `crates/muskitty-html5-parser/src/parser/dispatch.rs`
    - `match insertion_mode { ... }` 分发到各 handler 函数
    - 每个 handler 接收 `&mut HtmlTreeConstructor` 和 `&Token`
 
-4. **辅助算法骨架** `crates/muskitty-html-parser/src/parser/helpers.rs`
+4. **辅助算法骨架** `crates/muskitty-html5-parser/src/parser/helpers.rs`
    - `insert_element(name, attrs)` — §13.2.6.2 创建元素并压栈
    - `insert_character(c)` — 字符插入（区分 foster parenting）
    - `insert_comment(data)` — 注释插入
@@ -214,11 +214,11 @@ Layer 5: Network 层 (muskitty-network crate，可与上述并行)
    - `adjust_foreign_attributes()` — §13.2.6.5
    - 这些先建签名 + 最小实现，后续 Phase 3/4 补全
 
-5. **Error 收集** `crates/muskitty-html-parser/src/error/mod.rs`
+5. **Error 收集** `crates/muskitty-html5-parser/src/error/mod.rs`
    - `ParseError` 枚举（按 §13.2.6 定义的 parse error 类型）
    - `errors: Vec<ParseError>` 字段加入 parser
 
-6. **顶层入口** `crates/muskitty-html-parser/src/lib.rs`
+6. **顶层入口** `crates/muskitty-html5-parser/src/lib.rs`
    - `parse(input: &str) -> Rc<RefCell<Document>>`：构造 tokenizer + parser，跑完整 token 流，返回 Document
 
 **验证**：
@@ -281,12 +281,12 @@ Layer 5: Network 层 (muskitty-network crate，可与上述并行)
 
 **具体改动**：
 
-1. **Adoption Agency Algorithm** `crates/muskitty-html-parser/src/parser/adoption.rs`
+1. **Adoption Agency Algorithm** `crates/muskitty-html5-parser/src/parser/adoption.rs`
    - 实现 §13.2.6.4.7 完整步骤
    - 处理格式化标签的 Noah's Ark case（多个相同格式化元素）
    - 这是 tokenizer→tree construction 阶段最容易出错的算法，需要重点测试
 
-2. **Foster Parenting 完整实现** `crates/muskitty-html-parser/src/parser/helpers.rs`
+2. **Foster Parenting 完整实现** `crates/muskitty-html5-parser/src/parser/helpers.rs`
    - `insert_element` 在 foster parenting 模式下：找到最近 table/row，将元素插入到 table 的父节点中、table 之前的位置
    - 修复 Phase 3 表格批次的骨架实现
 
@@ -302,11 +302,11 @@ Layer 5: Network 层 (muskitty-network crate，可与上述并行)
 
 **具体改动**：
 
-1. **下载 fixture** `crates/muskitty-html-parser/tests/data/tree-construction/`
+1. **下载 fixture** `crates/muskitty-html5-parser/tests/data/tree-construction/`
    - 从 https://github.com/html5lib/html5lib-tests/tree/master/tree-construction 下载
    - 放入测试数据目录
 
-2. **测试 harness** `crates/muskitty-html-parser/tests/html5lib_tree_construction.rs`
+2. **测试 harness** `crates/muskitty-html5-parser/tests/html5lib_tree_construction.rs`
    - 解析 `.test` 文件（JSON 格式：input / output / errors / document-fragment / scripting-enabled）
    - output 格式是 DOM 树的序列化文本，需要实现 DOM 序列化器 `to_string()` 用于比对
    - 支持 `scripting-enabled` flag（影响 template 等处理）

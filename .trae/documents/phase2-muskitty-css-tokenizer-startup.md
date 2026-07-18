@@ -6,7 +6,7 @@
 
 ## 摘要
 
-按 [PROGRESS.md](file:///d:/Muskitty/PROGRESS.md) Phase 2 子阶段 1，建立 `crates/muskitty-css/` 独立 crate 骨架，实现 CSS Syntax Module Level 3 §5 "Tokenizer" 的完整状态机。这是 Phase 2 的第一个 commit batch，对齐 [muskitty-html-parser tokenizer 阶段](file:///d:/Muskitty/crates/muskitty-html-parser/src/tokenizer/) 的工程模板。
+按 [PROGRESS.md](file:///d:/Muskitty/PROGRESS.md) Phase 2 子阶段 1，建立 `crates/muskitty-css/` 独立 crate 骨架，实现 CSS Syntax Module Level 3 §5 "Tokenizer" 的完整状态机。这是 Phase 2 的第一个 commit batch，对齐 [muskitty-html5-parser tokenizer 阶段](file:///d:/Muskitty/crates/muskitty-html5-parser/src/tokenizer/) 的工程模板。
 
 本计划**仅覆盖子阶段 1（CSS Syntax tokenizer）**。子阶段 2–5（选择器 / 值解析 / CSSOM / Cascade）后续各自独立规划。
 
@@ -17,7 +17,7 @@
 - **HTML 解析层 100%**：tokenizer 99.8% (7022/7036)，tree construction 100% (1716/1716)
 - **muskitty-dom crate**：`Rc<RefCell<Node>>` 模型，`ElementData` / `Attribute` / `Namespace` 类型已就位（[src/lib.rs](file:///d:/Muskitty/crates/muskitty-dom/src/lib.rs)）
 - **Phase 2 入场门槛已满足**：Layer 1 通过率 ≥80% ✅，DOM Core API 完整 ✅
-- **工程模板可复刻**：[tokenizer/](file:///d:/Muskitty/crates/muskitty-html-parser/src/tokenizer/) 5 文件结构（mod.rs / types.rs / trait_def.rs / impls.rs / entities.rs），trait+impl 分离，枚举穷尽性 = 规范完整性
+- **工程模板可复刻**：[tokenizer/](file:///d:/Muskitty/crates/muskitty-html5-parser/src/tokenizer/) 5 文件结构（mod.rs / types.rs / trait_def.rs / impls.rs / entities.rs），trait+impl 分离，枚举穷尽性 = 规范完整性
 
 ### 缺失
 
@@ -45,9 +45,9 @@
 
 | 文件 | 内容 | 模板参考 |
 |------|------|---------|
-| [crates/muskitty-css/Cargo.toml](file:///d:/Muskitty/crates/muskitty-css/Cargo.toml) | `name = "muskitty-css"`，edition 2021，零运行时依赖（dev-deps: serde_json） | [html-parser/Cargo.toml](file:///d:/Muskitty/crates/muskitty-html-parser/Cargo.toml) |
+| [crates/muskitty-css/Cargo.toml](file:///d:/Muskitty/crates/muskitty-css/Cargo.toml) | `name = "muskitty-css"`，edition 2021，零运行时依赖（dev-deps: serde_json） | [html-parser/Cargo.toml](file:///d:/Muskitty/crates/muskitty-html5-parser/Cargo.toml) |
 | [crates/muskitty-css/.gitignore](file:///d:/Muskitty/crates/muskitty-css/.gitignore) | `target/` | 同上 |
-| [crates/muskitty-css/src/lib.rs](file:///d:/Muskitty-css/src/lib.rs) | crate root，`pub mod tokenizer;` + 顶层 `parse_stylesheet(input: &str)` 入口（暂返回 `Vec<Token>`） | [html-parser/src/lib.rs](file:///d:/Muskitty/crates/muskitty-html-parser/src/lib.rs) |
+| [crates/muskitty-css/src/lib.rs](file:///d:/Muskitty-css/src/lib.rs) | crate root，`pub mod tokenizer;` + 顶层 `parse_stylesheet(input: &str)` 入口（暂返回 `Vec<Token>`） | [html-parser/src/lib.rs](file:///d:/Muskitty/crates/muskitty-html5-parser/src/lib.rs) |
 
 **修改文件**：
 
@@ -120,7 +120,7 @@ pub enum State {
 
 派生 `Debug, Clone, Copy, PartialEq, Eq`（对齐 html-parser State 约定）。
 
-**CssTokenizer struct**（参考 [html-parser impls.rs](file:///d:/Muskitty/crates/muskitty-html-parser/src/tokenizer/impls.rs) 字段组织）：
+**CssTokenizer struct**（参考 [html-parser impls.rs](file:///d:/Muskitty/crates/muskitty-html5-parser/src/tokenizer/impls.rs) 字段组织）：
 
 ```rust
 pub struct CssTokenizer {
@@ -138,7 +138,7 @@ pub struct CssTokenizer {
 
 ### 3. 状态机实现策略
 
-按 CSS Syntax §5.4 状态顺序实现，每个状态一个 handler 函数，匹配 [html-parser impls.rs](file:///d:/Muskitty/crates/muskitty-html-parser/src/tokenizer/impls.rs) 的 `handle_xxx_state` 命名约定。
+按 CSS Syntax §5.4 状态顺序实现，每个状态一个 handler 函数，匹配 [html-parser impls.rs](file:///d:/Muskitty/crates/muskitty-html5-parser/src/tokenizer/impls.rs) 的 `handle_xxx_state` 命名约定。
 
 **实现顺序**（每批独立 commit，对齐 P3.x 节奏）：
 
@@ -160,7 +160,7 @@ pub struct CssTokenizer {
 
 | 文件 | 内容 |
 |------|------|
-| [crates/muskitty-css/tests/css_syntax_tokenizer.rs](file:///d:/Muskitty/crates/muskitty-css/tests/css_syntax_tokenizer.rs) | 内联单元测试 + 整合测试，对齐 [html5lib_tokenizer.rs](file:///d:/Muskitty/crates/muskitty-html-parser/tests/html5lib_tokenizer.rs) 的 harness 形态 |
+| [crates/muskitty-css/tests/css_syntax_tokenizer.rs](file:///d:/Muskitty/crates/muskitty-css/tests/css_syntax_tokenizer.rs) | 内联单元测试 + 整合测试，对齐 [html5lib_tokenizer.rs](file:///d:/Muskitty/crates/muskitty-html5-parser/tests/html5lib_tokenizer.rs) 的 harness 形态 |
 
 **测试数据**：
 

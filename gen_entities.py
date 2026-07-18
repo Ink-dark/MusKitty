@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate muskitty-html-parser/src/tokenizer/entities.rs from WHATWG entities.json"""
+"""Generate muskitty-html5-parser/src/tokenizer/entities.rs from WHATWG entities.json"""
 import json, sys
 
 with open('temp_entities.json', encoding='utf-8') as f:
@@ -55,9 +55,9 @@ lines.append('        .ok()')
 lines.append('        .map(|idx| ENTITIES[idx].1)')
 lines.append('}')
 
-with open('crates/muskitty-html-parser/src/tokenizer/entities.rs', 'w', encoding='utf-8') as f:
+with open('crates/muskitty-html5-parser/src/tokenizer/entities.rs', 'w', encoding='utf-8') as f:
     f.write('\n'.join(lines))
 
 multi = sum(1 for _, c in entries if len(c) > 1)
 print(f'✅ Generated {len(entries)} entity entries ({multi} multi-char)')
-print(f'   Output: crates/muskitty-html-parser/src/tokenizer/entities.rs')
+print(f'   Output: crates/muskitty-html5-parser/src/tokenizer/entities.rs')

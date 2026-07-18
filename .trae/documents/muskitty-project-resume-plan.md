@@ -28,23 +28,23 @@
 
 | 类别 | 文件 | 说明 |
 |------|------|------|
-| **tokenizer 修复** | `crates/muskitty-html-parser/src/tokenizer/impls.rs` (+400/-238) | 上一轮 99.5% 通过率的 bug 修复，含 EndTagOpen/AttributeName/Comment 等多处规范合规修正 |
-| **tokenizer 测试** | `crates/muskitty-html-parser/tests/html5lib_tokenizer.rs` (+6/-6) | test harness 的 self_closing 读取修正等 |
+| **tokenizer 修复** | `crates/muskitty-html5-parser/src/tokenizer/impls.rs` (+400/-238) | 上一轮 99.5% 通过率的 bug 修复，含 EndTagOpen/AttributeName/Comment 等多处规范合规修正 |
+| **tokenizer 测试** | `crates/muskitty-html5-parser/tests/html5lib_tokenizer.rs` (+6/-6) | test harness 的 self_closing 读取修正等 |
 | **DOM crate** | `crates/muskitty-dom/**` (全部新增) | Phase 1 完整实现：node/element/text/comment/document/document_type/document_fragment/attribute/error/tree + 24 个测试 |
 | **workspace 配置** | `Cargo.toml` (+1/-1) | 加入 muskitty-dom 到 members |
 | **项目文档** | `docs/**`, `.trae/**` | 审查报告、skill 定义、roadmap |
-| **调试残留** | `crates/muskitty-html-parser/test_failures.txt` | 应删除 |
+| **调试残留** | `crates/muskitty-html5-parser/test_failures.txt` | 应删除 |
 
 ### 2.3 Phase 1 实现状态
 - `cargo check -p muskitty-dom`：✅ 已通过（零 warning）
 - `cargo test -p muskitty-dom`：⏳ **未运行**（24 个测试待验证）
-- `muskitty-html-parser` 依赖 `muskitty-dom`：❌ **未添加**（Cargo.toml `[dependencies]` 仍为空）
+- `muskitty-html5-parser` 依赖 `muskitty-dom`：❌ **未添加**（Cargo.toml `[dependencies]` 仍为空）
 - Phase 1 commit：❌ **未提交**
 
 ### 2.4 关键问题
 1. **多类工作混合未提交**：tokenizer 修复、DOM crate、文档混在一起，违反 CLAUDE.md 的"surgical changes + 每子任务一 commit"纪律
 2. **Phase 1 未验证**：测试未跑，无法确认 DOM 实现正确性
-3. **依赖未接通**：muskitty-html-parser 还不能使用 muskitty-dom 的类型
+3. **依赖未接通**：muskitty-html5-parser 还不能使用 muskitty-dom 的类型
 
 ---
 
@@ -59,15 +59,15 @@ cargo test -p muskitty-dom
 - **成功标准**：所有测试通过，零 warning
 
 ### 步骤 2：删除调试残留
-- 删除 `crates/muskitty-html-parser/test_failures.txt`（调试产物，不应入库）
+- 删除 `crates/muskitty-html5-parser/test_failures.txt`（调试产物，不应入库）
 
-### 步骤 3：接通 muskitty-html-parser → muskitty-dom 依赖
-- 编辑 `crates/muskitty-html-parser/Cargo.toml`：
+### 步骤 3：接通 muskitty-html5-parser → muskitty-dom 依赖
+- 编辑 `crates/muskitty-html5-parser/Cargo.toml`：
   ```toml
   [dependencies]
   muskitty-dom = { path = "../muskitty-dom" }
   ```
-- 验证：`cargo check -p muskitty-html-parser` 仍通过（依赖未使用，不破坏现状）
+- 验证：`cargo check -p muskitty-html5-parser` 仍通过（依赖未使用，不破坏现状）
 
 ### 步骤 4：全 workspace 验证
 ```bash
@@ -90,8 +90,8 @@ handling, Comment state '<'/'!'/'-' appending, BeforeAttributeName
 '=' branch, and EOF branch emissions per WHATWG §13.2.5.
 ```
 **文件**：
-- `crates/muskitty-html-parser/src/tokenizer/impls.rs`
-- `crates/muskitty-html-parser/tests/html5lib_tokenizer.rs`
+- `crates/muskitty-html5-parser/src/tokenizer/impls.rs`
+- `crates/muskitty-html5-parser/tests/html5lib_tokenizer.rs`
 
 ### Commit 2：DOM Core crate
 ```
@@ -107,7 +107,7 @@ remove/replace tree operations (§4.2.6) and read-only traversal API.
 - `crates/muskitty-dom/Cargo.toml`
 - `crates/muskitty-dom/src/**`（全部源文件）
 - `crates/muskitty-dom/tests/node.rs`
-- `crates/muskitty-html-parser/Cargo.toml`（添加依赖）
+- `crates/muskitty-html5-parser/Cargo.toml`（添加依赖）
 
 ### Commit 3：项目文档与 skill
 ```
@@ -147,12 +147,12 @@ WHATWG HTML §13.2.6 Tree construction
 ### 5.3 具体改动（按实现顺序）
 
 #### 5.3.1 InsertionMode 枚举
-- 文件：`crates/muskitty-html-parser/src/parser/insertion_mode.rs`
+- 文件：`crates/muskitty-html5-parser/src/parser/insertion_mode.rs`
 - 内容：按 §13.2.6.1 定义全部 insertion mode 变体
 - 验证：编译通过
 
 #### 5.3.2 Parser 主体
-- 文件：`crates/muskitty-html-parser/src/parser/mod.rs`（替换占位）
+- 文件：`crates/muskitty-html5-parser/src/parser/mod.rs`（替换占位）
 - `HtmlTreeConstructor` 结构体字段：
   - `document: Rc<RefCell<Node>>`（输出根，来自 muskitty-dom）
   - `open_elements: Vec<Rc<RefCell<Node>>>`
@@ -167,12 +167,12 @@ WHATWG HTML §13.2.6 Tree construction
 - `step(&mut self, token: Token)`：按 insertion_mode 分发
 
 #### 5.3.3 模式分发器
-- 文件：`crates/muskitty-html-parser/src/parser/dispatch.rs`
+- 文件：`crates/muskitty-html5-parser/src/parser/dispatch.rs`
 - `match insertion_mode { ... }` 分发到各 handler
 - 每个模式 handler 先建空骨架（`match token { _ => todo!() }`）
 
 #### 5.3.4 辅助算法骨架
-- 文件：`crates/muskitty-html-parser/src/parser/helpers.rs`
+- 文件：`crates/muskitty-html5-parser/src/parser/helpers.rs`
 - 签名 + 最小实现：
   - `insert_element(name, attrs)` — 创建元素并压栈
   - `insert_character(c)` — 字符插入
@@ -180,12 +180,12 @@ WHATWG HTML §13.2.6 Tree construction
   - `reconstruct_active_formatting_elements()` — 先空实现
 
 #### 5.3.5 Error 模块
-- 文件：`crates/muskitty-html-parser/src/error/mod.rs`（替换占位）
+- 文件：`crates/muskitty-html5-parser/src/error/mod.rs`（替换占位）
 - `ParseError` 枚举（按 §13.2.6 定义的 parse error 类型）
 - parser 增加 `errors: Vec<ParseError>` 字段
 
 #### 5.3.6 顶层入口
-- 文件：`crates/muskitty-html-parser/src/lib.rs`
+- 文件：`crates/muskitty-html5-parser/src/lib.rs`
 - 新增 `pub fn parse(input: &str) -> Rc<RefCell<Node>>`
   - 构造 tokenizer + parser
   - 跑完整 token 流
@@ -279,7 +279,7 @@ Phase 2 完成后，按 `muskitty-browser-roadmap.md` 第五节执行：
 
 ### 决策
 1. **提交顺序**：tokenizer 修复 → DOM crate → 文档 → roadmap（按依赖关系）
-2. **DOM 占位处理**：删除 `muskitty-html-parser/src/dom/mod.rs`，从 `muskitty-dom` re-export
+2. **DOM 占位处理**：删除 `muskitty-html5-parser/src/dom/mod.rs`，从 `muskitty-dom` re-export
 3. **Phase 2 粒度**：骨架一个 commit，不拆分（各 handler 空骨架不算独立子任务）
 
 ---
@@ -288,7 +288,7 @@ Phase 2 完成后，按 `muskitty-browser-roadmap.md` 第五节执行：
 
 1. `cargo test -p muskitty-dom` → 全绿
 2. 删除 `test_failures.txt`
-3. 编辑 `muskitty-html-parser/Cargo.toml` 添加依赖
+3. 编辑 `muskitty-html5-parser/Cargo.toml` 添加依赖
 4. `cargo check`（整个 workspace）→ 零 warning
 5. `cargo test`（整个 workspace）→ 全绿
 6. 按"提交策略"第四节执行 4 个 commit
