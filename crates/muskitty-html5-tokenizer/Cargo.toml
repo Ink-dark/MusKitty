@@ -1,0 +1,18 @@
+[package]
+name = "muskitty-html5-tokenizer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+license = "Apache-2.0"
+description = "WHATWG HTML5 tokenizer (§13.2.5) extracted from muskitty-html5-parser"
+repository = "https://github.com/muskitty-dev/muskitty-html5-tokenizer"
+homepage = "https://github.com/muskitty-dev"
+documentation = "https://docs.rs/muskitty-html5-tokenizer"
+keywords = ["html", "html5", "tokenizer", "whatwg", "parser"]
+categories = ["parser-implementations", "web-programming"]
+authors = ["MusCat / MusKitty Bit-Torch Community"]
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1"
