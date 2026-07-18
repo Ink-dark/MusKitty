@@ -3,6 +3,7 @@ members = [
     "crates/muskitty-html5-parser",
     "crates/muskitty-dom",
     "crates/muskitty-css",
+    "crates/muskitty-selectors",
     # 未来成员预留:
     # "crates/muskitty-network",
     # "crates/muskitty-layout",
