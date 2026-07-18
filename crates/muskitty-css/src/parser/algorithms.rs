@@ -4,11 +4,13 @@
 //! Level 3 §5.5. This module covers:
 //! - CP-3 (lower-level algorithms): §5.5.7-§5.5.11.
 //! - CP-4 (declaration algorithms): §5.5.6.
-//!
-//! CP-5 will add §5.5.1-§5.5.5 (stylesheet/rule/block algorithms).
+//! - CP-5 (stylesheet/rule/block algorithms): §5.5.1-§5.5.5.
 
 use super::token_stream::TokenStream;
-use super::types::{BlockKind, ComponentValue, Declaration, Function, SimpleBlock};
+use super::types::{
+    AtRule, BlockKind, ComponentValue, Declaration, Function, ParseError, QualifiedRule, Rule,
+    SimpleBlock,
+};
 use crate::tokenizer::Token;
 
 /// §5.5.8 (L2776-2796) Consume a component value.
@@ -352,4 +354,292 @@ fn has_top_level_curly_block_with_other_values(value: &[ComponentValue]) -> bool
         }
     }
     has_curly_block && has_other
+}
+
+// ─── §5.5.1-§5.5.5 Stylesheet/rule/block algorithms ──────────────────
+
+/// §5.5.1 (L2223-2279) Consume a stylesheet's contents.
+///
+/// Repeatedly process input:
+/// - whitespace / CDO / CDC → discard.
+/// - EOF → return rules.
+/// - at-keyword → consume_an_at_rule; if `Some`, append.
+/// - else → consume_a_qualified_rule; if `Some(rule)`, append.
+pub fn consume_a_stylesheets_contents(input: &mut TokenStream) -> Vec<Rule> {
+    let mut rules = Vec::new();
+    loop {
+        match input.next_token() {
+            Token::Whitespace | Token::Cdo | Token::Cdc => {
+                input.discard_token();
+            }
+            Token::Eof => return rules,
+            Token::AtKeyword(_) => {
+                if let Some(rule) = consume_an_at_rule(input, false) {
+                    rules.push(Rule::AtRule(rule));
+                }
+            }
+            _ => {
+                if let Ok(Some(rule)) = consume_a_qualified_rule(input, None, false) {
+                    rules.push(Rule::QualifiedRule(rule));
+                }
+            }
+        }
+    }
+}
+
+/// §5.5.2 (L2281-2337) Consume an at-rule.
+///
+/// `nested`: when true, an unbalanced `}-token` returns the rule
+/// without consuming (caller will close the block); when false,
+/// `}-token` is part of the prelude.
+pub fn consume_an_at_rule(input: &mut TokenStream, nested: bool) -> Option<AtRule> {
+    let name = match input.consume_token() {
+        Token::AtKeyword(name) => name,
+        _ => unreachable!("consume_an_at_rule called on non-at-keyword"),
+    };
+    let mut rule = AtRule {
+        name,
+        prelude: Vec::new(),
+        declarations: None,
+        child_rules: None,
+    };
+    loop {
+        match input.next_token() {
+            Token::Semicolon | Token::Eof => {
+                input.discard_token();
+                return Some(rule);
+            }
+            Token::CloseBrace => {
+                if nested {
+                    // §5.5.2 L2307-2310: nested → return rule (caller
+                    // handles the closing brace).
+                    return Some(rule);
+                }
+                // §5.5.2 L2313-2316: non-nested → consume to prelude
+                // (parse error, but tolerated).
+                let t = input.consume_token();
+                rule.prelude.push(ComponentValue::PreservedToken(t));
+            }
+            Token::OpenBrace => {
+                // §5.5.2 L2317-2331: consume_a_block → split into
+                // declarations + child rules.
+                let block = consume_a_block(input);
+                let (decls, rules) = split_block_contents(block);
+                rule.declarations = Some(decls);
+                rule.child_rules = Some(rules);
+                return Some(rule);
+            }
+            _ => {
+                // §5.5.2 L2333-2336: anything else → consume a
+                // component value, append to prelude.
+                rule.prelude.push(consume_a_component_value(input));
+            }
+        }
+    }
+}
+
+/// §5.5.3 (L2340-2466) Consume a qualified rule.
+///
+/// `stop_token`: optional token that aborts (returns `Ok(None)`).
+/// `nested`: passed down to consume_a_block's contents (controls
+/// `}-token` handling in nested contexts).
+///
+/// # Return values
+///
+/// - `Ok(Some(rule))` — rule successfully consumed.
+/// - `Ok(None)` — "return nothing" (e.g. EOF or stop_token).
+/// - `Err(ParseError)` — "invalid rule error" (e.g. custom-property-in-prelude
+///   at top level after consuming the block).
+pub fn consume_a_qualified_rule(
+    input: &mut TokenStream,
+    stop_token: Option<Token>,
+    nested: bool,
+) -> Result<Option<QualifiedRule>, ParseError> {
+    let mut rule = QualifiedRule {
+        prelude: Vec::new(),
+        declarations: Vec::new(),
+        child_rules: Vec::new(),
+    };
+    loop {
+        let next = input.next_token();
+        // §5.5.3 L2355-2359: EOF or stop_token → parse error, return
+        // nothing.
+        if matches!(next, Token::Eof) {
+            return Ok(None);
+        }
+        if stop_token.as_ref().is_some_and(|s| *s == next) {
+            return Ok(None);
+        }
+        match next {
+            Token::CloseBrace => {
+                // §5.5.3 L2361-2368: parse error.
+                if nested {
+                    return Ok(None);
+                }
+                let t = input.consume_token();
+                rule.prelude.push(ComponentValue::PreservedToken(t));
+            }
+            Token::OpenBrace => {
+                // §5.5.3 L2370-2460.
+                // §5.5.3 L2372-2383: check if prelude looks like
+                // `--<ident> :` (custom-property-like). If so:
+                //   nested → consume remnants of bad declaration, return
+                //           nothing.
+                //   non-nested → consume a block, return invalid rule
+                //                error.
+                if looks_like_custom_property_in_prelude(&rule.prelude) {
+                    if nested {
+                        consume_the_remnants_of_a_bad_declaration(input, true);
+                        return Ok(None);
+                    } else {
+                        let _ = consume_a_block(input);
+                        return Err(ParseError); // invalid rule error
+                    }
+                }
+                let block = consume_a_block(input);
+                let (decls, rules) = split_block_contents(block);
+                rule.declarations = decls;
+                rule.child_rules = rules;
+                return Ok(Some(rule));
+            }
+            _ => {
+                // §5.5.3 L2462-2465: anything else → consume a
+                // component value, append to prelude.
+                rule.prelude.push(consume_a_component_value(input));
+            }
+        }
+    }
+}
+
+/// §5.5.4 (L2469-2484) Consume a block.
+///
+/// Precondition: next token is `{-token`. Discard it, consume block
+/// contents, discard `}-token (or EOF), return the contents.
+pub fn consume_a_block(input: &mut TokenStream) -> BlockContents {
+    debug_assert!(matches!(input.next_token(), Token::OpenBrace));
+    input.discard_token();
+    let contents = consume_a_blocks_contents(input);
+    // §5.5.4 L2481: discard the closing `}-token (or EOF if implicit).
+    input.discard_token();
+    contents
+}
+
+/// §5.5.5 (L2486-2636) Consume a block's contents.
+///
+/// Returns a list of rules and lists-of-declarations (modeled as
+/// [`BlockContents`] carrying `Vec<Declaration>` and `Vec<Rule>`).
+/// Algorithm:
+/// - whitespace / `;` → discard.
+/// - EOF / `}` → return.
+/// - at-keyword → flush decls into rules (as `Rule::Declarations`),
+///   then `consume_an_at_rule(nested=true)`.
+/// - else → mark; `consume_a_declaration(nested=true)`; if
+///   `Some(decl)`, append to decls and discard mark. Otherwise
+///   `restore_mark`, then `consume_a_qualified_rule(nested=true,
+///   stop=`;`)`; on `Ok(Some(rule))`, flush decls to rules, append
+///   rule; on `Err(())`, flush decls to rules; on `Ok(None)`, do
+///   nothing.
+pub fn consume_a_blocks_contents(input: &mut TokenStream) -> BlockContents {
+    let mut rules: Vec<Rule> = Vec::new();
+    let mut decls: Vec<Declaration> = Vec::new();
+    loop {
+        match input.next_token() {
+            Token::Whitespace | Token::Semicolon => {
+                input.discard_token();
+            }
+            Token::Eof | Token::CloseBrace => {
+                // §5.5.5 L2514-2517: end of block — flush decls.
+                if !decls.is_empty() {
+                    rules.push(Rule::Declarations(std::mem::take(&mut decls)));
+                }
+                return BlockContents {
+                    decls: Vec::new(),
+                    rules,
+                };
+            }
+            Token::AtKeyword(_) => {
+                // §5.5.5 L2519-2528: at-keyword flushes decls.
+                if !decls.is_empty() {
+                    rules.push(Rule::Declarations(std::mem::take(&mut decls)));
+                }
+                if let Some(at_rule) = consume_an_at_rule(input, true) {
+                    rules.push(Rule::AtRule(at_rule));
+                }
+            }
+            _ => {
+                // §5.5.5 L2530-2562: mark + declaration/rule ambiguity.
+                input.mark();
+                if let Some(decl) = consume_a_declaration(input, true) {
+                    decls.push(decl);
+                    input.discard_mark();
+                } else {
+                    input.restore_mark();
+                    match consume_a_qualified_rule(input, Some(Token::Semicolon), true) {
+                        Ok(Some(rule)) => {
+                            // §5.5.5 L2556-2561: rule returned.
+                            if !decls.is_empty() {
+                                rules.push(Rule::Declarations(std::mem::take(&mut decls)));
+                            }
+                            rules.push(Rule::QualifiedRule(rule));
+                        }
+                        Ok(None) => {
+                            // §5.5.5 L2546-2547: "If nothing was
+                            // returned, do nothing."
+                        }
+                        Err(ParseError) => {
+                            // §5.5.5 L2549-2554: invalid rule error.
+                            if !decls.is_empty() {
+                                rules.push(Rule::Declarations(std::mem::take(&mut decls)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Result of `consume_a_block` / `consume_a_blocks_contents`. Combines
+/// a list of declarations (possibly empty) and a list of child rules.
+///
+/// Note: when `consume_a_blocks_contents` returns, the declarations are
+/// always empty — any pending decls have been flushed into `rules` as
+/// `Rule::Declarations` variants (§5.5.5 L2514-2562). The `decls`
+/// field is kept for forward-compatibility with future CSSOM
+/// integration that may want a separate declaration list.
+#[derive(Debug, Clone, Default)]
+pub struct BlockContents {
+    pub decls: Vec<Declaration>,
+    pub rules: Vec<Rule>,
+}
+
+/// Split block contents from CP-5's `consume_a_block` into the
+/// AtRule / QualifiedRule's expected shape:
+///   - declarations → `Some(decls)` for AtRule, `decls` field for
+///     QualifiedRule
+///   - rules → `Some(rules)` for AtRule, `child_rules` field for
+///     QualifiedRule
+fn split_block_contents(block: BlockContents) -> (Vec<Declaration>, Vec<Rule>) {
+    (block.decls, block.rules)
+}
+
+/// §5.5.3 L2372-2383: Detect whether a qualified rule's prelude
+/// looks like `--<ident> :` (a custom property declaration
+/// masquerading as a rule). The first two non-whitespace tokens of
+/// the prelude must be:
+///   - Ident starting with `--`
+///   - Colon
+fn looks_like_custom_property_in_prelude(prelude: &[ComponentValue]) -> bool {
+    let mut iter = prelude
+        .iter()
+        .filter(|v| !matches!(v, ComponentValue::PreservedToken(Token::Whitespace)));
+    let first = iter.next();
+    let second = iter.next();
+    matches!(
+        (first, second),
+        (
+            Some(ComponentValue::PreservedToken(Token::Ident(name))),
+            Some(ComponentValue::PreservedToken(Token::Colon))
+        ) if name.starts_with("--")
+    )
 }

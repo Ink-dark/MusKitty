@@ -130,3 +130,14 @@ pub enum BlockKind {
     /// `)-token`.
     Paren,
 }
+
+/// Error returned by parser algorithms when an explicit "parse error"
+/// path is taken per WHATWG §5.5 (e.g. `consume_a_qualified_rule`'s
+/// "parse error: return a syntax error" step at L2330).
+///
+/// This is a marker type — it carries no diagnostic payload because
+/// the WHATWG algorithms themselves do not specify any. Higher-level
+/// callers (CSSOM) decide whether to drop the result, log it, or
+/// surface a structured error.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ParseError;
