@@ -1,16 +1,12 @@
-//! CSS Syntax tokenizer types and trait.
+//! CSS Syntax tokenizer — re-export shim.
 //!
-//! Implements the tokenization stage of the CSS Syntax Module Level 3
-//! (§4.3 "Tokenizer Algorithms").
+//! The tokenizer implementation has been extracted into the standalone
+//! `muskitty-css-tokenizer` crate (independent git repository, published
+//! to crates.io). This module re-exports the public API so that existing
+//! `crate::tokenizer::*` references inside `muskitty-css` continue to
+//! resolve without modification.
 //!
-//! The tokenizer consumes a stream of Unicode code points (after §5.3
-//! preprocessing) and emits [`Token`]s. These tokens are consumed by the
-//! (future) tree construction stage to build the CSSOM.
+//! See `crates/muskitty-css-tokenizer/` for the implementation.
+//! Spec: CSS Syntax Module Level 3 §4.3 "Tokenizer Algorithms".
 
-mod impls;
-mod trait_def;
-mod types;
-
-pub use impls::CssTokenizer;
-pub use trait_def::Tokenizer;
-pub use types::{HashType, Numeric, State, Token};
+pub use muskitty_css_tokenizer::{CssTokenizer, HashType, Numeric, State, Token, Tokenizer};

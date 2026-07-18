@@ -32,18 +32,25 @@ pub struct SelectorList(pub Vec<ComplexSelector>);
 /// separated by combinators.
 ///
 /// Storage is rightmost-first: `units[0]` is the subject (rightmost
-/// compound selector), `units[1]` is the compound to its left, etc.
-/// The combinator on each unit links it to the unit on its left, i.e.
-/// to `units[idx+1]`. The rightmost unit always has `combinator ==
-/// None`.
+/// compound selector in source order), `units[1]` is the compound to
+/// its left, ..., `units[len-1]` is the leftmost compound in source
+/// order. The combinator on `units[idx]` links it to the next
+/// leftward unit `units[idx+1]` and is stored on the rightward unit
+/// (i.e. on `units[idx]`, the unit closer to the subject). The
+/// leftmost unit in source order (`units[len-1]`) always has
+/// `combinator == None` because there is no further-left unit to link
+/// to; the subject (`units[0]`) carries the combinator that links it
+/// to `units[1]` when the complex selector has more than one unit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComplexSelector {
     pub units: Vec<ComplexSelectorUnit>,
 }
 
 /// A compound selector paired with the combinator that links it to
-/// the unit on its left (i.e. to `units[idx+1]` in the parent
-/// [`ComplexSelector`]). The rightmost unit has `combinator == None`.
+/// the next leftward unit (`units[idx+1]` in the parent
+/// [`ComplexSelector`]). The leftmost unit in source order
+/// (`units[len-1]`) has `combinator == None`; the subject (`units[0]`)
+/// carries the combinator linking it to `units[1]` when present.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComplexSelectorUnit {
     pub compound: CompoundSelector,
