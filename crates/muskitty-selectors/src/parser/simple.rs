@@ -1,5 +1,5 @@
 //! Simple-selector parsing (type / universal / class / id / ns-prefix /
-//! attribute).
+//! attribute / pseudo-class / pseudo-element).
 //!
 //! Implements the §3 grammar productions for the basic building blocks
 //! of a compound selector. Per §3 L4679-4699:
@@ -16,15 +16,30 @@
 //! <attr-modifier>      = i | s
 //! ```
 //!
+//! Plus the pseudo-class / pseudo-element productions referenced by
+//! §3 L4684 (`<subclass-selector> = ... | <pseudo-class>`) and §3
+//! L4671 (`<compound-selector> = ... <pseudo-compound-selector>*`):
+//!
+//! ```text
+//! <pseudo-class>       = ':' <ident-token> |
+//!                        ':' <function-token> <declaration-value>? ')'
+//! <pseudo-element>     = '::' <ident-token> [ '(' ... ')' ]?     (modern)
+//!                       | ':'  <ident-token>                      (legacy)
+//! ```
+//!
 //! Spec source: `D:\CSSWG\selectors-4\Overview.md`, §5 L1805-1995
 //! (elemental selectors + namespaces), §6.5 L2376-2462 (class), §6.6
 //! L2463-2533 (id), §6.1 L2023-2135 + §6.2 L2137-2162 + §6.3
-//! L2193-2264 + §6.4 L2266-2313 (attribute), §3 L4679-4699 (grammar).
+//! L2193-2264 + §6.4 L2266-2313 (attribute), §13 L3792-4359
+//! (tree-structural pseudo-classes), §5.4 L1956-1995 (:defined), §8
+//! L2817-3007 (:scope), §14 (pseudo-elements), §3 L4679-4699 (grammar).
 
 use crate::error::SelectorParseError;
+use crate::parser::an_plus_b::parse_an_plus_b;
 use crate::types::{
     AttrMatcher, AttrModifier, AttrValue, AttributeSelector, ClassSelector, IdSelector, NsPrefix,
-    NsPrefixKind, TypeSelector, TypeSelectorName, WqName,
+    NsPrefixKind, PseudoClass, PseudoClassArgument, PseudoElement, TypeSelector, TypeSelectorName,
+    WqName,
 };
 use muskitty_css::parser::TokenStream;
 use muskitty_css::tokenizer::{HashType, Token};
@@ -404,5 +419,339 @@ fn parse_attr_matcher(stream: &mut TokenStream) -> Result<AttrMatcher, SelectorP
             "expected <attr-matcher>, got {:?}",
             other
         ))),
+    }
+}
+
+// ── Pseudo-class / pseudo-element parsing (SP-4) ───────────────────
+
+/// §3 L1245-1306: Known pseudo-class names recognised by this parser.
+///
+/// Pseudo-class names are matched ASCII case-insensitively. Unknown
+/// names produce [`SelectorParseError::UnknownPseudoClass`].
+///
+/// SP-4 scope: tree-structural (§13), :defined (§5.4), :scope (§8),
+/// plus the user-action / resource / display / input / location
+/// pseudo-classes whose matching is stubbed until SP-8.
+const KNOWN_PSEUDO_CLASSES: &[&str] = &[
+    // §13 tree-structural
+    "root",
+    "empty",
+    "first-child",
+    "last-child",
+    "only-child",
+    "first-of-type",
+    "last-of-type",
+    "only-of-type",
+    "nth-child",
+    "nth-last-child",
+    "nth-of-type",
+    "nth-last-of-type",
+    // §5.4
+    "defined",
+    // §8
+    "scope",
+    // §9 user-action states (parse-only; matching stubbed)
+    "hover",
+    "active",
+    "focus",
+    "focus-visible",
+    "focus-within",
+    "playing",
+    "paused",
+    "seeking",
+    "buffering",
+    "stalled",
+    "muted",
+    "volume-locked",
+    // §10 UI element states (parse-only; matching stubbed)
+    "enabled",
+    "disabled",
+    "read-only",
+    "read-write",
+    "placeholder-shown",
+    "default",
+    "checked",
+    "indeterminate",
+    "valid",
+    "invalid",
+    "in-range",
+    "out-of-range",
+    "required",
+    "optional",
+    "blank",
+    // §8 location pseudo-classes (parse-only; matching stubbed)
+    "any-link",
+    "link",
+    "visited",
+    "local-link",
+    "target",
+    "target-within",
+    "current",
+    "past",
+    "future",
+    "host",
+    "host-context",
+];
+
+/// §14 L4476-4535: Pseudo-elements that accept the legacy single-colon
+/// form for backwards compatibility. When the parser encounters
+/// `:name` where `name` is in this list, it produces a
+/// [`PseudoElement`] with `legacy = true` instead of treating it as a
+/// pseudo-class.
+const LEGACY_PSEUDO_ELEMENTS: &[&str] = &["before", "after", "first-line", "first-letter"];
+
+/// §14: Known pseudo-element names. Unknown names produce
+/// [`SelectorParseError::UnknownPseudoElement`].
+fn is_known_pseudo_element(name: &str) -> bool {
+    matches!(
+        name,
+        "before"
+            | "after"
+            | "first-line"
+            | "first-letter"
+            | "selection"
+            | "placeholder"
+            | "marker"
+            | "backdrop"
+            | "file-selector-button"
+            | "spelling-error"
+            | "grammar-error"
+            | "target-text"
+            | "view-transition"
+            | "view-transition-group"
+            | "view-transition-image-pair"
+            | "view-transition-old"
+            | "view-transition-new"
+            | "cue"
+            | "region"
+    )
+}
+
+/// Outcome of attempting to parse a single-colon pseudo-construct.
+///
+/// `:` followed by an ident-token may be either a regular pseudo-class
+/// or a legacy pseudo-element (one of `:before`, `:after`,
+/// `:first-line`, `:first-letter`). The caller ([compound.rs]) uses
+/// the discriminant to decide whether to push the result into
+/// `subclasses` or `pseudo_compounds`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PseudoClassOrLegacy {
+    /// The next token is not `:` — no pseudo-construct here.
+    None,
+    /// A regular pseudo-class (`:name` or `:name(args)`).
+    Class(PseudoClass),
+    /// A legacy pseudo-element written with a single colon (`:before`,
+    /// `:after`, `:first-line`, `:first-letter`). The subclass loop
+    /// terminates after this — pseudo-elements cannot be followed by
+    /// further subclasses.
+    LegacyElement(PseudoElement),
+}
+
+/// §3 L4684 + §13 + §14: Parse an optional pseudo-class or legacy
+/// pseudo-element starting at the current position.
+///
+/// Handles the single-colon form (`:name` or `:name(args)`). The
+/// double-colon form (`::name`) is handled by
+/// [`parse_pseudo_element`]; this function returns
+/// [`PseudoClassOrLegacy::None`] when it sees `::` so the caller can
+/// try the modern-form parser.
+///
+/// # Returns
+///
+/// - `Ok(PseudoClassOrLegacy::None)` — the next token is not `:`, or
+///   it is `::` (modern pseudo-element). The stream is left
+///   unmodified.
+/// - `Ok(PseudoClassOrLegacy::Class(pc))` — a regular pseudo-class was
+///   parsed and consumed.
+/// - `Ok(PseudoClassOrLegacy::LegacyElement(pe))` — a legacy
+///   pseudo-element (`:before` / `:after` / `:first-line` /
+///   `:first-letter`) was parsed and consumed.
+/// - `Err(UnknownPseudoClass)` — `:` is followed by an ident-token
+///   whose name is neither a known pseudo-class nor a legacy
+///   pseudo-element.
+/// - `Err(UnclosedBlock)` — `:name(` is not closed with `)`.
+/// - `Err(InvalidAnPlusB)` — `:nth-child(...)` etc. has a malformed
+///   An+B argument.
+/// - `Err(UnexpectedToken)` — `:` is followed by something other than
+///   an ident-token or function-token.
+pub fn parse_pseudo_class_or_legacy(
+    stream: &mut TokenStream,
+) -> Result<PseudoClassOrLegacy, SelectorParseError> {
+    // Must start with `:`.
+    if !matches!(stream.next_token(), Token::Colon) {
+        return Ok(PseudoClassOrLegacy::None);
+    }
+
+    // Use mark/restore so that on any failure path we rewind to before
+    // the `:` was consumed.
+    stream.mark();
+    stream.discard_token(); // consume `:`
+
+    // `::` indicates a modern pseudo-element; defer to
+    // parse_pseudo_element. Restore so that function sees `::` from
+    // the start.
+    if matches!(stream.next_token(), Token::Colon) {
+        stream.restore_mark();
+        return Ok(PseudoClassOrLegacy::None);
+    }
+
+    let result = match stream.consume_token() {
+        // `:ident` — simple value-less pseudo-class (or legacy
+        // pseudo-element).
+        Token::Ident(name) => {
+            let lower = name.to_ascii_lowercase();
+            // Legacy pseudo-element check takes precedence: `:before`
+            // etc. must be redirected to the pseudo-element path.
+            if LEGACY_PSEUDO_ELEMENTS.iter().any(|&p| p == lower) {
+                stream.discard_mark();
+                return Ok(PseudoClassOrLegacy::LegacyElement(PseudoElement {
+                    name: lower,
+                    legacy: true,
+                }));
+            }
+            // Validate against the known pseudo-class whitelist.
+            if !KNOWN_PSEUDO_CLASSES.iter().any(|&p| p == lower) {
+                stream.restore_mark();
+                return Err(SelectorParseError::UnknownPseudoClass(name));
+            }
+            PseudoClass {
+                name: lower,
+                argument: None,
+            }
+        }
+        // `:function-token ... )` — parameterised pseudo-class.
+        // The `(` was already consumed by the tokenizer when forming
+        // the Function token.
+        Token::Function(name) => {
+            let lower = name.to_ascii_lowercase();
+            // Validate against the known pseudo-class whitelist.
+            if !KNOWN_PSEUDO_CLASSES.iter().any(|&p| p == lower) {
+                stream.restore_mark();
+                return Err(SelectorParseError::UnknownPseudoClass(name));
+            }
+            // Legacy pseudo-elements don't take arguments: `:before(...)`
+            // is invalid.
+            if LEGACY_PSEUDO_ELEMENTS.iter().any(|&p| p == lower) {
+                stream.restore_mark();
+                return Err(SelectorParseError::UnknownPseudoClass(name));
+            }
+            let argument = parse_pseudo_class_argument(stream, &lower)?;
+            // Expect closing `)`.
+            match stream.consume_token() {
+                Token::CloseParen => {}
+                other => {
+                    stream.restore_mark();
+                    return Err(SelectorParseError::UnexpectedToken(format!(
+                        "expected ')' to close :{}(...), got {:?}",
+                        lower, other
+                    )));
+                }
+            }
+            PseudoClass {
+                name: lower,
+                argument: Some(argument),
+            }
+        }
+        other => {
+            stream.restore_mark();
+            return Err(SelectorParseError::UnexpectedToken(format!(
+                "expected pseudo-class name after ':', got {:?}",
+                other
+            )));
+        }
+    };
+
+    stream.discard_mark();
+    Ok(PseudoClassOrLegacy::Class(result))
+}
+
+/// Parse the argument of a parameterised pseudo-class.
+///
+/// Dispatches based on the pseudo-class name:
+/// - `nth-child`, `nth-last-child`, `nth-of-type`, `nth-last-of-type`
+///   → parse an `<an-plus-b>` (§13.5).
+/// - All other known pseudo-classes → preserve the raw token stream
+///   until the closing `)`. SP-5 will replace this with proper
+///   selector-list parsing for `:is` / `:not` / `:where` / `:has`.
+fn parse_pseudo_class_argument(
+    stream: &mut TokenStream,
+    name: &str,
+) -> Result<PseudoClassArgument, SelectorParseError> {
+    if matches!(
+        name,
+        "nth-child" | "nth-last-child" | "nth-of-type" | "nth-last-of-type"
+    ) {
+        let an_plus_b = parse_an_plus_b(stream)?;
+        return Ok(PseudoClassArgument::AnPlusB(an_plus_b));
+    }
+    // Other parameterised pseudo-classes: capture raw component values
+    // until the closing `)`. The closing `)` is left unconsumed for
+    // the caller ([`parse_pseudo_class_or_legacy`]) to verify.
+    let mut tokens = Vec::new();
+    loop {
+        match stream.next_token() {
+            Token::CloseParen => break,
+            Token::Eof => return Err(SelectorParseError::UnclosedBlock),
+            t => {
+                tokens.push(t);
+                stream.discard_token();
+            }
+        }
+    }
+    Ok(PseudoClassArgument::Raw(tokens))
+}
+
+/// §3 L4671 + §14: Parse an optional modern pseudo-element (`::name`).
+///
+/// Handles the double-colon form. The legacy single-colon form
+/// (`:before` etc.) is handled by [`parse_pseudo_class_or_legacy`].
+///
+/// # Returns
+///
+/// - `Ok(Some(PseudoElement))` — a modern pseudo-element was parsed
+///   and consumed. The returned `PseudoElement` has `legacy = false`.
+/// - `Ok(None)` — the next token is not `::`; the stream is left
+///   unmodified.
+/// - `Err(UnknownPseudoElement)` — `::` is followed by an ident-token
+///   whose name is not a known pseudo-element.
+/// - `Err(UnexpectedToken)` — `::` is followed by something other
+///   than an ident-token.
+pub fn parse_pseudo_element(
+    stream: &mut TokenStream,
+) -> Result<Option<PseudoElement>, SelectorParseError> {
+    // Must start with `:` (the first of two).
+    if !matches!(stream.next_token(), Token::Colon) {
+        return Ok(None);
+    }
+    stream.mark();
+    stream.discard_token(); // consume first `:`
+
+    // Must be followed by another `:`.
+    if !matches!(stream.next_token(), Token::Colon) {
+        stream.restore_mark();
+        return Ok(None);
+    }
+    stream.discard_token(); // consume second `:`
+
+    match stream.consume_token() {
+        Token::Ident(name) => {
+            let lower = name.to_ascii_lowercase();
+            if !is_known_pseudo_element(&lower) {
+                stream.restore_mark();
+                return Err(SelectorParseError::UnknownPseudoElement(name));
+            }
+            stream.discard_mark();
+            Ok(Some(PseudoElement {
+                name: lower,
+                legacy: false,
+            }))
+        }
+        other => {
+            stream.restore_mark();
+            Err(SelectorParseError::UnexpectedToken(format!(
+                "expected pseudo-element name after '::', got {:?}",
+                other
+            )))
+        }
     }
 }

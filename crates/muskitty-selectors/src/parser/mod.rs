@@ -6,6 +6,7 @@
 //! Spec source: `D:\CSSWG\selectors-4\Overview.md`, §18 L4816-5026
 //! (API hooks), §3 L4640-4815 (grammar).
 
+pub mod an_plus_b;
 pub mod complex;
 pub mod compound;
 pub mod list;
