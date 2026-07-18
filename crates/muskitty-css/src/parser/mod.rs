@@ -24,8 +24,9 @@ pub mod token_stream;
 pub mod types;
 
 pub use algorithms::{
-    consume_a_component_value, consume_a_function, consume_a_list_of_component_values,
-    consume_a_simple_block, consume_a_unicode_range_value,
+    consume_a_component_value, consume_a_declaration, consume_a_function,
+    consume_a_list_of_component_values, consume_a_simple_block, consume_a_unicode_range_value,
+    consume_the_remnants_of_a_bad_declaration,
 };
 pub use token_stream::TokenStream;
 pub use types::{
