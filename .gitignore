@@ -20,3 +20,7 @@ crates/muskitty-dom/
 # muskitty-css-tokenizer 同样作为独立 git 仓库剥离，
 # 由 crates/muskitty-css-tokenizer/.git 自行追踪。
 crates/muskitty-css-tokenizer/
+
+# muskitty-css-parser 同样作为独立 git 仓库剥离，
+# 由 crates/muskitty-css-parser/.git 自行追踪。
+crates/muskitty-css-parser/
