@@ -151,8 +151,7 @@ impl Element for DomElement {
     }
 
     fn count_among_siblings(&self) -> usize {
-        self.index_among_siblings()
-            + self.next_sibling_element_iter().count()
+        self.index_among_siblings() + self.next_sibling_element_iter().count()
     }
 
     fn index_among_type(&self) -> usize {
