@@ -701,7 +701,9 @@ fn parse_pseudo_class_argument(
     match name {
         "nth-child" | "nth-last-child" | "nth-of-type" | "nth-last-of-type" => {
             let an_plus_b = parse_an_plus_b(stream)?;
-            Ok(PseudoClassArgument::AnPlusB(an_plus_b))
+            // Task 2 will parse the optional `of S` selector list for
+            // nth-child / nth-last-child. For now, always `None`.
+            Ok(PseudoClassArgument::AnPlusB(an_plus_b, None))
         }
         // §4.2 L1497-1499 + §4.4 L1617: forgiving-selector-list. Each
         // complex selector parsed independently; failures silently

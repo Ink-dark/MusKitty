@@ -84,7 +84,7 @@ fn pseudo_class_nth_child_simple() {
         .as_ref()
         .expect("nth-child must have AnPlusB argument")
     {
-        PseudoClassArgument::AnPlusB(an) => assert_eq!(*an, AnPlusB { a: 0, b: 2 }),
+        PseudoClassArgument::AnPlusB(an, _) => assert_eq!(*an, AnPlusB { a: 0, b: 2 }),
         other => panic!("expected AnPlusB argument, got {:?}", other),
     }
 }
@@ -101,7 +101,7 @@ fn pseudo_class_nth_child_odd() {
         .as_ref()
         .expect("odd must have AnPlusB argument")
     {
-        PseudoClassArgument::AnPlusB(an) => assert_eq!(*an, AnPlusB { a: 2, b: 1 }),
+        PseudoClassArgument::AnPlusB(an, _) => assert_eq!(*an, AnPlusB { a: 2, b: 1 }),
         other => panic!("expected AnPlusB argument, got {:?}", other),
     }
 }
@@ -118,7 +118,7 @@ fn pseudo_class_nth_child_even() {
         .as_ref()
         .expect("even must have AnPlusB argument")
     {
-        PseudoClassArgument::AnPlusB(an) => assert_eq!(*an, AnPlusB { a: 2, b: 0 }),
+        PseudoClassArgument::AnPlusB(an, _) => assert_eq!(*an, AnPlusB { a: 2, b: 0 }),
         other => panic!("expected AnPlusB argument, got {:?}", other),
     }
 }
@@ -131,7 +131,7 @@ fn pseudo_class_nth_child_n() {
     let compound = single_compound(&list);
     let pc = single_pseudo_class(compound);
     match pc.argument.as_ref().expect("n must have AnPlusB argument") {
-        PseudoClassArgument::AnPlusB(an) => assert_eq!(*an, AnPlusB { a: 1, b: 0 }),
+        PseudoClassArgument::AnPlusB(an, _) => assert_eq!(*an, AnPlusB { a: 1, b: 0 }),
         other => panic!("expected AnPlusB argument, got {:?}", other),
     }
 }
@@ -149,7 +149,7 @@ fn pseudo_class_nth_child_2n_plus_1() {
         .as_ref()
         .expect("2n+1 must have AnPlusB argument")
     {
-        PseudoClassArgument::AnPlusB(an) => assert_eq!(*an, AnPlusB { a: 2, b: 1 }),
+        PseudoClassArgument::AnPlusB(an, _) => assert_eq!(*an, AnPlusB { a: 2, b: 1 }),
         other => panic!("expected AnPlusB argument, got {:?}", other),
     }
 }
@@ -167,7 +167,7 @@ fn pseudo_class_nth_child_negative_n() {
         .as_ref()
         .expect("-n+3 must have AnPlusB argument")
     {
-        PseudoClassArgument::AnPlusB(an) => assert_eq!(*an, AnPlusB { a: -1, b: 3 }),
+        PseudoClassArgument::AnPlusB(an, _) => assert_eq!(*an, AnPlusB { a: -1, b: 3 }),
         other => panic!("expected AnPlusB argument, got {:?}", other),
     }
 }

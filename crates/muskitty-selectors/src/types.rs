@@ -247,9 +247,12 @@ pub struct PseudoClass {
 /// Argument carried by a parameterised pseudo-class.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PseudoClassArgument {
-    /// For `:nth-child(An+B)`, `:nth-last-child(An+B)`,
-    /// `:nth-of-type(An+B)`, `:nth-last-of-type(An+B)`.
-    AnPlusB(AnPlusB),
+    /// For `:nth-child(An+B [of S]?)`, `:nth-last-child(An+B [of S]?)`,
+    /// `:nth-of-type(An+B)`, `:nth-last-of-type(An+B)`. The optional
+    /// `SelectorList` carries the `of S` argument when present
+    /// (§13.3 L3968, §13.4 L4077). Always `None` for `:nth-of-type`
+    /// and `:nth-last-of-type` (those do not accept `of S` syntax).
+    AnPlusB(AnPlusB, Option<SelectorList>),
     /// For `:is()`, `:not()`, `:where()`, `:has()` — a selector list.
     SelectorList(SelectorList),
     /// For `:lang(*)`, `:dir(*)`, `:current(*)`, etc. — preserved
