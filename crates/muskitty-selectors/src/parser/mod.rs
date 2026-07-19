@@ -16,6 +16,7 @@ pub mod simple;
 use crate::error::SelectorParseError;
 use crate::types::SelectorList;
 use muskitty_css::parser::TokenStream;
+use muskitty_css::tokenizer::Token;
 
 /// §18 L4828-4849: Parse A Selector.
 ///
@@ -24,12 +25,23 @@ use muskitty_css::parser::TokenStream;
 /// L4651-4653. Returns the parsed [`SelectorList`] on success, or a
 /// [`SelectorParseError`] describing the failure mode.
 ///
-/// Trailing tokens after the selector list (other than whitespace)
-/// produce an `InvalidSelector` error: a selector source must consume
-/// the entire input.
+/// Empty input or whitespace-only input returns
+/// [`SelectorParseError::EmptySelector`] per §3 L1317-1347. Trailing
+/// tokens after the selector list (other than whitespace) produce an
+/// `InvalidSelector` error: a selector source must consume the entire
+/// input.
 pub fn parse_a_selector(source: &str) -> Result<SelectorList, SelectorParseError> {
     let tokens = muskitty_css::tokenize(source);
     let mut stream = TokenStream::new(tokens);
+
+    // §3 L1317-1347: empty input or whitespace-only input is not a
+    // valid selector list. Distinguish this case from a structurally
+    // invalid selector by returning EmptySelector.
+    stream.discard_whitespace();
+    if matches!(stream.next_token(), Token::Eof) {
+        return Err(SelectorParseError::EmptySelector);
+    }
+
     let list = list::parse_selector_list(&mut stream)?;
     // Reject trailing garbage (whitespace is fine).
     stream.discard_whitespace();

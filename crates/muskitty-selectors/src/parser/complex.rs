@@ -6,11 +6,13 @@
 //! <complex-selector> = <complex-selector-unit> [ <combinator>? <complex-selector-unit> ]*
 //! ```
 //!
-//! SP-5 scope: parses one or more compound selectors joined by the
-//! four §15 combinators (Descendant / Child / NextSibling /
+//! SP-2..SP-6 scope: parses one or more compound selectors joined by
+//! the four §15 combinators (Descendant / Child / NextSibling /
 //! SubsequentSibling). Trailing combinators (e.g. `a >`) produce an
-//! `InvalidSelector` error. SP-6 will add additional edge-case
-//! handling (mixed combinators, empty-input rejection, etc.).
+//! `InvalidSelector` error. Mixed combinators (`a > b + c`), pseudo-
+//! class-terminated compounds (`a > b:hover`), and selector lists
+//! with trailing-comma / trailing-combinator / empty-input rejection
+//! are all handled (see tests/parser_complex.rs).
 //!
 //! # Storage convention
 //!
