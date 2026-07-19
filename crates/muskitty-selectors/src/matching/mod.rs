@@ -134,8 +134,18 @@ fn walk_tree<E: Element, F: FnMut(&E)>(root: &E, f: &mut F) {
 
 /// §18 L4902-4919: Match a complex selector against an element.
 ///
-/// SP-8 Task 1 stub: returns `false` unconditionally. Task 7
-/// implements the right-to-left walk.
-fn matches_complex<E: Element>(_cs: &ComplexSelector, _element: &E) -> bool {
-    false
+/// SP-8 Task 3: handles the single-unit case (subject compound only).
+/// Task 7 generalises this to multi-unit complex selectors with
+/// combinators via a right-to-left walk.
+fn matches_complex<E: Element>(cs: &ComplexSelector, element: &E) -> bool {
+    if cs.units.is_empty() {
+        return false;
+    }
+    let subject = &cs.units[0];
+    if !simple_matcher::matches_compound(&subject.compound, element) {
+        return false;
+    }
+    // Multi-unit: Task 7 implements the combinator walk. For now,
+    // single-unit selectors match; multi-unit do not.
+    cs.units.len() == 1
 }
