@@ -140,20 +140,117 @@ fn walk_tree<E: Element, F: FnMut(&E)>(root: &E, f: &mut F) {
     }
 }
 
-/// §18 L4902-4919: Match a complex selector against an element.
+/// §18 L4902-4919: Match a complex selector against an element,
+/// processing compound selectors right-to-left.
 ///
-/// SP-8 Task 3: handles the single-unit case (subject compound only).
-/// Task 7 generalises this to multi-unit complex selectors with
-/// combinators via a right-to-left walk.
+/// `units[0]` is the subject (rightmost compound in source order).
+/// The combinator on `units[idx]` links it to `units[idx+1]` (the
+/// next leftward compound): e.g. for `a > b`, `units = [{b, Child},
+/// {a, None}]` and `b`'s parent must match `a`. We match the subject
+/// first, then walk leftward checking combinators against related
+/// elements.
 fn matches_complex<E: Element>(cs: &ComplexSelector, element: &E) -> bool {
     if cs.units.is_empty() {
         return false;
     }
+    // §18 L4908: the rightmost compound (units[0], the subject)
+    // must match `element`.
     let subject = &cs.units[0];
     if !simple_matcher::matches_compound(&subject.compound, element) {
         return false;
     }
-    // Multi-unit: Task 7 implements the combinator walk. For now,
-    // single-unit selectors match; multi-unit do not.
-    cs.units.len() == 1
+    // §18 L4911-4912: if there is only one compound, success.
+    if cs.units.len() == 1 {
+        return true;
+    }
+    // §18 L4914-4919: otherwise, walk leftward using the subject's
+    // combinator to find candidates for units[1..].
+    let combinator = match subject.combinator {
+        Some(c) => c,
+        None => return true, // shouldn't happen for len > 1
+    };
+    walk_leftward(&cs.units[1..], element, combinator)
+}
+
+/// Walk leftward from `element` by `combinator` to find candidates
+/// for `remaining[0]`. `combinator` was carried by the previous
+/// (rightward) unit, so it describes how `remaining[0]` is related
+/// to `element` (e.g. for `Child`, `remaining[0]` is the parent of
+/// `element`).
+fn walk_leftward<E: Element>(
+    remaining: &[crate::types::ComplexSelectorUnit],
+    element: &E,
+    combinator: crate::types::Combinator,
+) -> bool {
+    let next_unit = &remaining[0];
+    match combinator {
+        crate::types::Combinator::Descendant => {
+            // §15 L4369: any ancestor of `element`.
+            let mut ancestor = element.parent_element();
+            while let Some(parent) = ancestor {
+                if simple_matcher::matches_compound(&next_unit.compound, &parent)
+                    && continues_leftward(remaining, &parent)
+                {
+                    return true;
+                }
+                ancestor = parent.parent_element();
+            }
+            false
+        }
+        crate::types::Combinator::Child => {
+            // §15 L4376: direct parent only.
+            if let Some(parent) = element.parent_element() {
+                if simple_matcher::matches_compound(&next_unit.compound, &parent)
+                    && continues_leftward(remaining, &parent)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        crate::types::Combinator::NextSibling => {
+            // §15 L4383: direct previous sibling only.
+            if let Some(prev) = element.previous_sibling_element() {
+                if simple_matcher::matches_compound(&next_unit.compound, &prev)
+                    && continues_leftward(remaining, &prev)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        crate::types::Combinator::SubsequentSibling => {
+            // §15 L4390: any previous sibling.
+            let mut prev = element.previous_sibling_element();
+            while let Some(sibling) = prev {
+                if simple_matcher::matches_compound(&next_unit.compound, &sibling)
+                    && continues_leftward(remaining, &sibling)
+                {
+                    return true;
+                }
+                prev = sibling.previous_sibling_element();
+            }
+            false
+        }
+    }
+}
+
+/// After matching `remaining[0]` against an element, continue the
+/// leftward walk if there are more units. If `remaining[0]` is the
+/// leftmost unit, the match is complete.
+fn continues_leftward<E: Element>(
+    remaining: &[crate::types::ComplexSelectorUnit],
+    element: &E,
+) -> bool {
+    if remaining.len() == 1 {
+        // remaining[0] is leftmost; we've already matched it.
+        return true;
+    }
+    // Recurse using remaining[0].combinator to find candidates for
+    // remaining[1].
+    let next_combinator = match remaining[0].combinator {
+        Some(c) => c,
+        None => return true, // leftmost, already matched
+    };
+    walk_leftward(&remaining[1..], element, next_combinator)
 }

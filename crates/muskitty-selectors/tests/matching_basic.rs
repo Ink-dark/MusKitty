@@ -255,3 +255,136 @@ fn compound_all_components_match() {
     el2.id = None;
     assert!(!matches(&list, &el2));
 }
+
+// ---------------------------------------------------------------------------
+// Task 7: combinator matching (right-to-left complex-selector walk)
+// ---------------------------------------------------------------------------
+
+/// Build three siblings `a`, `b`, `c` under a `root` parent. Wires
+/// `previous_sibling` (forward) and `next_sibling` (forward) and
+/// populates `parent.children`. Each child's `parent` snapshot has
+/// `children` populated to keep `count_among_siblings` consistent
+/// when needed by other tests reusing this helper.
+fn build_three_siblings() -> Vec<StubElement> {
+    let mut parent = StubElement::new("root");
+    let names = ["a", "b", "c"];
+    let mut children: Vec<StubElement> = Vec::new();
+    for name in names {
+        let mut child = StubElement::new(name);
+        child.parent = Some(Box::new(parent.clone()));
+        if let Some(prev) = children.last() {
+            child.previous_sibling = Some(Box::new(prev.clone()));
+        }
+        children.push(child);
+    }
+    // Wire next_sibling forward links. REVERSE iteration so each
+    // snapshot captures the already-populated forward chain (matches
+    // the convention used by `build_siblings` in matching_pseudo.rs).
+    for i in (0..children.len()).rev() {
+        if i + 1 < children.len() {
+            children[i].next_sibling = Some(Box::new(children[i + 1].clone()));
+        }
+    }
+    parent.children = children.clone();
+    for child in &mut children {
+        child.parent = Some(Box::new(parent.clone()));
+    }
+    children
+}
+
+/// §15 L4369: descendant combinator (whitespace).
+#[test]
+fn descendant_combinator_matches() {
+    // `parent > child` structure.
+    let mut parent = StubElement::new("div");
+    let mut child = StubElement::new("span");
+    child.parent = Some(Box::new(parent.clone()));
+    parent.children = vec![child.clone()];
+
+    // `div span` — descendant combinator.
+    let list = parse_a_selector("div span").expect("parses");
+    assert!(matches(&list, &child));
+    assert!(!matches(&list, &parent));
+}
+
+/// §15 L4376: child combinator (`>`).
+#[test]
+fn child_combinator_matches_only_direct() {
+    // `root > middle > leaf`.
+    let mut root = StubElement::new("root");
+    let mut middle = StubElement::new("middle");
+    let mut leaf = StubElement::new("leaf");
+    middle.parent = Some(Box::new(root.clone()));
+    leaf.parent = Some(Box::new(middle.clone()));
+    middle.children = vec![leaf.clone()];
+    root.children = vec![middle.clone()];
+
+    // `root > leaf` — does NOT match (leaf's direct parent is middle,
+    // not root).
+    let list = parse_a_selector("root > leaf").expect("parses");
+    assert!(!matches(&list, &leaf));
+
+    // `root > middle` — matches.
+    let list = parse_a_selector("root > middle").expect("parses");
+    assert!(matches(&list, &middle));
+}
+
+/// §15 L4383: next-sibling combinator (`+`).
+#[test]
+fn next_sibling_combinator_matches() {
+    // Build siblings a, b, c.
+    let sibs = build_three_siblings();
+    // `a + b` matches b (b's previous sibling is a).
+    let list = parse_a_selector("a + b").expect("parses");
+    assert!(matches(&list, &sibs[1]));
+    // `a + c` does NOT match c (c's previous sibling is b, not a).
+    let list = parse_a_selector("a + c").expect("parses");
+    assert!(!matches(&list, &sibs[2]));
+}
+
+/// §15 L4390: subsequent-sibling combinator (`~`).
+#[test]
+fn subsequent_sibling_combinator_matches() {
+    let sibs = build_three_siblings();
+    // `a ~ c` matches c (c has an earlier sibling a).
+    let list = parse_a_selector("a ~ c").expect("parses");
+    assert!(matches(&list, &sibs[2]));
+    // `b ~ a` does NOT match a (a has no earlier sibling b).
+    let list = parse_a_selector("b ~ a").expect("parses");
+    assert!(!matches(&list, &sibs[0]));
+}
+
+/// Mixed combinators: `a > b + c` (a is parent of b; b is preceding
+/// sibling of c).
+#[test]
+fn mixed_combinators_match() {
+    let mut a = StubElement::new("a");
+    let mut b = StubElement::new("b");
+    let mut c = StubElement::new("c");
+    b.parent = Some(Box::new(a.clone()));
+    c.parent = Some(Box::new(a.clone()));
+    c.previous_sibling = Some(Box::new(b.clone()));
+    b.next_sibling = Some(Box::new(c.clone()));
+    a.children = vec![b.clone(), c.clone()];
+
+    let list = parse_a_selector("a > b + c").expect("parses");
+    assert!(matches(&list, &c));
+    assert!(!matches(&list, &b));
+}
+
+/// Three-part descendant: `a b c` — c is descendant of b is
+/// descendant of a.
+#[test]
+fn three_part_descendant_matches() {
+    let mut a = StubElement::new("a");
+    let mut b = StubElement::new("b");
+    let mut c = StubElement::new("c");
+    b.parent = Some(Box::new(a.clone()));
+    c.parent = Some(Box::new(b.clone()));
+    b.children = vec![c.clone()];
+    a.children = vec![b.clone()];
+
+    let list = parse_a_selector("a b c").expect("parses");
+    assert!(matches(&list, &c));
+    assert!(!matches(&list, &b));
+}
