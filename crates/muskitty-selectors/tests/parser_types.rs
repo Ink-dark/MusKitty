@@ -63,10 +63,10 @@ fn attr_matcher_variants() {
 /// All three `PseudoClassArgument` variants can be constructed.
 #[test]
 fn pseudo_class_argument_variants() {
-    let an_plus_b = PseudoClassArgument::AnPlusB(AnPlusB::default());
+    let an_plus_b = PseudoClassArgument::AnPlusB(AnPlusB::default(), None);
     let selector_list = PseudoClassArgument::SelectorList(SelectorList::default());
     let raw = PseudoClassArgument::Raw(vec![Token::Ident("en".to_string())]);
-    assert!(matches!(an_plus_b, PseudoClassArgument::AnPlusB(_)));
+    assert!(matches!(an_plus_b, PseudoClassArgument::AnPlusB(_, None)));
     assert!(matches!(
         selector_list,
         PseudoClassArgument::SelectorList(_)

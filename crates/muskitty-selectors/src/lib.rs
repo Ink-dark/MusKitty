@@ -24,4 +24,9 @@
 
 pub mod error;
 pub mod parser;
+pub mod specificity;
 pub mod types;
+
+/// Convenience re-export of the [`Specificity`](specificity::Specificity)
+/// type for ergonomic access from downstream crates.
+pub use specificity::Specificity;

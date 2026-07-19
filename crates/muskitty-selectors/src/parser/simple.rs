@@ -40,8 +40,8 @@ use crate::parser::list::{parse_forgiving_selector_list, parse_selector_list};
 use crate::parser::relative::parse_relative_selector_list;
 use crate::types::{
     AttrMatcher, AttrModifier, AttrValue, AttributeSelector, ClassSelector, IdSelector, NsPrefix,
-    NsPrefixKind, PseudoClass, PseudoClassArgument, PseudoElement, TypeSelector, TypeSelectorName,
-    WqName,
+    NsPrefixKind, PseudoClass, PseudoClassArgument, PseudoElement, SelectorList, TypeSelector,
+    TypeSelectorName, WqName,
 };
 use muskitty_css::parser::TokenStream;
 use muskitty_css::tokenizer::{HashType, Token};
@@ -699,9 +699,19 @@ fn parse_pseudo_class_argument(
     name: &str,
 ) -> Result<PseudoClassArgument, SelectorParseError> {
     match name {
-        "nth-child" | "nth-last-child" | "nth-of-type" | "nth-last-of-type" => {
+        "nth-child" | "nth-last-child" => {
+            // §13.3 L3968 / §13.4 L4077: `An+B [of S]?`. Only nth-child and
+            // nth-last-child accept the `of S` clause.
             let an_plus_b = parse_an_plus_b(stream)?;
-            Ok(PseudoClassArgument::AnPlusB(an_plus_b))
+            let of_s = parse_optional_of_selector_list(stream)?;
+            Ok(PseudoClassArgument::AnPlusB(an_plus_b, of_s))
+        }
+        "nth-of-type" | "nth-last-of-type" => {
+            // §13.6 / §13.7: no `of S` syntax. If the user wrote `of`, it's
+            // an error — the trailing tokens will be caught by the closing
+            // `)` verification step in `parse_pseudo_class_or_legacy`.
+            let an_plus_b = parse_an_plus_b(stream)?;
+            Ok(PseudoClassArgument::AnPlusB(an_plus_b, None))
         }
         // §4.2 L1497-1499 + §4.4 L1617: forgiving-selector-list. Each
         // complex selector parsed independently; failures silently
@@ -742,6 +752,42 @@ fn parse_pseudo_class_argument(
             }
             Ok(PseudoClassArgument::Raw(tokens))
         }
+    }
+}
+
+/// §13.3 L3968 / §13.4 L4077: parse the optional `of S` clause of
+/// `:nth-child(An+B of S)` / `:nth-last-child(An+B of S)`.
+///
+/// Pre-condition: An+B has already been consumed; the stream cursor
+/// sits just past the B-part of An+B.
+///
+/// Returns:
+/// - `Ok(Some(SelectorList))` — `of S` clause present and parsed.
+/// - `Ok(None)` — no `of` keyword; the clause was omitted.
+///
+/// The closing `)` is left unconsumed for the caller to verify (same
+/// convention as other pseudo-class argument parsers).
+fn parse_optional_of_selector_list(
+    stream: &mut TokenStream,
+) -> Result<Option<SelectorList>, SelectorParseError> {
+    stream.discard_whitespace();
+    match stream.next_token() {
+        // No `of` keyword — clause is absent. Leave the stream
+        // positioned at the closing `)` (or whatever terminator
+        // follows) for the caller.
+        Token::CloseParen | Token::Eof => Ok(None),
+        // `of` keyword (case-insensitive per CSS ident folding).
+        Token::Ident(ref s) if s.eq_ignore_ascii_case("of") => {
+            stream.discard_token();
+            // §13.3 L3968: S is a <selector-list> (non-forgiving).
+            // Reuse parse_selector_list from list.rs.
+            let list = crate::parser::list::parse_selector_list(stream)?;
+            Ok(Some(list))
+        }
+        // Anything else after An+B is a structural error.
+        _ => Err(SelectorParseError::InvalidSelector(
+            "expected `of` or `)` after An+B in :nth-child/:nth-last-child argument".to_string(),
+        )),
     }
 }
 

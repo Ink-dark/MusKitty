@@ -36,6 +36,14 @@
 //! This is more permissive than the spec but produces identical
 //! results for all valid inputs; only invalid forms like `2n- -3`
 //! (which the spec rejects) are accepted with a best-effort B value.
+//!
+//! # Note on the `of S` clause
+//!
+//! This module parses only the An+B production. The optional
+//! `of <selector-list>` clause accepted by `:nth-child()` and
+//! `:nth-last-child()` (§13.3 L3968 / §13.4 L4077) is parsed by
+//! [`crate::parser::simple::parse_optional_of_selector_list`]
+//! after this function returns.
 
 use crate::error::SelectorParseError;
 use crate::types::AnPlusB;
