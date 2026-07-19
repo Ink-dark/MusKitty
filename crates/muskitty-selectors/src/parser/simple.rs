@@ -785,9 +785,9 @@ fn parse_optional_of_selector_list(
             Ok(Some(list))
         }
         // Anything else after An+B is a structural error.
-        _ => Err(SelectorParseError::InvalidSelector(format!(
-            "expected `of` or `)` after An+B in :nth-child/:nth-last-child argument"
-        ))),
+        _ => Err(SelectorParseError::InvalidSelector(
+            "expected `of` or `)` after An+B in :nth-child/:nth-last-child argument".to_string(),
+        )),
     }
 }
 

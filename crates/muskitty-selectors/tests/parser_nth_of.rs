@@ -30,7 +30,8 @@ fn single_pseudo_class(compound: &CompoundSelector) -> &PseudoClass {
 /// a 2-element SelectorList argument alongside the An+B value.
 #[test]
 fn nth_child_with_of_selector_list() {
-    let list = parse_a_selector(":nth-child(2n of .a, .b)").expect(":nth-child(2n of .a, .b) parses");
+    let list =
+        parse_a_selector(":nth-child(2n of .a, .b)").expect(":nth-child(2n of .a, .b) parses");
     let compound = single_compound(&list);
     let pc = single_pseudo_class(compound);
     assert_eq!(pc.name, "nth-child");

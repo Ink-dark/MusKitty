@@ -32,7 +32,9 @@
 //!
 //! `D:\CSSWG\selectors-4\Overview.md`, §17 L4534-4633.
 
-use crate::types::{ComplexSelector, CompoundSelector, PseudoClass, SelectorList, SubclassSelector};
+use crate::types::{
+    ComplexSelector, CompoundSelector, PseudoClass, SelectorList, SubclassSelector,
+};
 
 /// §17 L4534-4548: A selector's specificity, expressed as the (A, B, C)
 /// triplet. Comparison is lexicographic per L4598-4605.
