@@ -15,3 +15,4 @@ rust-version = "1.82"
 muskitty-css = { path = "../muskitty-css", version = "0.4.0" }
 
 [dev-dependencies]
+muskitty-dom = { path = "../muskitty-dom" }
