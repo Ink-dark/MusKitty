@@ -5,8 +5,11 @@
 //! per-feature coverage lives in `matching_basic.rs` and
 //! `matching_pseudo.rs` using the lighter `StubElement`.
 
+use muskitty_dom::attribute::Attribute;
 use muskitty_dom::node::{Node, NodeType};
+use muskitty_selectors::matching::matches;
 use muskitty_selectors::matching::Element;
+use muskitty_selectors::parser::parse_a_selector;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -237,4 +240,122 @@ fn dom_element_is_root() {
     assert!(root.is_root());
     let child = root.child_elements().into_iter().next().expect("has child");
     assert!(!child.is_root());
+}
+
+// ---------------------------------------------------------------------------
+// Task 8: end-to-end matching tests against a real DOM tree.
+// ---------------------------------------------------------------------------
+
+/// §18 L4878-4919: `matches()` against a real DOM element.
+#[test]
+fn dom_type_selector_matches() {
+    let root = build_tree();
+    let list = parse_a_selector("root").expect("parses");
+    assert!(matches(&list, &root));
+}
+
+/// §15 L4369 / L4376: descendant vs. child combinator against a real
+/// DOM tree (`root > child > grandchild`).
+#[test]
+fn dom_descendant_combinator() {
+    let root = build_tree();
+    let child = root.child_elements().into_iter().next().expect("has child");
+    let grandchild = child
+        .child_elements()
+        .into_iter()
+        .next()
+        .expect("has grandchild");
+
+    // `root child` — descendant combinator: `child` matches because
+    // its local_name is "child" and it descends from `root`.
+    // `grandchild` does NOT match because its local_name is
+    // "grandchild", not "child".
+    let list = parse_a_selector("root child").expect("parses");
+    assert!(matches(&list, &child));
+    assert!(!matches(&list, &grandchild));
+
+    // `root grandchild` — descendant combinator matches at depth 2.
+    let list = parse_a_selector("root grandchild").expect("parses");
+    assert!(matches(&list, &grandchild));
+    assert!(!matches(&list, &child));
+
+    // `root > child` — direct child matches `child` only.
+    let list = parse_a_selector("root > child").expect("parses");
+    assert!(matches(&list, &child));
+    assert!(!matches(&list, &grandchild));
+}
+
+/// §18 L4955-5026: `query_selector_all` walks the tree in tree order
+/// and returns all matching elements.
+#[test]
+fn dom_query_selector_all() {
+    let doc = Node::new_document();
+    let root = Node::new_element_html("root", vec![], &doc);
+    let a = Node::new_element_html("a", vec![Attribute::new("class", "x")], &doc);
+    let b = Node::new_element_html("b", vec![Attribute::new("class", "x")], &doc);
+    let c = Node::new_element_html("c", vec![], &doc);
+    muskitty_dom::tree::append_child(&root, a).expect("append");
+    muskitty_dom::tree::append_child(&root, b).expect("append");
+    muskitty_dom::tree::append_child(&root, c).expect("append");
+
+    let list = parse_a_selector(".x").expect("parses");
+    let found = muskitty_selectors::query_selector_all(&DomElement::new(root), &list);
+    assert_eq!(found.len(), 2);
+    assert_eq!(Element::local_name(&found[0]), "a");
+    assert_eq!(Element::local_name(&found[1]), "b");
+}
+
+/// §18 L4955-5026: `query_selector` returns the first match in tree
+/// order, or `None` if no descendant matches.
+#[test]
+fn dom_query_selector_returns_first() {
+    let doc = Node::new_document();
+    let root = Node::new_element_html("root", vec![], &doc);
+    let target = Node::new_element_html("target", vec![], &doc);
+    muskitty_dom::tree::append_child(&root, target).expect("append");
+
+    let list = parse_a_selector("target").expect("parses");
+    let found = muskitty_selectors::query_selector(&DomElement::new(root), &list);
+    assert!(found.is_some());
+    assert_eq!(Element::local_name(&found.unwrap()), "target");
+}
+
+/// §6.6 L2463-2533: id selector against a real DOM element.
+#[test]
+fn dom_id_selector() {
+    let doc = Node::new_document();
+    let root = Node::new_element_html("div", vec![Attribute::new("id", "main")], &doc);
+
+    let list = parse_a_selector("#main").expect("parses");
+    assert!(matches(&list, &DomElement::new(root)));
+}
+
+/// §6 L1996-2533: attribute selector against a real DOM element.
+#[test]
+fn dom_attribute_selector() {
+    let doc = Node::new_document();
+    let root = Node::new_element_html("input", vec![Attribute::new("type", "text")], &doc);
+
+    let list = parse_a_selector(r#"[type="text"]"#).expect("parses");
+    assert!(matches(&list, &DomElement::new(root)));
+}
+
+/// §13.3 L3869: `:first-child` against a real DOM tree with two
+/// element children.
+#[test]
+fn dom_first_child_pseudo() {
+    let doc = Node::new_document();
+    let root = Node::new_element_html("root", vec![], &doc);
+    let a = Node::new_element_html("a", vec![], &doc);
+    let b = Node::new_element_html("b", vec![], &doc);
+    muskitty_dom::tree::append_child(&root, a).expect("append");
+    muskitty_dom::tree::append_child(&root, b).expect("append");
+
+    let dom_root = DomElement::new(root);
+    let dom_a = dom_root.child_elements().into_iter().next().expect("has a");
+    let dom_b = dom_root.child_elements().into_iter().nth(1).expect("has b");
+
+    let list = parse_a_selector(":first-child").expect("parses");
+    assert!(matches(&list, &dom_a));
+    assert!(!matches(&list, &dom_b));
 }

@@ -31,3 +31,10 @@ pub mod types;
 /// Convenience re-export of the [`Specificity`](specificity::Specificity)
 /// type for ergonomic access from downstream crates.
 pub use specificity::Specificity;
+
+/// Convenience re-exports of the matching engine's public API
+/// (§18 L4878-5026): [`matches`](matching::matches),
+/// [`query_selector`](matching::query_selector),
+/// [`query_selector_all`](matching::query_selector_all), and the
+/// [`Element`](matching::Element) trait.
+pub use matching::{matches, query_selector, query_selector_all, Element};
