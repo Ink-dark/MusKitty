@@ -28,6 +28,14 @@ use muskitty_css::tokenizer::Token;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SelectorList(pub Vec<ComplexSelector>);
 
+impl SelectorList {
+    /// §17 L4547-4548: max specificity over all complex selectors in
+    /// the list. Returns `(0,0,0)` for an empty list.
+    pub fn specificity_max(&self) -> crate::specificity::Specificity {
+        crate::specificity::Specificity::max_of_list(self)
+    }
+}
+
 /// §3 L809-826: A complex selector is a sequence of compound selectors
 /// separated by combinators.
 ///
@@ -44,6 +52,14 @@ pub struct SelectorList(pub Vec<ComplexSelector>);
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComplexSelector {
     pub units: Vec<ComplexSelectorUnit>,
+}
+
+impl ComplexSelector {
+    /// §17 L4536-4548: compute the specificity of this complex
+    /// selector. Delegates to [`crate::specificity::specificity_of_complex`].
+    pub fn specificity(&self) -> crate::specificity::Specificity {
+        crate::specificity::specificity_of_complex(self)
+    }
 }
 
 /// A compound selector paired with the combinator that links it to

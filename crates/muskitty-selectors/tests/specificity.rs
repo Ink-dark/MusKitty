@@ -4,7 +4,11 @@
 //! rules, and the special cases for `:is`/`:not`/`:has`/`:where`/
 //! `:nth-child`/`:nth-last-child`.
 
+use muskitty_selectors::parser::parse_a_selector;
 use muskitty_selectors::specificity::Specificity;
+use muskitty_selectors::types::{
+    ComplexSelector, ComplexSelectorUnit, CompoundSelector, SelectorList,
+};
 
 /// §17 L4598-4605: lexicographic comparison on (A, B, C).
 #[test]
@@ -17,10 +21,7 @@ fn specificity_ordering() {
     assert_eq!(Specificity::default(), Specificity::new(0, 0, 0));
 }
 
-use muskitty_selectors::parser::parse_a_selector;
-use muskitty_selectors::types::{ComplexSelectorUnit, CompoundSelector};
-
-fn single_compound_of(list: &muskitty_selectors::types::SelectorList) -> &CompoundSelector {
+fn single_compound_of(list: &SelectorList) -> &CompoundSelector {
     assert_eq!(list.0.len(), 1);
     let unit: &ComplexSelectorUnit = &list.0[0].units[0];
     assert!(unit.combinator.is_none());
@@ -143,7 +144,10 @@ fn nth_child_of_s_adds_max() {
 /// the pseudo-class).
 #[test]
 fn nth_child_without_of_s() {
-    assert_eq!(specificity_of(":nth-child(even)"), Specificity::new(0, 1, 0));
+    assert_eq!(
+        specificity_of(":nth-child(even)"),
+        Specificity::new(0, 1, 0)
+    );
 }
 
 /// §17 L4555-4558: `:has(.a)` argument is a relative selector. The
@@ -160,4 +164,36 @@ fn has_takes_max_of_relative_args() {
 #[test]
 fn compound_id_with_not_foo() {
     assert_eq!(specificity_of("#s12:not(FOO)"), Specificity::new(1, 0, 1));
+}
+
+/// §17 L4536: top-level `ComplexSelector::specificity()` method.
+#[test]
+fn complex_selector_method() {
+    let list: SelectorList = parse_a_selector("UL OL LI.red").expect("parses");
+    let cs: &ComplexSelector = &list.0[0];
+    assert_eq!(cs.specificity(), Specificity::new(0, 1, 3));
+}
+
+/// §17 L4547-4548: `SelectorList::specificity_max()` returns the max
+/// specificity over all complex selectors in the list.
+#[test]
+fn selector_list_max_method() {
+    // List with 3 selectors of increasing specificity.
+    let list: SelectorList = parse_a_selector("div, .a, #id").expect("parses");
+    assert_eq!(list.0.len(), 3);
+    // div = (0,0,1); .a = (0,1,0); #id = (1,0,0). Max = (1,0,0).
+    assert_eq!(list.specificity_max(), Specificity::new(1, 0, 0));
+}
+
+/// §17 L4547-4548: empty list → (0,0,0).
+#[test]
+fn empty_list_max() {
+    let empty = SelectorList::default();
+    assert_eq!(empty.specificity_max(), Specificity::default());
+}
+
+/// `Specificity` is re-exported at the crate root for ergonomics.
+#[test]
+fn specificity_re_exported_at_root() {
+    let _: muskitty_selectors::Specificity = muskitty_selectors::Specificity::new(1, 2, 3);
 }
