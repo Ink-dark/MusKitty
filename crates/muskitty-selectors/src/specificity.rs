@@ -108,9 +108,15 @@ impl Specificity {
     }
 }
 
-// Placeholder — `specificity_of_complex` is filled in by Task 6.
-pub fn specificity_of_complex(_cs: &ComplexSelector) -> Specificity {
-    Specificity::default()
+/// §17 L4536-4548: compute the specificity of a single complex
+/// selector. Sums the specificities of all compound units; the
+/// combinator on each unit contributes nothing.
+pub fn specificity_of_complex(cs: &ComplexSelector) -> Specificity {
+    let mut s = Specificity::default();
+    for unit in &cs.units {
+        s += specificity_of_compound(&unit.compound);
+    }
+    s
 }
 
 /// §17 L4539-4542: compute the specificity of a single compound
@@ -177,8 +183,36 @@ fn specificity_of_pseudo_class(pc: &PseudoClass) -> Specificity {
 /// (`:is`, `:not`, `:has`, `:where`, `:nth-child`, `:nth-last-child`)
 /// whose specificity is replaced/extended per the spec. Returns `None`
 /// for ordinary pseudo-classes (which use the default (0,1,0)).
-///
-/// Currently returns `None` for all names — Task 5 fills this in.
-fn special_pseudo_class_specificity(_pc: &PseudoClass) -> Option<Specificity> {
+fn special_pseudo_class_specificity(pc: &PseudoClass) -> Option<Specificity> {
+    use crate::types::PseudoClassArgument;
+    // §17 L4555-4558: `:is`/`:not`/`:has` — replaced by max of args.
+    if matches!(pc.name.as_str(), "is" | "not" | "has") {
+        return pc.argument.as_ref().and_then(|arg| match arg {
+            PseudoClassArgument::SelectorList(list) => Some(Specificity::max_of_list(list)),
+            _ => None,
+        });
+    }
+    // §17 L4566: `:where` — replaced by zero.
+    if pc.name == "where" {
+        return Some(Specificity::default());
+    }
+    // §17 L4560-4564: `:nth-child` / `:nth-last-child` — pseudo-class
+    // base (1×B) plus max of `of S` (if present).
+    if matches!(pc.name.as_str(), "nth-child" | "nth-last-child") {
+        return pc.argument.as_ref().and_then(|arg| match arg {
+            PseudoClassArgument::AnPlusB(_, Some(of_s)) => {
+                // Base pseudo-class + max of S.
+                let base = Specificity::new(0, 1, 0);
+                let max_of_s = Specificity::max_of_list(of_s);
+                Some(base + max_of_s)
+            }
+            // Without `of S`: just the base (0,1,0). But this case is
+            // already handled by the default path in
+            // `specificity_of_pseudo_class`. Returning `None` here
+            // lets the default path apply.
+            PseudoClassArgument::AnPlusB(_, None) => None,
+            _ => None,
+        });
+    }
     None
 }

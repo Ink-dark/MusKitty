@@ -101,3 +101,63 @@ fn compound_full_mix() {
 fn pseudo_compound_with_trailing_pc() {
     assert_eq!(specificity_of("::before:hover"), Specificity::new(0, 1, 1));
 }
+
+/// §17 L4573-4577: `:is(em, #foo)` → (1,0,0). The `:is()` argument
+/// list has `em` = (0,0,1) and `#foo` = (1,0,0); max is (1,0,0).
+#[test]
+fn is_takes_max_of_args() {
+    assert_eq!(specificity_of(":is(em, #foo)"), Specificity::new(1, 0, 0));
+}
+
+/// §17 L4590-4593: `:not(em, strong#foo)` → (1,0,1). Same max rule.
+#[test]
+fn not_takes_max_of_args() {
+    assert_eq!(
+        specificity_of(":not(em, strong#foo)"),
+        Specificity::new(1, 0, 1)
+    );
+}
+
+/// §17 L4579-4582: `.qux:where(em, #foo#bar#baz)` → (0,1,0).
+/// `:where()` always contributes zero specificity regardless of args.
+#[test]
+fn where_zero_specificity() {
+    assert_eq!(
+        specificity_of(".qux:where(em, #foo#bar#baz)"),
+        Specificity::new(0, 1, 0)
+    );
+}
+
+/// §17 L4584-4588: `:nth-child(even of li, .item)` → (0,2,0).
+/// The pseudo-class contributes (0,1,0), plus max of `li` (0,0,1) and
+/// `.item` (0,1,0) which is (0,1,0). Total = (0,2,0).
+#[test]
+fn nth_child_of_s_adds_max() {
+    assert_eq!(
+        specificity_of(":nth-child(even of li, .item)"),
+        Specificity::new(0, 2, 0)
+    );
+}
+
+/// §17 L4560-4564: `:nth-child(even)` without `of S` → (0,1,0) (just
+/// the pseudo-class).
+#[test]
+fn nth_child_without_of_s() {
+    assert_eq!(specificity_of(":nth-child(even)"), Specificity::new(0, 1, 0));
+}
+
+/// §17 L4555-4558: `:has(.a)` argument is a relative selector. The
+/// implicit `:scope` pseudo-class is part of the complex selector,
+/// contributing (0,1,0); `.a` contributes (0,1,0). Max over the list
+/// is (0,2,0). `:has()` itself is replaced by this max.
+#[test]
+fn has_takes_max_of_relative_args() {
+    assert_eq!(specificity_of(":has(.a)"), Specificity::new(0, 2, 0));
+}
+
+/// §17 L4624-4625: `#s12:not(FOO)` → (1,0,1). The `#s12` is (1,0,0);
+/// `:not(FOO)` is replaced by max of `FOO` = (0,0,1). Total = (1,0,1).
+#[test]
+fn compound_id_with_not_foo() {
+    assert_eq!(specificity_of("#s12:not(FOO)"), Specificity::new(1, 0, 1));
+}
