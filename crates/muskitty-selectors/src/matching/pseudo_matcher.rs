@@ -59,11 +59,80 @@ pub fn matches_pseudo_class<E: Element>(pc: &PseudoClass, element: &E) -> bool {
     }
 }
 
-/// §13.3 L3968: An+B pseudo-class matching.
+/// §13.3 L3968 + §13.4 L4077: An+B pseudo-class matching.
 ///
-/// Placeholder body — Task 5 implements the real math.
-fn matches_nth_pseudo_class<E: Element>(_pc: &PseudoClass, _element: &E) -> bool {
-    false
+/// Handles `:nth-child(An+B [of S]?)`, `:nth-last-child(An+B [of S]?)`,
+/// `:nth-of-type(An+B)`, `:nth-last-of-type(An+B)`.
+///
+/// - `*-child` variants without `of S`: index among ALL element
+///   siblings (1-based).
+/// - `*-child` variants with `of S`: filter siblings to those matching
+///   `S`, then index within that filtered list (self must also match
+///   `S`, else it is not in the filtered list).
+/// - `*-of-type` variants: index among siblings of the same type.
+///
+/// Implementation walks the appropriate sibling chain (previous for
+/// `nth-*`, next for `nth-last-*`) counting siblings that satisfy the
+/// filter, then adds 1 for self. This avoids identity comparison
+/// (which `Element` trait does not expose).
+fn matches_nth_pseudo_class<E: Element>(pc: &PseudoClass, element: &E) -> bool {
+    let (anb, of_s) = match pc.argument.as_ref() {
+        Some(PseudoClassArgument::AnPlusB(anb, of_s)) => (*anb, of_s.as_ref()),
+        _ => return false,
+    };
+
+    let from_last = pc.name == "nth-last-child" || pc.name == "nth-last-of-type";
+    let of_type = pc.name == "nth-of-type" || pc.name == "nth-last-of-type";
+
+    let my_name = element.local_name();
+    // Filter predicate applied to each sibling (and self) to decide
+    // whether it counts toward the index.
+    let sib_matches = |sib: &E| {
+        if of_type {
+            sib.local_name().eq_ignore_ascii_case(&my_name)
+        } else if let Some(s) = of_s {
+            crate::matching::matches_complex_list(s, sib)
+        } else {
+            true
+        }
+    };
+
+    // Self must match the filter (else it is not in the filtered list).
+    if !sib_matches(element) {
+        return false;
+    }
+
+    // Walk the appropriate sibling direction counting matches.
+    let mut position: usize = 1;
+    let mut cur = if from_last {
+        element.next_sibling_element()
+    } else {
+        element.previous_sibling_element()
+    };
+    while let Some(sib) = cur {
+        if sib_matches(&sib) {
+            position += 1;
+        }
+        cur = if from_last {
+            sib.next_sibling_element()
+        } else {
+            sib.previous_sibling_element()
+        };
+    }
+
+    an_plus_b_matches(anb.a, anb.b, position as i64)
+}
+
+/// §13.5: An+B math. Returns true if `index = A*k + B` for some
+/// non-negative integer `k`. `index` is 1-based per §13.3 L3982.
+fn an_plus_b_matches(a: i64, b: i64, index: i64) -> bool {
+    if a == 0 {
+        return index == b;
+    }
+    let diff = index - b;
+    // diff must be divisible by `a` and the quotient k = diff/a
+    // must be >= 0.
+    diff % a == 0 && diff / a >= 0
 }
 
 /// §4.2/§4.4: `:is(args)` / `:where(args)` match if any complex

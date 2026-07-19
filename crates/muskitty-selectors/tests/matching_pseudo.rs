@@ -195,8 +195,10 @@ fn build_siblings(n: usize) -> Vec<StubElement> {
         }
         children.push(child);
     }
-    // Wire next_sibling forward links.
-    for i in 0..children.len() {
+    // Wire next_sibling forward links in REVERSE so each snapshot
+    // captures the already-populated forward chain (required by
+    // `nth-last-*` backward walks).
+    for i in (0..children.len()).rev() {
         if i + 1 < children.len() {
             children[i].next_sibling = Some(Box::new(children[i + 1].clone()));
         }
@@ -260,7 +262,7 @@ fn build_mixed_type_siblings() -> Vec<StubElement> {
         }
         children.push(child);
     }
-    for i in 0..children.len() {
+    for i in (0..children.len()).rev() {
         if i + 1 < children.len() {
             children[i].next_sibling = Some(Box::new(children[i + 1].clone()));
         }
@@ -312,7 +314,7 @@ fn only_of_type_mixed() {
         }
         children.push(child);
     }
-    for i in 0..children.len() {
+    for i in (0..children.len()).rev() {
         if i + 1 < children.len() {
             children[i].next_sibling = Some(Box::new(children[i + 1].clone()));
         }
@@ -356,4 +358,176 @@ fn stub_pseudo_class_returns_false() {
     let el = StubElement::new("div");
     let list = parse_a_selector(":hover").expect("parses");
     assert!(!matches(&list, &el));
+}
+
+// ---------------------------------------------------------------------------
+// Task 5: An+B pseudo-class tests
+// ---------------------------------------------------------------------------
+
+/// §13.3 L3982: `:nth-child(2)` matches the 2nd sibling.
+#[test]
+fn nth_child_integer_matches_second() {
+    let sibs = build_siblings(3);
+    let list = parse_a_selector(":nth-child(2)").expect("parses");
+    assert!(!matches(&list, &sibs[0]));
+    assert!(matches(&list, &sibs[1]));
+    assert!(!matches(&list, &sibs[2]));
+}
+
+/// §13.3 L3982: `:nth-child(odd)` matches 1st, 3rd, 5th, ...
+#[test]
+fn nth_child_odd_matches_first_third() {
+    let sibs = build_siblings(5);
+    let list = parse_a_selector(":nth-child(odd)").expect("parses");
+    assert!(matches(&list, &sibs[0]));
+    assert!(!matches(&list, &sibs[1]));
+    assert!(matches(&list, &sibs[2]));
+    assert!(!matches(&list, &sibs[3]));
+    assert!(matches(&list, &sibs[4]));
+}
+
+/// §13.3 L3982: `:nth-child(even)` matches 2nd, 4th, ...
+#[test]
+fn nth_child_even_matches_second_fourth() {
+    let sibs = build_siblings(5);
+    let list = parse_a_selector(":nth-child(even)").expect("parses");
+    assert!(!matches(&list, &sibs[0]));
+    assert!(matches(&list, &sibs[1]));
+    assert!(!matches(&list, &sibs[2]));
+    assert!(matches(&list, &sibs[3]));
+    assert!(!matches(&list, &sibs[4]));
+}
+
+/// §13.3 L3982: `:nth-child(2n+1)` matches 1st, 3rd, 5th, ...
+#[test]
+fn nth_child_2n_plus_1_matches_odd() {
+    let sibs = build_siblings(5);
+    let list = parse_a_selector(":nth-child(2n+1)").expect("parses");
+    assert!(matches(&list, &sibs[0]));
+    assert!(!matches(&list, &sibs[1]));
+    assert!(matches(&list, &sibs[2]));
+}
+
+/// §13.3 L3982: `:nth-child(-n+3)` matches 1st, 2nd, 3rd (of 5).
+#[test]
+fn nth_child_negative_n_plus_3_matches_first_three() {
+    let sibs = build_siblings(5);
+    let list = parse_a_selector(":nth-child(-n+3)").expect("parses");
+    assert!(matches(&list, &sibs[0]));
+    assert!(matches(&list, &sibs[1]));
+    assert!(matches(&list, &sibs[2]));
+    assert!(!matches(&list, &sibs[3]));
+    assert!(!matches(&list, &sibs[4]));
+}
+
+/// §13.4 L4077: `:nth-last-child(1)` matches the last sibling.
+#[test]
+fn nth_last_child_1_matches_last() {
+    let sibs = build_siblings(3);
+    let list = parse_a_selector(":nth-last-child(1)").expect("parses");
+    assert!(!matches(&list, &sibs[0]));
+    assert!(!matches(&list, &sibs[1]));
+    assert!(matches(&list, &sibs[2]));
+}
+
+/// §13.4: `:nth-of-type(2)` matches the 2nd sibling of the same type.
+#[test]
+fn nth_of_type_2_matches_second_of_type() {
+    // Siblings: div, span, div, span, div
+    let mut parent = StubElement::new("root");
+    let names = ["div", "span", "div", "span", "div"];
+    let mut children: Vec<StubElement> = Vec::new();
+    for name in names {
+        let mut child = StubElement::new(name);
+        child.parent = Some(Box::new(parent.clone()));
+        if let Some(prev) = children.last() {
+            child.previous_sibling = Some(Box::new(prev.clone()));
+        }
+        children.push(child);
+    }
+    for i in (0..children.len()).rev() {
+        if i + 1 < children.len() {
+            children[i].next_sibling = Some(Box::new(children[i + 1].clone()));
+        }
+    }
+    parent.children = children.clone();
+
+    let list = parse_a_selector(":nth-of-type(2)").expect("parses");
+    // div[1] (idx 0): no; span[1] (idx 1): no; div[2] (idx 2): yes;
+    // span[2] (idx 3): yes; div[3] (idx 4): no.
+    assert!(!matches(&list, &children[0]));
+    assert!(!matches(&list, &children[1]));
+    assert!(matches(&list, &children[2]));
+    assert!(matches(&list, &children[3]));
+    assert!(!matches(&list, &children[4]));
+}
+
+/// §13.4: `:nth-last-of-type(1)` matches the last of each type.
+#[test]
+fn nth_last_of_type_1_matches_last_of_type() {
+    let mut parent = StubElement::new("root");
+    let names = ["div", "span", "div", "span", "div"];
+    let mut children: Vec<StubElement> = Vec::new();
+    for name in names {
+        let mut child = StubElement::new(name);
+        child.parent = Some(Box::new(parent.clone()));
+        if let Some(prev) = children.last() {
+            child.previous_sibling = Some(Box::new(prev.clone()));
+        }
+        children.push(child);
+    }
+    for i in (0..children.len()).rev() {
+        if i + 1 < children.len() {
+            children[i].next_sibling = Some(Box::new(children[i + 1].clone()));
+        }
+    }
+    parent.children = children.clone();
+
+    let list = parse_a_selector(":nth-last-of-type(1)").expect("parses");
+    // Last div (idx 4) and last span (idx 3) match.
+    assert!(!matches(&list, &children[0]));
+    assert!(!matches(&list, &children[1]));
+    assert!(!matches(&list, &children[2]));
+    assert!(matches(&list, &children[3]));
+    assert!(matches(&list, &children[4]));
+}
+
+/// §13.3 L3968: `:nth-child(2n of .a)` — first filter siblings to
+/// those matching `.a`, then check 2n index.
+#[test]
+fn nth_child_of_s_filters_then_indexes() {
+    // Siblings: .a, .b, .a, .b, .a — `:nth-child(2n of .a)` matches
+    // 2nd and 4th `.a` siblings (indices 2, 4 in the filtered list).
+    let mut parent = StubElement::new("root");
+    let classes = ["a", "b", "a", "b", "a"];
+    let mut children: Vec<StubElement> = Vec::new();
+    for cls in classes {
+        let mut child = StubElement::new("div");
+        child.classes = vec![cls.to_string()];
+        child.parent = Some(Box::new(parent.clone()));
+        if let Some(prev) = children.last() {
+            child.previous_sibling = Some(Box::new(prev.clone()));
+        }
+        children.push(child);
+    }
+    for i in (0..children.len()).rev() {
+        if i + 1 < children.len() {
+            children[i].next_sibling = Some(Box::new(children[i + 1].clone()));
+        }
+    }
+    parent.children = children.clone();
+
+    let list = parse_a_selector(":nth-child(2n of .a)").expect("parses");
+    // .a siblings at positions: [0]=1st, [2]=2nd, [4]=3rd.
+    // 2n matches positions 2, 4 → children[2] only (since position 4
+    // doesn't exist for .a in a 3-item filtered list — only positions
+    // 1, 2, 3 are valid, and 2n means n=1 → position 2).
+    // children[0]: position 1 (odd) → no
+    // children[2]: position 2 (even) → yes
+    // children[4]: position 3 (odd) → no
+    assert!(!matches(&list, &children[0]));
+    assert!(!matches(&list, &children[1]));
+    assert!(matches(&list, &children[2]));
+    assert!(!matches(&list, &children[3]));
+    assert!(!matches(&list, &children[4]));
 }

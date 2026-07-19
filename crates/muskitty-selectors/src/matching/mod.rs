@@ -104,6 +104,14 @@ pub fn matches<E: Element>(list: &SelectorList, element: &E) -> bool {
     list.0.iter().any(|cs| matches_complex(cs, element))
 }
 
+/// `pub(crate)` wrapper around [`matches`] for use by sibling modules
+/// (e.g. `pseudo_matcher` resolving `:nth-child(An+B of S)` filters).
+/// Kept separate from [`matches`] so the public API surface stays
+/// flat.
+pub(crate) fn matches_complex_list<E: Element>(list: &SelectorList, element: &E) -> bool {
+    list.0.iter().any(|cs| matches_complex(cs, element))
+}
+
 /// §18 L4955-5026: Match a selector list against a tree, returning
 /// the first matching element in tree order. Returns `None` if no
 /// descendant of `root` matches.
