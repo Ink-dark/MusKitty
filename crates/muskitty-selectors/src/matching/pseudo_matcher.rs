@@ -136,21 +136,99 @@ fn an_plus_b_matches(a: i64, b: i64, index: i64) -> bool {
 }
 
 /// §4.2/§4.4: `:is(args)` / `:where(args)` match if any complex
-/// selector in args matches the element. (Specificity differs, but
-/// matching is identical.)
-///
-/// Placeholder body — Task 6 implements the real logic.
-fn matches_is_where<E: Element>(_pc: &PseudoClass, _element: &E) -> bool {
-    false
+/// selector in args matches the element. (Specificity differs per
+/// §17, but matching is identical.)
+fn matches_is_where<E: Element>(pc: &PseudoClass, element: &E) -> bool {
+    match pc.argument.as_ref() {
+        Some(PseudoClassArgument::SelectorList(list)) => {
+            crate::matching::matches_complex_list(list, element)
+        }
+        _ => false,
+    }
 }
 
-/// §4.5 L1650-1804: `:has(args)` matches if any relative selector
-/// in args matches some element related to `element` (descendant or
+/// §4.5 L1650-1804: `:has(args)` matches if any relative selector in
+/// args matches some element related to `element` (descendant or
 /// sibling, depending on the relative selector's leading combinator).
 ///
-/// Placeholder body — Task 6 implements the real logic.
-fn matches_has<E: Element>(_pc: &PseudoClass, _element: &E) -> bool {
-    false
+/// SP-8 scope: handles single-compound relative selectors. Multi-
+/// compound relative selectors (e.g. `:has(.a .b)`) fall back to
+/// `false` for now.
+fn matches_has<E: Element>(pc: &PseudoClass, element: &E) -> bool {
+    let list = match pc.argument.as_ref() {
+        Some(PseudoClassArgument::SelectorList(list)) => list,
+        _ => return false,
+    };
+    // §4.5 L1720-1730: the relative selector list is evaluated with
+    // `:scope` bound to `element`. Each relative selector has an
+    // implicit leading combinator (default Descendant); we walk the
+    // related elements (descendants for Descendant, children for
+    // Child, siblings for Next/SubsequentSibling) and check whether
+    // any of them matches the relative selector's compound.
+    list.0
+        .iter()
+        .any(|cs| matches_relative_complex(cs, element))
+}
+
+/// Match a relative complex selector against `scope`'s related
+/// elements. The leading combinator links the relative selector's
+/// leftmost compound to the implicit `:scope`; it is stored on
+/// `units[len-2]` (the unit just before the trailing `:scope` unit).
+/// If `None`, defaults to Descendant per §4.5 L1705.
+///
+/// SP-8 scope: handles single-compound relative selectors only
+/// (`cs.units.len() == 2`, i.e. `[compound, :scope]`). Multi-
+/// compound relative selectors (e.g. `:has(.a .b)`) fall back to
+/// `false`.
+fn matches_relative_complex<E: Element>(cs: &crate::types::ComplexSelector, scope: &E) -> bool {
+    if cs.units.len() < 2 {
+        return false;
+    }
+    // Multi-compound relative selector — full support deferred.
+    if cs.units.len() != 2 {
+        return false;
+    }
+    // The leading combinator is on units[0] (the subject), since
+    // for a single-compound relative selector units = [{compound,
+    // leading_combinator}, {:scope, None}].
+    let leading_combinator = cs.units[0]
+        .combinator
+        .unwrap_or(crate::types::Combinator::Descendant);
+
+    // Collect candidate elements related to `scope` by the leading combinator.
+    let candidates: Vec<E> = match leading_combinator {
+        crate::types::Combinator::Descendant => collect_descendants(scope),
+        crate::types::Combinator::Child => scope.child_elements(),
+        crate::types::Combinator::NextSibling => scope.next_sibling_element().into_iter().collect(),
+        crate::types::Combinator::SubsequentSibling => {
+            let mut out = Vec::new();
+            let mut cur = scope.next_sibling_element();
+            while let Some(s) = cur {
+                out.push(s.clone());
+                cur = s.next_sibling_element();
+            }
+            out
+        }
+    };
+
+    // For single-compound relative selector, units[0] is the subject.
+    candidates.iter().any(|candidate| {
+        crate::matching::simple_matcher::matches_compound(&cs.units[0].compound, candidate)
+    })
+}
+
+/// Collect all descendants of `root` in document order (depth-first
+/// pre-order). Used by `:has()` with default Descendant combinator.
+fn collect_descendants<E: Element>(root: &E) -> Vec<E> {
+    let mut out = Vec::new();
+    fn walk<E: Element>(root: &E, out: &mut Vec<E>) {
+        for child in root.child_elements() {
+            out.push(child.clone());
+            walk(&child, out);
+        }
+    }
+    walk(root, &mut out);
+    out
 }
 
 /// Whether `arg` is one of the An+B pseudo-class argument shapes.

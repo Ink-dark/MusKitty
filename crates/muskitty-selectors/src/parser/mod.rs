@@ -60,9 +60,24 @@ pub fn parse_a_selector(source: &str) -> Result<SelectorList, SelectorParseError
 /// relative selector (relative to an implicit `:scope` element, per
 /// §3 L1051-1102). Used by `:has()` arguments.
 ///
-/// SP-2 skeleton: relative-selector parsing (implicit leading
-/// combinator + complex-selector) lands in SP-5 together with
-/// `:has()`.
-pub fn parse_a_relative_selector(_source: &str) -> Result<SelectorList, SelectorParseError> {
-    Err(SelectorParseError::NotImplemented)
+/// Delegates to [`crate::parser::relative::parse_relative_selector_list`]
+/// after tokenisation.
+pub fn parse_a_relative_selector(source: &str) -> Result<SelectorList, SelectorParseError> {
+    let tokens = muskitty_css::tokenize(source);
+    let mut stream = TokenStream::new(tokens);
+
+    stream.discard_whitespace();
+    if matches!(stream.next_token(), Token::Eof) {
+        return Err(SelectorParseError::EmptySelector);
+    }
+
+    let list = relative::parse_relative_selector_list(&mut stream)?;
+    stream.discard_whitespace();
+    if !stream.is_empty() {
+        return Err(SelectorParseError::InvalidSelector(format!(
+            "trailing tokens after relative selector: {:?}",
+            stream.next_token()
+        )));
+    }
+    Ok(list)
 }

@@ -531,3 +531,87 @@ fn nth_child_of_s_filters_then_indexes() {
     assert!(!matches(&list, &children[3]));
     assert!(!matches(&list, &children[4]));
 }
+
+// ---------------------------------------------------------------------------
+// Task 6: Logical combinations tests (:is / :where / :not / :has)
+// ---------------------------------------------------------------------------
+
+/// §4.2: `:is(.a, .b)` matches if element has class `a` or class `b`.
+#[test]
+fn is_matches_if_any_arg_matches() {
+    let mut el = StubElement::new("div");
+    el.classes = vec!["b".into()];
+    let list = parse_a_selector(":is(.a, .b)").expect("parses");
+    assert!(matches(&list, &el));
+}
+
+/// §4.4: `:where(.a, .b)` matches identically to `:is` (only
+/// specificity differs).
+#[test]
+fn where_matches_like_is() {
+    let mut el = StubElement::new("div");
+    el.classes = vec!["a".into()];
+    let list = parse_a_selector(":where(.a, .b)").expect("parses");
+    assert!(matches(&list, &el));
+}
+
+/// §4.3: `:not(.a)` matches if element does NOT have class `a`.
+#[test]
+fn not_matches_if_arg_does_not_match() {
+    let mut el = StubElement::new("div");
+    el.classes = vec!["b".into()];
+    let list = parse_a_selector(":not(.a)").expect("parses");
+    assert!(matches(&list, &el));
+
+    el.classes = vec!["a".into()];
+    assert!(!matches(&list, &el));
+}
+
+/// §4.3: `:not(.a, .b)` matches if element matches NEITHER arg.
+#[test]
+fn not_with_list_matches_if_no_arg_matches() {
+    let mut el = StubElement::new("div");
+    el.classes = vec!["c".into()];
+    let list = parse_a_selector(":not(.a, .b)").expect("parses");
+    assert!(matches(&list, &el));
+}
+
+/// §4.5 L1650-1804: `:has(.child)` matches if element has a descendant
+/// matching `.child`.
+#[test]
+fn has_matches_descendant() {
+    let mut parent = StubElement::new("div");
+    let mut child = StubElement::new("span");
+    child.classes = vec!["child".into()];
+    child.parent = Some(Box::new(parent.clone()));
+    parent.children = vec![child.clone()];
+
+    let list = parse_a_selector(":has(.child)").expect("parses");
+    assert!(matches(&list, &parent));
+    assert!(!matches(&list, &child));
+}
+
+/// §4.5: `:has(> .child)` matches only direct children.
+#[test]
+fn has_with_child_combinator_matches_only_direct() {
+    let mut parent = StubElement::new("div");
+    let mut middle = StubElement::new("section");
+    let mut grandchild = StubElement::new("span");
+    grandchild.classes = vec!["child".into()];
+    grandchild.parent = Some(Box::new(middle.clone()));
+    middle.children = vec![grandchild.clone()];
+    middle.parent = Some(Box::new(parent.clone()));
+    parent.children = vec![middle.clone()];
+
+    // `:has(> .child)` — child of parent must have class .child.
+    // parent's direct child is `middle` (no .child class), so no match.
+    let list = parse_a_selector(":has(> .child)").expect("parses");
+    assert!(!matches(&list, &parent));
+
+    // Now add a direct child with .child class.
+    let mut direct = StubElement::new("p");
+    direct.classes = vec!["child".into()];
+    direct.parent = Some(Box::new(parent.clone()));
+    parent.children.push(direct.clone());
+    assert!(matches(&list, &parent));
+}
