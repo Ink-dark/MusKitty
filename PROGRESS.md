@@ -378,7 +378,54 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 ## 下一步
 
-1. **Phase 2 子阶段 2 — Selectors Level 4**：基于 `D:\CSSWG\selectors-4\Overview.md` 起草计划文档，进入 plan 模式。覆盖：简单选择器（类型/通用/类/ID/属性）+ 组合器（后代/子代/相邻兄弟/一般兄弟）+ 伪类（结构性、UI、动态 stub）+ 伪元素 + selector 匹配引擎（基于 muskitty-dom）。完成后回头补 §5.4.1 / §5.4.2 grammar hooks。
+1. **拆分 muskitty-selectors 独立仓库**：SP-1 至 SP-8 全部完成（见下文 Phase 2 子阶段 2），crate 已具备拆仓条件。按 `muskitty-css-parser` 拆仓模式提取。拆仓后回头补 §5.4.1 / §5.4.2 grammar hooks（需要 Selectors 知识）。
 2. **Tokenizer 遗留**：11 个 `<?...>` 处理指令边界失败，CSS 阶段顺带修
 3. **DOM 完整 API**：推迟到 CSS 阶段后，避免返工
 4. **拉取工具**：待 crate 数量增多后再做
+
+## Phase 2 子阶段 2 — Selectors Level 4 ✅
+
+按 [phase2-selectors-sp1-to-sp8.md](.trae/documents/phase2-selectors-sp1-to-sp8.md) 8 个 SP batch 全部完成，覆盖 [Selectors Level 4](https://drafts.csswg.org/selectors-4/) §3 / §4 / §5 / §6 / §13 / §14 / §15 / §17 / §18。
+
+| SP  | 内容                                              | 状态 |
+| --- | ------------------------------------------------- | ---- |
+| SP-1 | §3 数据模型 + parser 框架                        | ✅   |
+| SP-2 | §5 / §6.5 / §6.6 type / universal / class / id 解析 | ✅   |
+| SP-3 | §6 attribute selectors                            | ✅   |
+| SP-4 | §13 tree-structural pseudo + An+B 解析            | ✅   |
+| SP-5 | §4 logical combinations (is/not/where/has) 解析  | ✅   |
+| SP-6 | §15 combinators + complex selector                | ✅   |
+| SP-7 | §17 specificity                                   | ✅   |
+| SP-8 | §18 matching engine + lib API（含 DOM 端到端测试） | ✅   |
+
+测试矩阵：
+
+| 测试文件                | 测试数 | 覆盖内容                                          |
+| ---------------------- | -----: | ------------------------------------------------ |
+| `tests/parser_types.rs`     | 6  | §3 数据结构 + Combinator / PseudoClassArgument    |
+| `tests/parser_simple.rs`    | 10 | type / universal / class / id / ns 解析            |
+| `tests/parser_attribute.rs`| 11 | §6 属性选择器（presence/exact/`~`/`|`/`^`/`$`/`*`/modifier）|
+| `tests/parser_pseudo_tree.rs` | 12 | §13 tree-structural + An+B 解析                   |
+| `tests/parser_nth_of.rs`    | 4  | §13.3 `nth-child(An+B of S?)` 解析                |
+| `tests/parser_logical.rs`   | 10 | §4 is/not/where/has 解析（forgiving / 非forgiving）|
+| `tests/parser_complex.rs`   | 12 | §15 combinators + mixed + trailing 拒绝          |
+| `tests/specificity.rs`      | 22 | §17 A/B/C triplet + is/not/has/nth-of 取最大     |
+| `tests/matching_basic.rs`   | 19 | §5 / §6 simple-selector 匹配 + §15 组合器匹配      |
+| `tests/matching_pseudo.rs`  | 29 | §13 tree-structural + An+B + §4 logical 匹配      |
+| `tests/matching_dom.rs`     | 10 | 端到端 DOM 匹配 + `query_selector(_all)`          |
+| **总计**                | **145** | 全部通过                                      |
+
+架构：
+
+- **Parser** (`src/parser/`) — 复用 `muskitty-css::tokenize`，构建 `SelectorList` / `ComplexSelector` / `CompoundSelector` / `SubclassSelector` / `PseudoClass` / `PseudoElement`。无 DOM 依赖。
+- **Specificity** (`src/specificity.rs`) — 按 §17 计算 A/B/C 三元组。`:is()` / `:not()` / `:has()` 取参数最大值；`:where()` 贡献 0。
+- **Matching** (`src/matching/`) — 通过 `Element` trait 抽象元素 5 个 aspect（§3 L858-873）；右-左走序匹配（§18 L4902-4919）。包含 simple_matcher / pseudo_matcher / dom_impl 子模块。
+
+延后项：
+
+- `:has()` 多 compound 相对选择器（`:has(.a > .b)`）— SP-8 仅支持单 compound；多 compound 返回 `false`。
+- 命名空间严格匹配（`ns|tag`）— 当前保守处理为"任意命名空间均可"。
+- WPT 子集集成 — 推迟到拆仓后做。
+- §7-§12 UI / location / linguistic / resource / display / input 伪类 — 解析已支持，匹配 stub 返回 `false`。
+
+crate 成熟度满足拆分独立 git 仓库的条件（1952 LoC src + 1123 LoC tests，145 测试全绿，覆盖 §3 / §4 / §5 / §6 / §13 / §14 / §15 / §17 / §18）。下一步按 `muskitty-css-parser` 拆仓模式提取 `muskitty-selectors`。
