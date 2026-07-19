@@ -108,20 +108,77 @@ impl Specificity {
     }
 }
 
-// Placeholder — full implementations added in Tasks 4 and 5.
+// Placeholder — `specificity_of_complex` is filled in by Task 6.
 pub fn specificity_of_complex(_cs: &ComplexSelector) -> Specificity {
     Specificity::default()
 }
 
-fn _specificity_of_compound(_compound: &CompoundSelector) -> Specificity {
-    Specificity::default()
+/// §17 L4539-4542: compute the specificity of a single compound
+/// selector. Walks the type selector (if any), each subclass, and
+/// each pseudo-compound.
+pub fn specificity_of_compound(compound: &CompoundSelector) -> Specificity {
+    let mut s = Specificity::default();
+
+    // Type selector (or universal). Universal contributes 0.
+    if let Some(ref ts) = compound.type_selector {
+        match &ts.name {
+            crate::types::TypeSelectorName::Universal => {}
+            crate::types::TypeSelectorName::Name(_) => s.c += 1,
+        }
+    }
+
+    // Subclass selectors: id / class / attribute / pseudo-class.
+    for sub in &compound.subclasses {
+        s += classify_subclass(sub);
+    }
+
+    // Pseudo-compounds: pseudo-element (+ any trailing pseudo-classes
+    // that apply to it). §3 L762-787.
+    for pc in &compound.pseudo_compounds {
+        // Pseudo-element itself: +1 C.
+        s.c += 1;
+        // Trailing pseudo-classes on this pseudo-compound.
+        for trailing in &pc.trailing_pseudo_classes {
+            s += specificity_of_pseudo_class(trailing);
+        }
+    }
+
+    s
 }
 
-fn _specificity_of_pseudo_class(_pc: &PseudoClass) -> Specificity {
-    Specificity::default()
+/// §17 L4539-4542: classify a subclass selector into its specificity
+/// contribution. ID → (1,0,0); class/attribute/pseudo-class → (0,1,0).
+fn classify_subclass(s: &SubclassSelector) -> Specificity {
+    match s {
+        SubclassSelector::Id(_) => Specificity::new(1, 0, 0),
+        SubclassSelector::Class(_) | SubclassSelector::Attribute(_) => Specificity::new(0, 1, 0),
+        // Pseudo-classes need full recursive handling for
+        // :is/:not/:has/:where/:nth-child. Defer to
+        // `specificity_of_pseudo_class`.
+        SubclassSelector::PseudoClass(pc) => specificity_of_pseudo_class(pc),
+    }
 }
 
-#[allow(dead_code)]
-fn _classify_subclass(_s: &SubclassSelector) -> Specificity {
-    Specificity::default()
+/// §17 L4550-4566: compute the specificity contribution of a
+/// pseudo-class. The default case (a plain pseudo-class like `:hover`)
+/// contributes (0,1,0). The special cases for `:is`/`:not`/`:has`/
+/// `:where`/`:nth-child`/`:nth-last-child` are handled in
+/// [`special_pseudo_class_specificity`] (Task 5).
+fn specificity_of_pseudo_class(pc: &PseudoClass) -> Specificity {
+    // §17 L4540: a pseudo-class counts as one B.
+    let base = Specificity::new(0, 1, 0);
+    match special_pseudo_class_specificity(pc) {
+        Some(special) => special,
+        None => base,
+    }
+}
+
+/// §17 L4550-4566: returns `Some(s)` for the special pseudo-classes
+/// (`:is`, `:not`, `:has`, `:where`, `:nth-child`, `:nth-last-child`)
+/// whose specificity is replaced/extended per the spec. Returns `None`
+/// for ordinary pseudo-classes (which use the default (0,1,0)).
+///
+/// Currently returns `None` for all names — Task 5 fills this in.
+fn special_pseudo_class_specificity(_pc: &PseudoClass) -> Option<Specificity> {
+    None
 }
