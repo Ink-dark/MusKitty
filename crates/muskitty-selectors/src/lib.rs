@@ -23,6 +23,7 @@
 //! - Spec source (Markdown): `D:\CSSWG\selectors-4\Overview.md`
 
 pub mod error;
+pub mod matching;
 pub mod parser;
 pub mod specificity;
 pub mod types;
