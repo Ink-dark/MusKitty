@@ -1,14 +1,15 @@
 [workspace]
-members = [
-    "crates/muskitty-css",
-    # 未来成员预留:
-    # "crates/muskitty-network",
-    # "crates/muskitty-layout",
-    # "crates/muskitty-renderer",
-]
+# 主仓库目前不直接包含任何 Rust crate 作为 workspace member。
+# 所有子模块都作为独立 git 仓库剥离，各自有自己的 [workspace] 根。
+# 未来成员预留:
+# "crates/muskitty-network",
+# "crates/muskitty-layout",
+# "crates/muskitty-renderer",
+members = []
 # 以下 crate 都作为独立 git 仓库剥离，各自有自己的 [workspace] 根。
 # exclude 防止父 workspace 误吸入并报 "multiple workspace roots" 错误。
 exclude = [
+    "crates/muskitty-css",
     "crates/muskitty-css-tokenizer",
     "crates/muskitty-css-parser",
     "crates/muskitty-dom",
