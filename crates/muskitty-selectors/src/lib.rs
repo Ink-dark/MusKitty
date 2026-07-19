@@ -24,4 +24,5 @@
 
 pub mod error;
 pub mod parser;
+pub mod specificity;
 pub mod types;
