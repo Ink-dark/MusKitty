@@ -378,7 +378,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 ## 下一步
 
-1. **拆分 muskitty-selectors 独立仓库**：SP-1 至 SP-8 全部完成（见下文 Phase 2 子阶段 2），crate 已具备拆仓条件。按 `muskitty-css-parser` 拆仓模式提取。拆仓后回头补 §5.4.1 / §5.4.2 grammar hooks（需要 Selectors 知识）。
+1. **CSS Values Module**：进入 plan 模式起草计划。回头补 §5.4.1 / §5.4.2 grammar hooks（需要 Selectors 知识）。
 2. **Tokenizer 遗留**：11 个 `<?...>` 处理指令边界失败，CSS 阶段顺带修
 3. **DOM 完整 API**：推迟到 CSS 阶段后，避免返工
 4. **拉取工具**：待 crate 数量增多后再做
@@ -428,4 +428,4 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 - WPT 子集集成 — 推迟到拆仓后做。
 - §7-§12 UI / location / linguistic / resource / display / input 伪类 — 解析已支持，匹配 stub 返回 `false`。
 
-crate 成熟度满足拆分独立 git 仓库的条件（1952 LoC src + 1123 LoC tests，145 测试全绿，覆盖 §3 / §4 / §5 / §6 / §13 / §14 / §15 / §17 / §18）。下一步按 `muskitty-css-parser` 拆仓模式提取 `muskitty-selectors`。
+crate 成熟度满足拆分独立 git 仓库的条件（1952 LoC src + 1123 LoC tests，145 测试全绿，覆盖 §3 / §4 / §5 / §6 / §13 / §14 / §15 / §17 / §18）。已于 2026-07-19 按 `muskitty-dom` Soft 拆仓模式提取至 [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors)（保留 workspace member + path 依赖，git 层面独立）。
