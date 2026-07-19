@@ -1,19 +1,19 @@
 [workspace]
 members = [
-    "crates/muskitty-html5-parser",
-    "crates/muskitty-dom",
     "crates/muskitty-css",
-    "crates/muskitty-selectors",
     # 未来成员预留:
     # "crates/muskitty-network",
     # "crates/muskitty-layout",
     # "crates/muskitty-renderer",
 ]
-# muskitty-css-tokenizer 和 muskitty-css-parser 作为独立 git 仓库剥离，
-# 各自有自己的 [workspace] 根。exclude 防止父 workspace 误吸入并报
-# "multiple workspace roots" 错误。
+# 以下 crate 都作为独立 git 仓库剥离，各自有自己的 [workspace] 根。
+# exclude 防止父 workspace 误吸入并报 "multiple workspace roots" 错误。
 exclude = [
     "crates/muskitty-css-tokenizer",
     "crates/muskitty-css-parser",
+    "crates/muskitty-dom",
+    "crates/muskitty-html5-parser",
+    "crates/muskitty-html5-tokenizer",
+    "crates/muskitty-selectors",
 ]
 resolver = "2"
