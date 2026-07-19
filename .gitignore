@@ -29,3 +29,7 @@ crates/muskitty-css-parser/
 # 由 crates/muskitty-selectors/.git 自行追踪。
 # 主仓库 workspace 仍把它作为 cargo member，但版本控制层面已剥离。
 crates/muskitty-selectors/
+
+# muskitty-css 同样作为独立 git 仓库剥离，
+# 由 crates/muskitty-css/.git 自行追踪。
+crates/muskitty-css/
