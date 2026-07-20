@@ -1,58 +1,120 @@
-# MusKitty -下一代AI浏览器核心
+# MusKitty
 
-**让您的AI小伙伴，在您掌控下，智能浏览网页**
+From-scratch browser core modules in safe Rust. Independent implementations of
+WHATWG and CSSWG specifications — not a Chromium fork, not a binding around an
+existing engine. Each module is published as an independent crate on crates.io
+and developed in its own git repository under the
+[`muskitty-dev`](https://github.com/muskitty-dev) organization. This repository
+is the workspace coordinator and project-level documentation hub.
 
-MusKitty 是下一代AI驱动浏览器 **MusCat（口罩猫）** 的智能核心。她不是一个简单的自动化脚本，而是一个在您**全程监督与授权**下，能够像真人一样理解页面、操作交互的智能伙伴。
+## Project status
 
-## 🎯 核心理念：**赋能，而非取代**
+| Crate | Spec coverage | crates.io | Repo |
+|-------|---------------|-----------|------|
+| `muskitty-html5-tokenizer` | WHATWG HTML §13.2.5.1–§13.2.5.80 (80/80 states) | v0.1.2 | [muskitty-dev/muskitty-html5-tokenizer](https://github.com/muskitty-dev/muskitty-html5-tokenizer) |
+| `muskitty-html5-parser` | WHATWG HTML §13.2.6 (all insertion modes + AAA / foster parenting / foreign content) | v0.1.2 | [muskitty-dev/muskitty-html5-parser](https://github.com/muskitty-dev/muskitty-html5-parser) |
+| `muskitty-dom` | DOM Living Standard §4–§7 | v0.1.0 | [muskitty-dev/muskitty-dom](https://github.com/muskitty-dev/muskitty-dom) |
+| `muskitty-css-tokenizer` | CSS Syntax §4.3.1–§4.3.13 | v0.1.1 | [muskitty-dev/muskitty-css-tokenizer](https://github.com/muskitty-dev/muskitty-css-tokenizer) |
+| `muskitty-css-parser` | CSS Syntax §5.2–§5.5 + §5.4.1/§5.4.2 grammar hooks | v0.1.0 | [muskitty-dev/muskitty-css-parser](https://github.com/muskitty-dev/muskitty-css-parser) |
+| `muskitty-css` | Facade combining tokenizer + parser | v0.4.0 | [muskitty-dev/muskitty-css](https://github.com/muskitty-dev/muskitty-css) |
+| `muskitty-selectors` | Selectors Level 4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | v0.1.0 | [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors) |
 
-我们坚信，AI应该作为人类能力的延伸，在**完全透明和可控**的前提下工作。因此，MusKitty 的每一次点击、每一次输入、每一次导航，都会明确征得您的同意。
+Test status (latest CI): each independent repo runs 6 jobs (Check / Unit
+Tests / Integration Tests / Format / Clippy / MSRV 1.82). See PROGRESS.md for
+the per-crate test matrix.
 
-## ✨ 主要特性
+### What is intentionally out of scope
 
-*   **拟人化操作**：超越简单的API调用。MusKitty 能“看到”页面元素，像真人一样思考操作逻辑（点击、滚动、填写表单、切换标签页）。
-*   **用户主权**：所有关键操作步骤均会暂停，向您清晰说明“**我将要做什么**”，并等待您的明确许可（“批准”或“跳过”）。您是永远在驾驶座的指挥官。
-*   **自然语言任务**：直接告诉 MusKitty 您的目标，例如：“找到这个月最热门的AI新闻摘要”或“比较这三款耳机的价格和评价”。
-*   **强大的上下文理解**：结合页面DOM、视觉布局和文本内容，精准理解当前页面状态，做出合理决策。
-*   **模块化与可扩展**：核心引擎与任务技能分离，您可以轻松地训练或添加新的“技能包”来教会 MusKitty 处理特定网站或复杂流程。
+- Rendering / compositing / GPU integration
+- JavaScript engine (no V8, no Blink)
+- Browser UI / Chrome / extensions
+- Networking stack (deferred to a later layer)
 
-## 🛡️ 安全与控制
+The project is currently in Phase 2 (CSS parsing layer). Layer 3 (Layout),
+Layer 4 (Renderer), and Layer 5 (Network) are future work — see
+[PROGRESS.md](PROGRESS.md) for the layer roadmap.
 
-您的安全和隐私是我们的首要设计原则：
+## Repository layout
 
-1.  **权限沙箱**：您可以精确授权 MusKitty 访问特定网站或域名范围。
-2.  **操作确认**：每一步都清晰可见，可随时中断。
-3.  **无后台隐藏行为**：所有活动均在浏览器前台界面有明确日志和状态提示。
-4.  **本地处理优先**：敏感信息处理尽可能在本地进行，最大限度保护您的数据。
+```
+MusKitty/                              # this repo — workspace coordinator
+├── Cargo.toml                         # members = [], exclude = [7 published crates]
+├── PROGRESS.md                        # project-wide progress dashboard
+├── CLAUDE.md                          # engineering rules / hard constraints
+├── README.md                          # this file
+├── crates/                            # each subdir is an independent git repo
+│   ├── muskitty-dom/                  # → muskitty-dev/muskitty-dom
+│   ├── muskitty-html5-tokenizer/      # → muskitty-dev/muskitty-html5-tokenizer
+│   ├── muskitty-html5-parser/         # → muskitty-dev/muskitty-html5-parser
+│   ├── muskitty-css-tokenizer/        # → muskitty-dev/muskitty-css-tokenizer
+│   ├── muskitty-css-parser/           # → muskitty-dev/muskitty-css-parser
+│   ├── muskitty-css/                  # → muskitty-dev/muskitty-css
+│   └── muskitty-selectors/            # → muskitty-dev/muskitty-selectors
+├── docs/
+│   ├── spec/                          # source specs (css-syntax-3 Overview.bs)
+│   └── archive/                       # historical design docs / review reports
+└── .trae/archive/                     # archived phase plans
+```
 
-## 🚀 快速开始
+Each `crates/*` subdirectory has its own `.git` and remote. The top-level
+`Cargo.toml` lists them in `exclude` (not `members`) so they are not picked up
+by the parent workspace — each crate carries its own `[workspace]` block.
 
+## Using the published crates
 
+Each crate can be consumed independently. The common case is to depend on a
+facade crate (e.g. `muskitty-css`, `muskitty-selectors`) and let it pull in
+the lower-level pieces.
 
-### 使用 MusKitty
+```toml
+[dependencies]
+muskitty-css = "0.4"
+muskitty-selectors = "0.1"
+muskitty-html5-parser = "0.1"
+muskitty-dom = "0.1"
+```
 
+MSRV: Rust 1.82+ across all crates.
 
-## 📖 进阶指南
+## Building locally
 
-您可以在设置中：
-*   **管理技能**：查看、禁用或寻找新的任务技能模块。
-*   **设置授权偏好**：为信任的网站设置“在此网站上，同类型操作无需重复确认”。
-*   **查看日志**：回顾 MusKitty 的所有历史活动和操作记录。
+Because each crate is its own git repo, clone the crates you need side-by-side
+so `path = "../..."` dependencies resolve:
 
-## 🐱 关于名字
+```bash
+git clone https://github.com/muskitty-dev/muskitty-css.git
+git clone https://github.com/muskitty-dev/muskitty-css-parser.git
+git clone https://github.com/muskitty-dev/muskitty-css-tokenizer.git
+```
 
-**MusCat** 是主浏览器，意为“口罩猫”，象征着在纷繁复杂的网络世界中为您提供一层智能过滤与保护。
-**MusKitty** 是其核心，是那只藏在里面、聪明伶俐、执行具体任务的小猫，永远听从您的召唤。
+Or clone the coordinator repo (this one) and the sub-repos into `crates/`.
+Each crate's README has its own build / test instructions.
 
-## 🤝 贡献与支持
+## Engineering conventions
 
-我们正在积极开发中！欢迎反馈、建议和贡献。
+- **Ground truth**: WHATWG / CSSWG specs. WPT and html5lib test suites are
+  consumed as conformance checks, but if a test diverges from the current
+  spec, the spec wins.
+- **Safety**: stable Rust, zero `unsafe` outside FFI boundaries (none
+  currently), zero C/C++ dependencies.
+- **Coverage**: each module ships its own unit + integration tests; public
+  APIs have doc comments citing the spec section.
+- **History**: linear, rebase-only. Each sub-task is one commit formatted as
+  `[module] what + why` (e.g. `[tokenizer] add Data state, §13.2.5.1`).
+- **Extraction**: a crate is split into its own git repo once it reaches spec
+  coverage parity with the next layer's entry threshold, then published to
+  crates.io via a tag-triggered GitHub Actions workflow.
 
-*   **问题与建议**：[提交 Issue]
-*   **技能开发**：[查看技能开发文档]
+See [CLAUDE.md](CLAUDE.md) for the full hard-constraint list and
+[PROGRESS.md](PROGRESS.md) for detailed progress per layer.
 
----
+## License
 
-> 让浏览，变得更聪明、更轻松，也更安全。从让 MusKitty 成为您值得信赖的浏览伙伴开始。
+Apache-2.0, consistent with all published crates.
 
-**请记住：猫咪很聪明，但缰绳永远在您手中。**
+## About the name
+
+**MusCat** (口罩猫, "mask cat") is the eventual browser product.
+**MusKitty** is its in-development core: the smart kitten inside the mask,
+listening for instructions. The project is unrelated to any other cat-themed
+project or brand.
