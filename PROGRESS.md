@@ -1,21 +1,25 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-07-18 | 基于 git commit `b1e15f4` (CP-7, v0.2.0 待 commit)
+> 最后更新: 2026-07-19 | 基于 git commit `bafaebd` (7 个 crate 全部发布到 crates.io)
 >
-> Phase 2 子阶段 1（CSS Syntax tokenizer + parser）收尾：§4.3 + §5 全部完成。
+> Phase 2 子阶段 2（Selectors Level 4）已收尾并剥离为独立仓库。
+> §5.4.1 / §5.4.2 grammar hooks 已实现并集成到 Selectors parser。
 
 ## 总览
 
-| 模块 | 状态 | 规范覆盖 | 测试通过率 | 备注 |
-|------|------|---------|-----------|------|
-| **Tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | 14 失败：11 个 `<?...>` 处理指令边界 + 3 个 xmlViolation（infoset 强制转换，规范范围外，已从基线排除） |
-| **Tree Construction** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | 100% (1716/1716, 204 skipped) | skipped = fragment 解析 + script-on 模式（未实现） |
-| **DOM Core** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | `muskitty-dom` 独立 crate |
-| **HTML Parser (整体)** | ✅ Phase 1 收尾 | — | — | 作为独立 crate 已可用 |
-| **CSS Tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) | 单元测试全绿 | `muskitty-css` crate 内 |
-| **CSS Parser** | ✅ 完成 | CSS Syntax §5 (§5.2, §5.3, §5.4.3–§5.4.10, §5.5.1–§5.5.11) | 55 单元 + 7 doctest | 9/10 entry points；§5.4.1/§5.4.2 grammar hooks 延后到 Selectors 阶段 |
-| DOM 完整 API (Events/Selectors/Style) | ⬜ 推迟 | — | — | 推迟到 Phase 2 (CSS) 之后 |
-| muskitty-network / muskitty-layout / muskitty-renderer | ⬜ 远期 | — | — | roadmap Layer 3–5 |
+| 模块 | 状态 | 规范覆盖 | 测试通过率 | crates.io | 独立仓库 |
+|------|------|---------|-----------|-----------|---------|
+| **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | v0.1.2 | muskitty-dev/muskitty-html5-tokenizer |
+| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | 100% (1716/1716, 204 skipped) | v0.1.2 | muskitty-dev/muskitty-html5-parser |
+| **muskitty-dom** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | v0.1.0 | muskitty-dev/muskitty-dom |
+| **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) | 单元测试全绿 | v0.1.1 | muskitty-dev/muskitty-css-tokenizer |
+| **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks) | 74 单元 | v0.1.0 | muskitty-dev/muskitty-css-parser |
+| **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.4.0 | muskitty-dev/muskitty-css |
+| **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 145 测试全绿 | v0.1.0 | muskitty-dev/muskitty-selectors |
+| DOM 完整 API (Events/Style/innerHTML) | ⬜ 推迟 | — | — | — | — |
+| muskitty-network / muskitty-layout / muskitty-renderer | ⬜ 远期 | — | — | — | — |
+
+**14 个 html5lib tokenizer 失败说明**：3 个 xmlViolation（infoset 强制转换，规范范围外）+ 11 个 `<?...>` PI 边界（test2/test3，html5lib 测试套件过时，期望 `Comment` 但现行 WHATWG §13.2.5.72-76 规定产生 `ProcessingInstruction`）。代码遵循现行 WHATWG 规范，测试套件过时。对浏览器级应用无影响（真实网页几乎不会触发这些边界）。
 
 ## Phase 1 (HTML 解析层) — 已收尾
 
@@ -95,7 +99,7 @@ CSS Syntax Module §4.3.1–§4.3.13 全部实现，详见 C-2 至 C-7 commits �
 
 ### 延后项（标注在代码中，待后续阶段补回）
 
-- **§5.4.1 / §5.4.2 grammar hooks**：`parse something according to a CSS grammar` / `parse a comma-separated list according to a CSS grammar` 需要 Selectors / Values grammar 知识。等 Selectors Level 4 阶段需要时再补。
+- ~~**§5.4.1 / §5.4.2 grammar hooks**~~ ✅ 已完成（2026-07-19）：在 `src/grammar.rs` 实现 `Grammar` trait + `parse_a_grammar` + `parse_a_comma_separated_list_with_grammar`；selectors crate 通过 `parser/grammar.rs::SelectorGrammar` 接入，§18 Parse A Selector 走 §5.4.1 路径。
 - **§5.5.6 `original_text` for custom property**：`consume_a_declaration` 暂不捕获 `original_text`。需要 `TokenStream` 保留原始 source text 与 token range 映射，是 TokenStream 的扩展。代码中留 TODO 注释，等 var() 实现需求出现后补。
 - **§5.5.6 `unicode-range` descriptor re-tokenization**：需要 source-text tracking 用于重新分词。代码中留 TODO 注释。
 
@@ -204,10 +208,33 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 仓库策略
 
-- **暂不拆分独立 crate**：`muskitty-dom` + `muskitty-html5-parser` 保留在主仓库 `d:\Muskitty` 的 workspace 内，成熟后再拆。
-- **主仓库保留为 workspace 协调中心**：后续 CSS/Network/Layout/Renderer crate 在主仓库开发。
-- **后续计划**：开发一个工具统一拉取各 crate 源代码（具体形式待定，可能为 git submodule / cargo workspace / vendoring 工具）。
-- **远期目标**：`https://github.com/muskitty-dev/muskitty-html5-parser` 仍为预留仓库名，待 HTML Parser + DOM 成熟后再推送。
+**全部 7 个 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。主仓库 `d:\Muskitty` 现仅作为 workspace 协调中心（`members = []`，所有子 crate 在 `exclude` 列表中）。
+
+### crates.io 发布状态（截至 2026-07-19）
+
+| crate | 版本 | crates.io 发布时间 | 仓库 |
+|-------|------|-------------------|------|
+| muskitty-dom | 0.1.0 | — | [muskitty-dev/muskitty-dom](https://github.com/muskitty-dev/muskitty-dom) |
+| muskitty-html5-tokenizer | 0.1.2 | — | [muskitty-dev/muskitty-html5-tokenizer](https://github.com/muskitty-dev/muskitty-html5-tokenizer) |
+| muskitty-html5-parser | 0.1.2 | — | [muskitty-dev/muskitty-html5-parser](https://github.com/muskitty-dev/muskitty-html5-parser) |
+| muskitty-css-tokenizer | 0.1.1 | 2026-07-19 | [muskitty-dev/muskitty-css-tokenizer](https://github.com/muskitty-dev/muskitty-css-tokenizer) |
+| muskitty-css-parser | 0.1.0 | 2026-07-19 | [muskitty-dev/muskitty-css-parser](https://github.com/muskitty-dev/muskitty-css-parser) |
+| muskitty-css | 0.4.0 | 2026-07-19T11:55:38Z | [muskitty-dev/muskitty-css](https://github.com/muskitty-dev/muskitty-css) |
+| muskitty-selectors | 0.1.0 | 2026-07-19T12:11:16Z | [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors) |
+
+### CI/CD 模式
+
+每个独立 crate 仓库统一采用：
+
+- **CI workflow**（`.github/workflows/ci.yml`）：6 个 job（Check / Unit Tests / Integration Tests / Format / Clippy / MSRV 1.82）；通过 `scripts/setup-deps.sh` 克隆 path 依赖到 `../` 相对路径；通过 `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` 注入避免 anonymous clone 被限流。
+- **Publish workflow**（`.github/workflows/publish.yml`）：tag-triggered（`v*`）；幂等设计（先查询 crates.io API，若版本已存在则跳过）；成功后通过 `softprops/action-gh-release` 创建 GitHub Release。
+- **`CARGO_REGISTRY_TOKEN` secret**：通过 `gh secret set` 配置到每个独立仓库。
+
+### 主仓库职责
+
+- **workspace 协调中心**：保留 `d:\Muskitty\Cargo.toml` 作为 workspace 根（`members = []` + `exclude = [...]`），便于本地开发时一次性构建所有 crate。
+- **文档中心**：保留 `PROGRESS.md` / `CLAUDE.md` / `.trae/documents/` 作为项目级文档。
+- **未来 crate 预留**：`muskitty-network` / `muskitty-layout` / `muskitty-renderer` 将在主仓库内开发，成熟后再剥离。
 
 ## Phase 2 规划：muskitty-css (CSS 解析层)
 
@@ -265,89 +292,37 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 源代码结构
 
+主仓库仅作为 workspace 协调中心（`members = []`）；7 个子 crate 各自独立 git 仓库，本地通过 `crates/` 目录与主仓库同级共存。具体每个 crate 的内部结构见各自仓库的 README。
+
 ```
-d:\Muskitty\
-├── Cargo.toml                          (workspace)
-├── PROGRESS.md                         (本文件)
-├── CLAUDE.md                           (硬约束)
-├── crates/
-│   ├── muskitty-dom/                   (Layer 1 子模块)
-│   │   ├── Cargo.toml
-│   │   ├── src/
-│   │   │   ├── lib.rs
-│   │   │   ├── node.rs                 (Node / NodeType / NodeKind / Descendants)
-│   │   │   ├── element.rs              (ElementData)
-│   │   │   ├── text.rs                 (TextData)
-│   │   │   ├── comment.rs              (CommentData)
-│   │   │   ├── document.rs             (DocumentData)
-│   │   │   ├── document_type.rs        (DocumentTypeData)
-│   │   │   ├── document_fragment.rs    (DocumentFragmentData)
-│   │   │   ├── processing_instruction.rs
-│   │   │   ├── attribute.rs            (Attribute / Namespace)
-│   │   │   ├── tree.rs                 (append_child / insert_before / ...)
-│   │   │   └── error.rs                (DomError)
-│   │   └── tests/
-│   │       └── node.rs
-│   ├── muskitty-html5-parser/           (Layer 1 主模块)
-│   │   ├── Cargo.toml                  (依赖 muskitty-dom)
-│   │   ├── src/
-│   │   │   ├── lib.rs                  (parse() 入口)
-│   │   │   ├── error/mod.rs            (ParseError)
-│   │   │   ├── tokenizer/
-│   │   │   │   ├── mod.rs
-│   │   │   │   ├── types.rs            (Token / TagToken / DoctypeToken / State)
-│   │   │   │   ├── trait_def.rs        (Tokenizer trait)
-│   │   │   │   ├── impls.rs            (HtmlTokenizer + 80 状态, ~3900 行)
-│   │   │   │   └── entities.rs         (2231 条命名实体表)
-│   │   │   └── parser/
-│   │   │       ├── mod.rs              (HtmlTreeConstructor)
-│   │   │       ├── insertion_mode.rs   (InsertionMode 枚举)
-│   │   │       ├── dispatch.rs         (insertion mode 分发 + 23 handler)
-│   │   │       ├── helpers.rs          (adoption agency / foster parenting / ...)
-│   │   │       └── foreign.rs          (SVG/MathML foreign content)
-│   │   └── tests/
-│   │       ├── data/
-│   │       │   ├── tokenizer/*.test
-│   │       │   └── tree-construction/*.dat
-│   │       ├── html5lib_tokenizer.rs
-│   │       ├── html5lib_tree_construction.rs
-│   │       ├── html5lib_gap_report.md
-│   │       └── tree_construction_gap_report.md
-│   ├── muskitty-css/                   (Layer 2 — Phase 2 子阶段 1 已完成)
-│   │   ├── Cargo.toml                  (v0.2.0，独立无依赖)
-│   │   ├── README.md
-│   │   ├── src/
-│   │   │   ├── lib.rs                  (顶层 API: tokenize/parse_stylesheet/parse_rule/...)
-│   │   │   ├── tokenizer/              (CSS Syntax §4.3)
-│   │   │   │   ├── mod.rs
-│   │   │   │   ├── types.rs            (Token: Ident/Function/AtKeyword/Hash/String/Url/Number/...)
-│   │   │   │   ├── trait_def.rs        (Tokenizer trait)
-│   │   │   │   └── impls.rs            (CssTokenizer)
-│   │   │   └── parser/                 (CSS Syntax §5)
-│   │   │       ├── mod.rs              (pub use 重新导出)
-│   │   │       ├── types.rs            (§5.2 Stylesheet/Rule/AtRule/QualifiedRule/Declaration/...)
-│   │   │       ├── token_stream.rs     (§5.3 TokenStream + 9 操作)
-│   │   │       ├── algorithms.rs       (§5.5.1-§5.5.11 共 11 个算法)
-│   │   │       └── entry_points.rs     (§5.4.3-§5.4.10 共 8 个 entry points)
-│   │   └── tests/
-│   │       ├── parser_types.rs         (CP-1: §5.2 数据结构测试)
-│   │       ├── token_stream.rs         (CP-2: §5.3 TokenStream 测试)
-│   │       ├── parser_algorithms_cp3.rs
-│   │       ├── parser_algorithms_cp4.rs
-│   │       ├── parser_algorithms_cp5.rs
-│   │       └── parser_entry_points.rs  (CP-6: §5.4 entry points 测试)
-│   ├── muskitty-network/               (Layer 5 — 远期)
-│   ├── muskitty-layout/                (Layer 3 — 远期)
-│   └── muskitty-renderer/              (Layer 4 — 远期)
-└── docs/
-    ├── skill/
-    │   └── whatwg-spec-adversarial-review.md
-    └── tokenizer-spec-review.md
+d:\Muskitty\                              # 主仓库 (Ink-dark/MusKitty)
+├── Cargo.toml                           # workspace 根：members = [], exclude = [7 个 crate]
+├── .gitignore                           # 排除 crates/muskitty-*/ 目录
+├── PROGRESS.md                          # 本文件
+├── CLAUDE.md                            # 硬约束
+├── docs/                                # 项目级文档
+├── .trae/documents/                     # 阶段规划文档
+└── crates/                              # 子 crate 各自独立 git 仓库
+    ├── muskitty-dom/                    # → muskitty-dev/muskitty-dom (v0.1.0)
+    ├── muskitty-html5-tokenizer/        # → muskitty-dev/muskitty-html5-tokenizer (v0.1.2)
+    ├── muskitty-html5-parser/           # → muskitty-dev/muskitty-html5-parser (v0.1.2)
+    ├── muskitty-css-tokenizer/          # → muskitty-dev/muskitty-css-tokenizer (v0.1.1)
+    ├── muskitty-css-parser/             # → muskitty-dev/muskitty-css-parser (v0.1.0)
+    ├── muskitty-css/                    # → muskitty-dev/muskitty-css (v0.4.0)
+    └── muskitty-selectors/              # → muskitty-dev/muskitty-selectors (v0.1.0)
 ```
+
+未来 crate 预留（在主仓库内开发，成熟后再剥离）：`crates/muskitty-css-values`、`crates/muskitty-network`、`crates/muskitty-layout`、`crates/muskitty-renderer`。
 
 ## Git 提交历史（近期）
 
 ```
+bafaebd [workspace] hard-extract muskitty-css from workspace members
+1168434 [workspace] hard-extract dom/html5-parser/selectors from members
+3e2d8fb [css] re-export grammar module from muskitty-css-parser
+7629c41 [chore] update PROGRESS.md: muskitty-selectors extracted to independent repo
+11cbdf1 [chore] untrack muskitty-selectors (extracted to independent repo)
+1b27bae [selectors] SP-8: mark Phase 2 子阶段 2 (Selectors Level 4) complete in PROGRESS.md
 b1e15f4 [css-parser] CP-7: lib.rs top-level API + crate-level doc
 cacad17 [css-parser] CP-6: 5.4 Parser Entry Points (9 of 10)
 980e429 [css-parser] CP-5: 5.5.1-5.5.5 stylesheet/rule/block algorithms
@@ -378,10 +353,12 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 ## 下一步
 
-1. **CSS Values Module**：进入 plan 模式起草计划。回头补 §5.4.1 / §5.4.2 grammar hooks（需要 Selectors 知识）。
-2. **Tokenizer 遗留**：11 个 `<?...>` 处理指令边界失败，CSS 阶段顺带修
-3. **DOM 完整 API**：推迟到 CSS 阶段后，避免返工
-4. **拉取工具**：待 crate 数量增多后再做
+1. **Phase 2 子阶段 3 — CSS Values Module**：长度/百分比/角度/时间/分辨率、`calc()` / `min()` / `max()`、`var()` 与自定义属性（需补回 §5.5.6 `original_text` 捕获）。新 crate：`muskitty-css-values`。
+2. **Phase 2 子阶段 4 — CSSOM**：Stylesheet / Rule / Declaration / AtRule 数据结构映射到 CSSStyleRule / CSSMediaRule / CSSImportRule 等。
+3. **Phase 2 子阶段 5 — Cascade + Computed values**：重要度/层叠顺序/来源排序、继承 / initial / inherit / unset、计算值 / 使用值 / 实际值。入场门槛 = Layer 2 cascade + computed values 测试通过（满足后可进入 Layer 3 Layout）。
+4. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟到 CSS Values + CSSOM 完成后做，避免返工。
+5. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug（11 PI 测试过时 + 3 xmlViolation 规范外），**保持现状**。如未来 html5lib 上游更新测试自然转绿。
+6. **`§5.5.6 original_text` / `unicode-range` re-tokenization**：等 CSS Values 阶段需要时补。
 
 ## Phase 2 子阶段 2 — Selectors Level 4 ✅
 
@@ -428,4 +405,12 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 - WPT 子集集成 — 推迟到拆仓后做。
 - §7-§12 UI / location / linguistic / resource / display / input 伪类 — 解析已支持，匹配 stub 返回 `false`。
 
-crate 成熟度满足拆分独立 git 仓库的条件（1952 LoC src + 1123 LoC tests，145 测试全绿，覆盖 §3 / §4 / §5 / §6 / §13 / §14 / §15 / §17 / §18）。已于 2026-07-19 按 `muskitty-dom` Soft 拆仓模式提取至 [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors)（保留 workspace member + path 依赖，git 层面独立）。
+crate 成熟度满足拆分独立 git 仓库的条件（1952 LoC src + 1123 LoC tests，145 测试全绿，覆盖 §3 / §4 / §5 / §6 / §13 / §14 / §15 / §17 / §18）。已于 2026-07-19 剥离为独立仓库 [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors)（Hard extraction，自有 `[workspace]` 块，path 依赖指向 `../muskitty-css` 等同级 crate）。v0.1.0 已发布到 crates.io（2026-07-19T12:11:16Z）。
+
+### §5.4.1 / §5.4.2 Grammar Hooks 集成（2026-07-19）
+
+- `muskitty-css-parser/src/grammar.rs`：新增 `Grammar` trait + `parse_a_grammar` + `parse_a_comma_separated_list_with_grammar`（CSS Syntax Module Level 3 §5.4.1/§5.4.2）。
+- `muskitty-selectors/src/parser/cv_adapter.rs`：ComponentValue → Token 适配器，让 Selectors parser 复用 CSS Syntax 解析路径。
+- `muskitty-selectors/src/parser/grammar.rs`：`SelectorGrammar` + `RelativeSelectorGrammar`，让 §18 Parse A Selector 走 §5.4.1 路径。
+- `muskitty-css/src/parser/mod.rs`：重新导出 grammar 模块。
+- 测试：css-parser 74 / selectors 150 / workspace 263 全部通过。
