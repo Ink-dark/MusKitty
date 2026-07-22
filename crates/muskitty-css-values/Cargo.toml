@@ -1,0 +1,16 @@
+[package]
+name = "muskitty-css-values"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "CSS Values Level 4 typed value parsing (length/angle/time/calc/var)"
+repository = "https://github.com/muskitty-dev/muskitty-css-values"
+homepage = "https://github.com/muskitty-dev"
+documentation = "https://docs.rs/muskitty-css-values"
+keywords = ["css", "values", "length", "calc", "web"]
+categories = ["parser-implementations", "web-programming"]
+authors = ["MusCat / MusKitty Bit-Torch Community"]
+
+[dependencies]
+muskitty-css = { path = "../muskitty-css", version = "0.5.0" }

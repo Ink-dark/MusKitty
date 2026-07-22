@@ -1,9 +1,9 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-07-19 | 基于 git commit `bafaebd` (7 个 crate 全部发布到 crates.io)
+> 最后更新: 2026-07-22 | 基于 git commit `d9a8a9b` (Phase 2 子阶段 3 CSS Values Module 完成)
 >
-> Phase 2 子阶段 2（Selectors Level 4）已收尾并剥离为独立仓库。
-> §5.4.1 / §5.4.2 grammar hooks 已实现并集成到 Selectors parser。
+> Phase 2 子阶段 3（CSS Values Module）已完成，`muskitty-css-values` v0.1.0 在主仓库内开发（未剥离）。
+> §5.5.6 `original_text`（custom property source-text tracking）已补回。
 
 ## 总览
 
@@ -12,10 +12,11 @@
 | **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | v0.1.2 | muskitty-dev/muskitty-html5-tokenizer |
 | **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | 100% (1716/1716, 204 skipped) | v0.1.2 | muskitty-dev/muskitty-html5-parser |
 | **muskitty-dom** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | v0.1.0 | muskitty-dev/muskitty-dom |
-| **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) | 单元测试全绿 | v0.1.1 | muskitty-dev/muskitty-css-tokenizer |
-| **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks) | 74 单元 | v0.1.0 | muskitty-dev/muskitty-css-parser |
-| **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.4.0 | muskitty-dev/muskitty-css |
+| **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking | 单元测试全绿 | v0.1.1 (本地 v0.2.0 未发布) | muskitty-dev/muskitty-css-tokenizer |
+| **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 74 单元 + 3 source-text | v0.1.0 (本地 v0.2.0 未发布) | muskitty-dev/muskitty-css-parser |
+| **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.4.0 (本地 v0.5.0 未发布) | muskitty-dev/muskitty-css |
 | **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 145 测试全绿 | v0.1.0 | muskitty-dev/muskitty-selectors |
+| **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 148 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | DOM 完整 API (Events/Style/innerHTML) | ⬜ 推迟 | — | — | — | — |
 | muskitty-network / muskitty-layout / muskitty-renderer | ⬜ 远期 | — | — | — | — |
 
@@ -100,8 +101,8 @@ CSS Syntax Module §4.3.1–§4.3.13 全部实现，详见 C-2 至 C-7 commits �
 ### 延后项（标注在代码中，待后续阶段补回）
 
 - ~~**§5.4.1 / §5.4.2 grammar hooks**~~ ✅ 已完成（2026-07-19）：在 `src/grammar.rs` 实现 `Grammar` trait + `parse_a_grammar` + `parse_a_comma_separated_list_with_grammar`；selectors crate 通过 `parser/grammar.rs::SelectorGrammar` 接入，§18 Parse A Selector 走 §5.4.1 路径。
-- **§5.5.6 `original_text` for custom property**：`consume_a_declaration` 暂不捕获 `original_text`。需要 `TokenStream` 保留原始 source text 与 token range 映射，是 TokenStream 的扩展。代码中留 TODO 注释，等 var() 实现需求出现后补。
-- **§5.5.6 `unicode-range` descriptor re-tokenization**：需要 source-text tracking 用于重新分词。代码中留 TODO 注释。
+- ~~**§5.5.6 `original_text` for custom property**~~ ✅ 已完成（2026-07-22，CV-0b）：`CssTokenizer` 加 `next_token_with_span` + `position()`；`TokenStream` 加 `with_source` 构造器 + `source_slice` 方法 + `token_spans`/`source` 字段；`consume_a_declaration` 对 custom property 捕获 `original_text`。
+- **§5.5.6 `unicode-range` descriptor re-tokenization**：需要 source-text tracking 用于重新分词。基础设施已就绪（CV-0b），待实际需求出现后补。
 
 ### 子阶段 1 测试矩阵
 
@@ -208,7 +209,7 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 仓库策略
 
-**全部 7 个 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。主仓库 `d:\Muskitty` 现仅作为 workspace 协调中心（`members = []`，所有子 crate 在 `exclude` 列表中）。
+**7 个已成熟 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。新 crate `muskitty-css-values` 在主仓库内作为 workspace member 开发（未剥离、未发布），待成熟后再剥离。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-css-values"]`，`exclude` 列表排除 7 个已剥离 crate。
 
 ### crates.io 发布状态（截至 2026-07-19）
 
@@ -232,9 +233,9 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ### 主仓库职责
 
-- **workspace 协调中心**：保留 `d:\Muskitty\Cargo.toml` 作为 workspace 根（`members = []` + `exclude = [...]`），便于本地开发时一次性构建所有 crate。
-- **文档中心**：保留 `PROGRESS.md` / `CLAUDE.md` / `.trae/documents/` 作为项目级文档。
-- **未来 crate 预留**：`muskitty-network` / `muskitty-layout` / `muskitty-renderer` 将在主仓库内开发，成熟后再剥离。
+- **workspace 协调中心**：保留 `d:\Muskitty\Cargo.toml` 作为 workspace 根（`members = ["crates/muskitty-css-values"]` + `exclude = [7 个已剥离 crate]`），便于本地开发时一次性构建所有 crate。
+- **新 crate 孵化器**：`muskitty-css-values` 当前在主仓库内开发；`muskitty-network` / `muskitty-layout` / `muskitty-renderer` 未来也将在主仓库内开发，成熟后再剥离。
+- **文档中心**：保留 `PROGRESS.md` / `CLAUDE.md` / `.trae/documents/` / `docs/plans/` 作为项目级文档。
 
 ## Phase 2 规划：muskitty-css (CSS 解析层)
 
@@ -292,24 +293,25 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 源代码结构
 
-主仓库仅作为 workspace 协调中心（`members = []`）；7 个子 crate 各自独立 git 仓库，本地通过 `crates/` 目录与主仓库同级共存。具体每个 crate 的内部结构见各自仓库的 README。
+主仓库作为 workspace 协调中心；7 个已成熟 crate 各自独立 git 仓库（在 `exclude` 列表中），新 crate `muskitty-css-values` 作为 workspace member 在主仓库内开发（成熟后再剥离）。具体每个独立 crate 的内部结构见各自仓库的 README。
 
 ```
 d:\Muskitty\                              # 主仓库 (Ink-dark/MusKitty)
-├── Cargo.toml                           # workspace 根：members = [], exclude = [7 个 crate]
-├── .gitignore                           # 排除 crates/muskitty-*/ 目录
+├── Cargo.toml                           # workspace 根：members = [muskitty-css-values], exclude = [7 个已剥离 crate]
+├── .gitignore                           # 排除已剥离 crate 目录
 ├── PROGRESS.md                          # 本文件
 ├── CLAUDE.md                            # 硬约束
 ├── docs/                                # 项目级文档
 ├── .trae/documents/                     # 阶段规划文档
-└── crates/                              # 子 crate 各自独立 git 仓库
-    ├── muskitty-dom/                    # → muskitty-dev/muskitty-dom (v0.1.0)
-    ├── muskitty-html5-tokenizer/        # → muskitty-dev/muskitty-html5-tokenizer (v0.1.2)
-    ├── muskitty-html5-parser/           # → muskitty-dev/muskitty-html5-parser (v0.1.2)
-    ├── muskitty-css-tokenizer/          # → muskitty-dev/muskitty-css-tokenizer (v0.1.1)
-    ├── muskitty-css-parser/             # → muskitty-dev/muskitty-css-parser (v0.1.0)
-    ├── muskitty-css/                    # → muskitty-dev/muskitty-css (v0.4.0)
-    └── muskitty-selectors/              # → muskitty-dev/muskitty-selectors (v0.1.0)
+└── crates/                              # 子 crate
+    ├── muskitty-dom/                    # → muskitty-dev/muskitty-dom (v0.1.0, 独立仓库)
+    ├── muskitty-html5-tokenizer/        # → muskitty-dev/muskitty-html5-tokenizer (v0.1.2, 独立仓库)
+    ├── muskitty-html5-parser/           # → muskitty-dev/muskitty-html5-parser (v0.1.2, 独立仓库)
+    ├── muskitty-css-tokenizer/          # → muskitty-dev/muskitty-css-tokenizer (本地 v0.2.0, 独立仓库)
+    ├── muskitty-css-parser/             # → muskitty-dev/muskitty-css-parser (本地 v0.2.0, 独立仓库)
+    ├── muskitty-css/                    # → muskitty-dev/muskitty-css (本地 v0.5.0, 独立仓库)
+    ├── muskitty-selectors/              # → muskitty-dev/muskitty-selectors (v0.1.0, 独立仓库)
+    └── muskitty-css-values/             # 主仓库成员 (v0.1.0, 未剥离)
 ```
 
 未来 crate 预留（在主仓库内开发，成熟后再剥离）：`crates/muskitty-css-values`、`crates/muskitty-network`、`crates/muskitty-layout`、`crates/muskitty-renderer`。
@@ -317,6 +319,12 @@ d:\Muskitty\                              # 主仓库 (Ink-dark/MusKitty)
 ## Git 提交历史（近期）
 
 ```
+d9a8a9b [css-values] CV-6: lib top-level API + doctests (9 tests)
+44e80cb [css-values] CV-5: ValuesGrammar impl Grammar + serialization (§5.4.1, §8.1, §9.7)
+0c3f519 [css-values] CV-3: MathExpression AST + calc/min/max/clamp parsing (§9)
+6edd8f9 [css-values] CV-4: VarReference parsing (CSS Variables §3)
+c18c153 [css-values] CV-2: textual types - Keyword/CustomIdent/DashedIdent/CssString/Url
+084809a [css-values] CV-1: numeric types + crate skeleton (§4.4-§4.7, §5, §6)
 bafaebd [workspace] hard-extract muskitty-css from workspace members
 1168434 [workspace] hard-extract dom/html5-parser/selectors from members
 3e2d8fb [css] re-export grammar module from muskitty-css-parser
@@ -353,12 +361,11 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 ## 下一步
 
-1. **Phase 2 子阶段 3 — CSS Values Module**：长度/百分比/角度/时间/分辨率、`calc()` / `min()` / `max()`、`var()` 与自定义属性（需补回 §5.5.6 `original_text` 捕获）。新 crate：`muskitty-css-values`。
+1. ~~**Phase 2 子阶段 3 — CSS Values Module**~~ ✅ 已完成（2026-07-22）：`muskitty-css-values` v0.1.0，148 测试全绿。覆盖长度/百分比/角度/时间/频率/分辨率/比率/数值/整数、文本类型（keyword/ident/string/url）、`calc()`/`min()`/`max()`/`clamp()` AST、`var()` 语法解析、序列化、Grammar hook 接入。详见下方 [Phase 2 子阶段 3](#phase-2-子阶段-3--css-values-module-) 章节。
 2. **Phase 2 子阶段 4 — CSSOM**：Stylesheet / Rule / Declaration / AtRule 数据结构映射到 CSSStyleRule / CSSMediaRule / CSSImportRule 等。
-3. **Phase 2 子阶段 5 — Cascade + Computed values**：重要度/层叠顺序/来源排序、继承 / initial / inherit / unset、计算值 / 使用值 / 实际值。入场门槛 = Layer 2 cascade + computed values 测试通过（满足后可进入 Layer 3 Layout）。
-4. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟到 CSS Values + CSSOM 完成后做，避免返工。
-5. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug（11 PI 测试过时 + 3 xmlViolation 规范外），**保持现状**。如未来 html5lib 上游更新测试自然转绿。
-6. **`§5.5.6 original_text` / `unicode-range` re-tokenization**：等 CSS Values 阶段需要时补。
+3. **Phase 2 子阶段 5 — Cascade + Computed values**：重要度/层叠顺序/来源排序、继承 / initial / inherit / unset、计算值 / 使用值 / 实际值。入场门槛 = Layer 2 cascade + computed values 测试通过（满足后可进入 Layer 3 Layout，将引入 taffy 做 layout）。
+4. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟到 CSSOM 完成后做，避免返工。
+5. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug（11 PI 测试过时 + 3 xmlViolation 规范外），**保持现状**。
 
 ## Phase 2 子阶段 2 — Selectors Level 4 ✅
 
@@ -414,3 +421,50 @@ crate 成熟度满足拆分独立 git 仓库的条件（1952 LoC src + 1123 LoC 
 - `muskitty-selectors/src/parser/grammar.rs`：`SelectorGrammar` + `RelativeSelectorGrammar`，让 §18 Parse A Selector 走 §5.4.1 路径。
 - `muskitty-css/src/parser/mod.rs`：重新导出 grammar 模块。
 - 测试：css-parser 74 / selectors 150 / workspace 263 全部通过。
+
+## Phase 2 子阶段 3 — CSS Values Module ✅
+
+按 [2026-07-22-css-values-module.md](docs/plans/2026-07-22-css-values-module.md) 7 个 CV batch 全部完成，覆盖 [CSS Values Level 4](https://drafts.csswg.org/css-values-4/) §4 / §5 / §6 / §8 / §9 + [CSS Variables Level 1](https://drafts.csswg.org/css-variables-1/) §2 / §3。
+
+**设计原则**：解析与求值分离——本 crate 只构建类型化 AST，不做数值计算和 var() 替换求值（留到子阶段 5 Cascade）。
+
+| CV   | 内容 | 规范 | commit |
+|------|------|------|--------|
+| CV-0a | `CssTokenizer` 加 `next_token_with_span` + `position()` | 工程基础设施 | — |
+| CV-0b | `TokenStream::with_source` + `source_slice` + §5.5.6 `original_text` | CSS Syntax §5.3 / §5.5.6 | — |
+| CV-1 | 数值类型：Length/Percentage/Number/Integer/Angle/Time/Frequency/Resolution/Ratio | §4.4-§4.7, §5, §6 | `084809a` |
+| CV-2 | 文本类型：Keyword/CustomIdent/DashedIdent/CssString/Url | §3 | `c18c153` |
+| CV-4 | VarReference 解析（name + fallback，支持嵌套 var()） | CSS Variables §3 | `6edd8f9` |
+| CV-3 | MathExpression AST + calc/min/max/clamp 递归下降解析 | §9 | `0c3f519` |
+| CV-5 | ValuesGrammar impl Grammar + ToCss 序列化 | §5.4.1, §8.1, §9.7 | `44e80cb` |
+| CV-6 | lib 顶层 API + doctest | — | `d9a8a9b` |
+
+测试矩阵：
+
+| 测试文件 | 测试数 | 覆盖内容 |
+|---------|------|---------|
+| `tests/numeric.rs` | 33 | 9 个数值类型（正/负/单位/范围检查） |
+| `tests/textual.rs` | 25 | 5 个文本类型（keyword/ident/string/url + CSS-wide keyword 排除） |
+| `tests/math.rs` | 36 | calc/min/max/clamp + 常量 + 嵌套 + 错误处理 |
+| `tests/var.rs` | 12 | var() 解析（name/fallback/嵌套/空 fallback） |
+| `tests/integration.rs` | 33 | Grammar hook 入口 + 序列化 roundtrip |
+| `src/lib.rs` doctests | 9 | 顶层 API doctest |
+| **总计** | **148** | 全部通过 |
+
+架构：
+
+- **numeric.rs** — 9 个数值类型，带单位枚举 + §4.4 范围检查。`single_non_ws_cv` 辅助函数过滤 whitespace。
+- **textual.rs** — 5 个文本类型。`CSS_WIDE_OR_RESERVED` 排除 initial/inherit/unset/default/none。
+- **math.rs** — `MathExpression` 枚举（Length/Percentage/Number/Constant/Var/Negate/Sum/Product/Quotient/Min/Max/Clamp）+ `CalcParser` 递归下降解析器（calc-sum → calc-product → calc-value，左结合）。
+- **var.rs** — `VarReference { name, fallback }`，`from_function` 支持 calc() 内嵌套 var()。
+- **grammar.rs** — `ValuesGrammar` impl `Grammar` trait，`ValueKind` 16 变体，`CssValue` 包装枚举。
+- **serialize.rs** — `ToCss` trait + 14 类型实现。MathExpression 序列化遵循 §9.7（`+` 两侧空格，`*`/`/` 无空格，Negate → `(-1 * expr)`）。
+
+延后项（推迟到子阶段 5 Cascade）：
+
+- calc() 数值计算（需要布局上下文解析百分比）
+- min()/max()/clamp() 比较
+- var() 替换求值（§3 的 4 步算法，需要元素上下文 + 循环检测）
+- 三角/指数/round/mod/rem/sign/abs（CSS Values 4 新增，布局用不到）
+
+crate 在主仓库内开发（`members = ["crates/muskitty-css-values"]`），未剥离为独立 git 仓库，未发布到 crates.io。待子阶段 5 Cascade 完成后评估剥离时机。
