@@ -26,7 +26,7 @@ impl std::fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 /// 从 ComponentValue 列表中提取唯一的非 whitespace token。
-fn single_non_ws_cv(cvs: &[ComponentValue]) -> Result<&ComponentValue, ParseError> {
+pub fn single_non_ws_cv(cvs: &[ComponentValue]) -> Result<&ComponentValue, ParseError> {
     let filtered: Vec<&ComponentValue> = cvs
         .iter()
         .filter(|cv| !matches!(cv, ComponentValue::PreservedToken(Token::Whitespace)))
