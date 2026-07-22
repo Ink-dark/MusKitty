@@ -14,7 +14,9 @@
 //! - CSS Values Level 4: `d:\csswg\css-values-4\Overview.md`
 //! - CSS Variables Level 1: `d:\csswg\css-variables-1\Overview.md`
 
+pub mod grammar;
 pub mod math;
 pub mod numeric;
+pub mod serialize;
 pub mod textual;
 pub mod var;
