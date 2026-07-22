@@ -38,7 +38,11 @@ impl VarReference {
         });
 
         let func = func.ok_or_else(|| ParseError::new("expected var() function"))?;
+        Self::from_function(func)
+    }
 
+    /// 从已知的 var() Function 解析（供 calc() 嵌套调用）。
+    pub fn from_function(func: &muskitty_css::parser::Function) -> Result<Self, ParseError> {
         // 第一个参数必须是 custom-property-name (--ident)
         // 过滤首尾 whitespace 找第一个非 ws token
         let first_non_ws = func
