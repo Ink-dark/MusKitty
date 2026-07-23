@@ -52,7 +52,7 @@ pub mod registry;
 pub mod style;
 
 pub use cascade::{cascade_for_element, cascade_winner};
-pub use compute::compute_value;
+pub use compute::{compute_value, ComputeContext};
 pub use defaulting::apply_defaulting;
 pub use filter::collect_declared_values;
 pub use origin::Origin;
