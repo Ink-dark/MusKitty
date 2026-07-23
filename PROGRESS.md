@@ -1,7 +1,8 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-07-22 | 基于 git commit `d9a8a9b` (Phase 2 子阶段 3 CSS Values Module 完成)
+> 最后更新: 2026-07-22 | 基于 git commit (Phase 2 子阶段 4 CSSOM 完成)
 >
+> Phase 2 子阶段 4（CSSOM）已完成，`muskitty-cssom` v0.1.0 在主仓库内开发（未剥离）。
 > Phase 2 子阶段 3（CSS Values Module）已完成，`muskitty-css-values` v0.1.0 在主仓库内开发（未剥离）。
 > §5.5.6 `original_text`（custom property source-text tracking）已补回。
 
@@ -17,6 +18,7 @@
 | **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.4.0 (本地 v0.5.0 未发布) | muskitty-dev/muskitty-css |
 | **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 145 测试全绿 | v0.1.0 | muskitty-dev/muskitty-selectors |
 | **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 148 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
+| **muskitty-cssom** | ✅ 完成 | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | 81 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | DOM 完整 API (Events/Style/innerHTML) | ⬜ 推迟 | — | — | — | — |
 | muskitty-network / muskitty-layout / muskitty-renderer | ⬜ 远期 | — | — | — | — |
 
@@ -209,7 +211,7 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 仓库策略
 
-**7 个已成熟 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。新 crate `muskitty-css-values` 在主仓库内作为 workspace member 开发（未剥离、未发布），待成熟后再剥离。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-css-values"]`，`exclude` 列表排除 7 个已剥离 crate。
+**7 个已成熟 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。新 crate `muskitty-css-values` 和 `muskitty-cssom` 在主仓库内作为 workspace member 开发（未剥离、未发布），待成熟后再剥离。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-css-values", "crates/muskitty-cssom"]`，`exclude` 列表排除 7 个已剥离 crate。
 
 ### crates.io 发布状态（截至 2026-07-19）
 
@@ -233,8 +235,8 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ### 主仓库职责
 
-- **workspace 协调中心**：保留 `d:\Muskitty\Cargo.toml` 作为 workspace 根（`members = ["crates/muskitty-css-values"]` + `exclude = [7 个已剥离 crate]`），便于本地开发时一次性构建所有 crate。
-- **新 crate 孵化器**：`muskitty-css-values` 当前在主仓库内开发；`muskitty-network` / `muskitty-layout` / `muskitty-renderer` 未来也将在主仓库内开发，成熟后再剥离。
+- **workspace 协调中心**：保留 `d:\Muskitty\Cargo.toml` 作为 workspace 根（`members = ["crates/muskitty-css-values", "crates/muskitty-cssom"]` + `exclude = [7 个已剥离 crate]`），便于本地开发时一次性构建所有 crate。
+- **新 crate 孵化器**：`muskitty-css-values` 和 `muskitty-cssom` 当前在主仓库内开发；`muskitty-network` / `muskitty-layout` / `muskitty-renderer` 未来也将在主仓库内开发，成熟后再剥离。
 - **文档中心**：保留 `PROGRESS.md` / `CLAUDE.md` / `.trae/documents/` / `docs/plans/` 作为项目级文档。
 
 ## Phase 2 规划：muskitty-css (CSS 解析层)
@@ -293,11 +295,11 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 源代码结构
 
-主仓库作为 workspace 协调中心；7 个已成熟 crate 各自独立 git 仓库（在 `exclude` 列表中），新 crate `muskitty-css-values` 作为 workspace member 在主仓库内开发（成熟后再剥离）。具体每个独立 crate 的内部结构见各自仓库的 README。
+主仓库作为 workspace 协调中心；7 个已成熟 crate 各自独立 git 仓库（在 `exclude` 列表中），新 crate `muskitty-css-values` 和 `muskitty-cssom` 作为 workspace member 在主仓库内开发（成熟后再剥离）。具体每个独立 crate 的内部结构见各自仓库的 README。
 
 ```
 d:\Muskitty\                              # 主仓库 (Ink-dark/MusKitty)
-├── Cargo.toml                           # workspace 根：members = [muskitty-css-values], exclude = [7 个已剥离 crate]
+├── Cargo.toml                           # workspace 根：members = [muskitty-css-values, muskitty-cssom], exclude = [7 个已剥离 crate]
 ├── .gitignore                           # 排除已剥离 crate 目录
 ├── PROGRESS.md                          # 本文件
 ├── CLAUDE.md                            # 硬约束
@@ -311,10 +313,11 @@ d:\Muskitty\                              # 主仓库 (Ink-dark/MusKitty)
     ├── muskitty-css-parser/             # → muskitty-dev/muskitty-css-parser (本地 v0.2.0, 独立仓库)
     ├── muskitty-css/                    # → muskitty-dev/muskitty-css (本地 v0.5.0, 独立仓库)
     ├── muskitty-selectors/              # → muskitty-dev/muskitty-selectors (v0.1.0, 独立仓库)
-    └── muskitty-css-values/             # 主仓库成员 (v0.1.0, 未剥离)
+    ├── muskitty-css-values/             # 主仓库成员 (v0.1.0, 未剥离)
+    └── muskitty-cssom/                  # 主仓库成员 (v0.1.0, 未剥离)
 ```
 
-未来 crate 预留（在主仓库内开发，成熟后再剥离）：`crates/muskitty-css-values`、`crates/muskitty-network`、`crates/muskitty-layout`、`crates/muskitty-renderer`。
+未来 crate 预留（在主仓库内开发，成熟后再剥离）：`crates/muskitty-network`、`crates/muskitty-layout`、`crates/muskitty-renderer`。
 
 ## Git 提交历史（近期）
 
@@ -361,10 +364,10 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 ## 下一步
 
-1. ~~**Phase 2 子阶段 3 — CSS Values Module**~~ ✅ 已完成（2026-07-22）：`muskitty-css-values` v0.1.0，148 测试全绿。覆盖长度/百分比/角度/时间/频率/分辨率/比率/数值/整数、文本类型（keyword/ident/string/url）、`calc()`/`min()`/`max()`/`clamp()` AST、`var()` 语法解析、序列化、Grammar hook 接入。详见下方 [Phase 2 子阶段 3](#phase-2-子阶段-3--css-values-module-) 章节。
-2. **Phase 2 子阶段 4 — CSSOM**：Stylesheet / Rule / Declaration / AtRule 数据结构映射到 CSSStyleRule / CSSMediaRule / CSSImportRule 等。
+1. ~~**Phase 2 子阶段 3 — CSS Values Module**~~ ✅ 已完成（2026-07-22）：`muskitty-css-values` v0.1.0，148 测试全绿。详见下方 [Phase 2 子阶段 3](#phase-2-子阶段-3--css-values-module-) 章节。
+2. ~~**Phase 2 子阶段 4 — CSSOM**~~ ✅ 已完成（2026-07-22）：`muskitty-cssom` v0.1.0，81 测试全绿。覆盖 CSSStyleSheet/CssRule 枚举（Style/Import/Media/Namespace/Supports/LayerBlock/LayerStatement/Container/Other）/CssStyleDeclaration/CssDeclaration、从 css-parser 的单向转换层、§3 + §8.4-§8.6 序列化。详见下方 [Phase 2 子阶段 4](#phase-2-子阶段-4--cssom-) 章节。
 3. **Phase 2 子阶段 5 — Cascade + Computed values**：重要度/层叠顺序/来源排序、继承 / initial / inherit / unset、计算值 / 使用值 / 实际值。入场门槛 = Layer 2 cascade + computed values 测试通过（满足后可进入 Layer 3 Layout，将引入 taffy 做 layout）。
-4. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟到 CSSOM 完成后做，避免返工。
+4. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟到 Cascade 完成后做，避免返工。
 5. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug（11 PI 测试过时 + 3 xmlViolation 规范外），**保持现状**。
 
 ## Phase 2 子阶段 2 — Selectors Level 4 ✅
@@ -468,3 +471,56 @@ crate 成熟度满足拆分独立 git 仓库的条件（1952 LoC src + 1123 LoC 
 - 三角/指数/round/mod/rem/sign/abs（CSS Values 4 新增，布局用不到）
 
 crate 在主仓库内开发（`members = ["crates/muskitty-css-values"]`），未剥离为独立 git 仓库，未发布到 crates.io。待子阶段 5 Cascade 完成后评估剥离时机。
+
+## Phase 2 子阶段 4 — CSSOM ✅
+
+按 [2026-07-22-cssom.md](docs/plans/2026-07-22-cssom.md) 5 个 OM batch 全部完成，覆盖 [CSSOM](https://drafts.csswg.org/cssom-1/) §3 / §8.1 / §8.4 / §8.5 / §8.6。
+
+**设计原则**：单向转换——语法→语义。css-parser 产出语法层 `Stylesheet`（CSS Syntax §5.2），CSSOM crate 将其转换为 CSSOM 语义层 `CssStyleSheet`（§8.1）。转换后 CSSOM 树独立存在，不反向引用 css-parser 的 `Stylesheet`，避免生命周期耦合。
+
+| OM | 内容 | 规范 |
+|----|------|------|
+| OM-1 | crate 骨架 + `CssDeclaration` + `CssStyleDeclaration` | §8.5 / §8.6 |
+| OM-2 | `CssRule` 枚举 + 8 种 rule 类型（Style/Import/Media/Namespace/Supports/LayerBlock/LayerStatement/Container）+ `OtherRule` fallback | §8.4 |
+| OM-3 | `CssStyleSheet` 顶层容器 + 元数据（location/media/title/alternate/disabled） | §8.1 |
+| OM-4 | 从 css-parser `Stylesheet` → CSSOM `CssStyleSheet` 单向转换层；at-rule 按 name 分发（import/media/namespace/supports/layer/container/other） | §8.4 / §8.6 |
+| OM-5 | 序列化（§3 serializing idioms + §8.4-§8.6 rule/declaration/block 序列化）+ `ToCss` trait | §3 / §8.4-§8.6 |
+
+测试矩阵：
+
+| 测试文件 | 测试数 | 覆盖内容 |
+|---------|------|---------|
+| `src/declaration.rs` (单元) | 10 | CssDeclaration + CssStyleDeclaration CRUD + cascade 语义 |
+| `src/rule.rs` (单元) | 13 | CssRule 枚举 + type_id + has_child_rules + 各 rule 类型 |
+| `src/stylesheet.rs` (单元) | 5 | CssStyleSheet 容器 + iter + clone |
+| `src/serialize.rs` (单元) | 13 | §3 idioms + 数字格式化 + declaration/block/rule 序列化 |
+| `tests/convert.rs` (端到端) | 20 | parse → convert → 验证结构（所有 rule 类型 + 嵌套 + 边界） |
+| `tests/integration.rs` (roundtrip) | 19 | parse → convert → serialize → 验证输出 |
+| `src/lib.rs` doctests | 1 | 顶层 API |
+| **总计** | **81** | 全部通过 |
+
+架构：
+
+- **declaration.rs** — `CssDeclaration { name, value: Vec<ComponentValue>, important }`（§8.5）+ `CssStyleDeclaration { declarations, readonly }`（§8.6）。`get_property` 返回最后一个匹配（cascade 语义）。
+- **rule.rs** — `CssRule` 枚举（9 变体），用 enum 而非 trait 对象（值语义、pattern matching、避免 `Rc<RefCell<>>`）。`type_id` 返回 §8.4 的 rule type 常量。
+- **stylesheet.rs** — `CssStyleSheet { location, media, title, alternate, disabled, css_rules }`。省略 DOM 集成字段（parent/owner node/origin-clean 等）。
+- **convert.rs** — `from_stylesheet(&Stylesheet) -> CssStyleSheet`。at-rule 按 name 分发；`@import` 从 prelude 提取 href（string/url）+ media；`@layer` 根据 block 有无决定 LayerBlock/LayerStatement；嵌套裸声明（`Rule::Declarations`）合并到父 style 块。
+- **serialize.rs** — `ToCss` trait + §3 serializing idioms（`serialize_identifier`/`serialize_string`/`serialize_url`）。Token/ComponentValue/Function/SimpleBlock 序列化。CssRule 用 match 分发到各 rule 类型序列化。
+
+关键设计决策：
+
+- **枚举 vs trait 对象**：选枚举。CSSOM rule 类型是规范固定的集合，无需开放扩展；枚举值语义、pattern matching 清晰、避免所有权复杂度。
+- **嵌套裸声明处理**：CSS nesting 中 `Rule::Declarations`（§5.5.5）简化合并到父 `CssStyleRule.style`，不实现 `CSSNestedDeclarations`（推迟）。
+- **Declaration value 存 `Vec<ComponentValue>`**：不做值类型化（那是 muskitty-css-values 的工作），CSSOM 层只关心声明结构。
+
+延后项：
+
+- mutation API（insertRule/deleteRule/setProperty）— Cascade 只读
+- CSSStyleSheet construction（JS API）— DOM 集成阶段
+- shorthand 序列化合并 — 需要属性数据库，子阶段 5 Cascade
+- CSSKeyframesRule / CSSFontFaceRule / CSSPageRule — 按需
+- MediaList 接口 — 简化为 `Vec<ComponentValue>`，子阶段 5
+- computed flag / owner node / updating flag — DOM 集成阶段
+- CSSNestedDeclarations — 嵌套裸声明暂合并到父 style
+
+crate 在主仓库内开发（`members = ["crates/muskitty-css-values", "crates/muskitty-cssom"]`），未剥离为独立 git 仓库，未发布到 crates.io。待子阶段 5 Cascade 完成后评估剥离时机。

@@ -1,0 +1,16 @@
+[package]
+name = "muskitty-cssom"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "CSS Object Model (CSSOM) data structures and serialization"
+repository = "https://github.com/muskitty-dev/muskitty-cssom"
+homepage = "https://github.com/muskitty-dev"
+documentation = "https://docs.rs/muskitty-cssom"
+keywords = ["css", "cssom", "web", "object-model"]
+categories = ["parser-implementations", "web-programming"]
+authors = ["MusCat / MusKitty Bit-Torch Community"]
+
+[dependencies]
+muskitty-css = { path = "../muskitty-css", version = "0.5.0" }
