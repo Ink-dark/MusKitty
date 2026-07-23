@@ -46,7 +46,7 @@ pub use serialize::{
     serialize_component_value, serialize_component_values, serialize_identifier, serialize_string,
     serialize_url, ToCss,
 };
-pub use stylesheet::CssStyleSheet;
+pub use stylesheet::{CssStyleSheet, Origin};
 
 // 从 css-parser re-export ComponentValue，方便下游使用。
 pub use muskitty_css::parser::ComponentValue;

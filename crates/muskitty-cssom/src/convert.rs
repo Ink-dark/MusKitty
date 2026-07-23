@@ -22,6 +22,7 @@ use muskitty_css::tokenizer::Token;
 /// 被跳过；只转换 `Rule::QualifiedRule` 与 `Rule::AtRule`。
 pub fn from_stylesheet(ss: &Stylesheet) -> CssStyleSheet {
     CssStyleSheet {
+        origin: crate::Origin::Author,
         location: None,
         media: Vec::new(),
         title: String::new(),
