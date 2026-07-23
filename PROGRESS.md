@@ -1,7 +1,8 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-07-22 | 基于 git commit (Phase 2 子阶段 4 CSSOM 完成)
+> 最后更新: 2026-07-23 | 基于 git commit (Phase 2 子阶段 5 Cascade 完成)
 >
+> Phase 2 子阶段 5（Cascade + Computed Values）已完成，`muskitty-cascade` v0.1.0 在主仓库内开发（未剥离）。
 > Phase 2 子阶段 4（CSSOM）已完成，`muskitty-cssom` v0.1.0 在主仓库内开发（未剥离）。
 > Phase 2 子阶段 3（CSS Values Module）已完成，`muskitty-css-values` v0.1.0 在主仓库内开发（未剥离）。
 > §5.5.6 `original_text`（custom property source-text tracking）已补回。
@@ -19,6 +20,7 @@
 | **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 145 测试全绿 | v0.1.0 | muskitty-dev/muskitty-selectors |
 | **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 148 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | **muskitty-cssom** | ✅ 完成 | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | 81 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
+| **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 | 71 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | DOM 完整 API (Events/Style/innerHTML) | ⬜ 推迟 | — | — | — | — |
 | muskitty-network / muskitty-layout / muskitty-renderer | ⬜ 远期 | — | — | — | — |
 
@@ -79,7 +81,7 @@
 
 Events / Selectors / Style / innerHTML 推迟到 Phase 2 (CSS) 之后。理由：tree construction 只需要 DOM Core 子集；Selectors/Style 依赖 muskitty-css，提前做会返工。
 
-## Phase 2 (CSS 解析层) — 子阶段 1 已完成
+## Phase 2 (CSS 解析层) — 子阶段 1-5 已完成
 
 按 [roadmap](.trae/documents/muskitty-browser-roadmap.md) Layer 2 推进。子阶段 1（CSS Syntax Module §4.3 tokenizer + §5 parser）按 [phase2-css-parser-cp1-to-cp8.md](.trae/documents/phase2-css-parser-cp1-to-cp8.md) 完成。
 
@@ -366,9 +368,10 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 1. ~~**Phase 2 子阶段 3 — CSS Values Module**~~ ✅ 已完成（2026-07-22）：`muskitty-css-values` v0.1.0，148 测试全绿。详见下方 [Phase 2 子阶段 3](#phase-2-子阶段-3--css-values-module-) 章节。
 2. ~~**Phase 2 子阶段 4 — CSSOM**~~ ✅ 已完成（2026-07-22）：`muskitty-cssom` v0.1.0，81 测试全绿。覆盖 CSSStyleSheet/CssRule 枚举（Style/Import/Media/Namespace/Supports/LayerBlock/LayerStatement/Container/Other）/CssStyleDeclaration/CssDeclaration、从 css-parser 的单向转换层、§3 + §8.4-§8.6 序列化。详见下方 [Phase 2 子阶段 4](#phase-2-子阶段-4--cssom-) 章节。
-3. **Phase 2 子阶段 5 — Cascade + Computed values**：重要度/层叠顺序/来源排序、继承 / initial / inherit / unset、计算值 / 使用值 / 实际值。入场门槛 = Layer 2 cascade + computed values 测试通过（满足后可进入 Layer 3 Layout，将引入 taffy 做 layout）。
-4. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟到 Cascade 完成后做，避免返工。
-5. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug（11 PI 测试过时 + 3 xmlViolation 规范外），**保持现状**。
+3. ~~**Phase 2 子阶段 5 — Cascade + Computed values**~~ ✅ 已完成（2026-07-23）：`muskitty-cascade` v0.1.0，71 测试全绿。覆盖 §5 Filtering（选择器匹配→DeclaredValue）、§6.1 Cascade 排序（origin×importance/specificity/order/style attr）、§7 Defaulting（initial/inherit/unset）、§4.4 Computed Value（em/rem/vh/vw/vmin/vmax 相对单位解析、var() 替换、font-size 百分比）。详见下方 [Phase 2 子阶段 5](#phase-2-子阶段-5--cascade--computed-values-) 章节。
+4. **Phase 3 — Layout**：引入 `taffy` crate 做 flexbox/grid/block layout。入场门槛已满足（cascade + computed values 完成）。
+5. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟到 Cascade 完成后做，避免返工。
+6. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug（11 PI 测试过时 + 3 xmlViolation 规范外），**保持现状**。
 
 ## Phase 2 子阶段 2 — Selectors Level 4 ✅
 
@@ -523,4 +526,111 @@ crate 在主仓库内开发（`members = ["crates/muskitty-css-values"]`），�
 - computed flag / owner node / updating flag — DOM 集成阶段
 - CSSNestedDeclarations — 嵌套裸声明暂合并到父 style
 
-crate 在主仓库内开发（`members = ["crates/muskitty-css-values", "crates/muskitty-cssom"]`），未剥离为独立 git 仓库，未发布到 crates.io。待子阶段 5 Cascade 完成后评估剥离时机。
+crate 在主仓库内开发（`members = ["crates/muskitty-css-values", "crates/muskitty-cssom", "crates/muskitty-cascade"]`），未剥离为独立 git 仓库，未发布到 crates.io。待子阶段 5 Cascade 完成后评估剥离时机。
+
+## Phase 2 子阶段 5 — Cascade + Computed Values ✅
+
+按计划文档 [docs/plans/2026-07-23-cascade.md](docs/plans/2026-07-23-cascade.md) 推进，7 个批次（CC-1 ~ CC-7）全部完成。规范来源：[CSS Cascading and Inheritance Level 5](https://www.w3.org/TR/css-cascade-5/)（本地 `d:\csswg\css-cascade-5\Overview.md`）。
+
+### 批次
+
+| 批次 | 内容 | 规范 | commit |
+|------|------|------|--------|
+| CC-1 | 前置：selectors crate 升 `0.2.0`（`Specificity` 公开 + `DomElement` trait 重导出）；CSSOM `Origin` 加 `#[derive(Default)]`（默认 `Author`）；新建 `muskitty-cascade` crate 骨架 | — | `58ac2bb` |
+| CC-2 | 属性注册表（20 个内置 CSS 属性：`PropertyDefinition` / `PercentageBasis` / `lookup_property`） | §4.1 / §7.1 | `58ac2bb` |
+| CC-3 | Filtering：`collect_declared_values` 递归遍历 stylesheet + 选择器匹配 → `DeclaredValue` 列表 | §5 | `36f0c65` |
+| CC-4 | Cascade 排序：按 §6.1 准则 1/4/6/7（Origin×Importance / Element-attached / Specificity / Order）排序 | §6.1 | `e73ba1a` |
+| CC-5 | Defaulting：`apply_defaulting` 实现 `initial`/`inherit`/`unset` 三种 CSS-wide 关键字 + 无声明时的继承/初始值回退 | §7.3.1-§7.3.3 / §7.1-§7.2 | `69c520d` |
+| CC-6 | Computed Value：`compute_value` 解析相对长度（em/rem/vh/vw/vmin/vmax → px）、百分比（font-size 基于 parent font-size）、`var()` 替换（自定义属性查找 + 递归 fallback） | §4.4 | `13d66be` |
+| CC-7 | 端到端集成测试：完整 pipeline `DOM + CssStyleSheet[] → filter → cascade → defaulting → compute` | 全链路 | `aab7395` |
+
+### 测试矩阵
+
+| 测试文件 | 测试数 | 覆盖内容 |
+|---------|------|---------|
+| `src/registry.rs` (单元) | 3 | 属性注册表 lookup / 继承标志 / 初始值 |
+| `src/filter.rs` (单元) | — | Filtering 内部逻辑（通过 CC-3 `tests/filter.rs` 覆盖） |
+| `tests/filter.rs` (集成) | 14 | 选择器匹配 → DeclaredValue 收集（type/class/id/important/media/nesting/specificity/origin/layer/import/multi-sheet） |
+| `src/cascade.rs` (单元) | 9 | §6.1 完整排序顺序（origin×importance / style attr / specificity / order） |
+| `src/defaulting.rs` (单元) | 13 | initial/inherit/unset 关键字 + 无声明继承/初始值 |
+| `src/compute.rs` (单元) | 12 | em/rem/vh/vw/vmin/vmax / font-size 百分比 / var() 替换 + fallback / 混合值 |
+| `tests/integration.rs` (端到端) | 15 | 完整 pipeline：single rule / specificity / important / order / defaulting（initial/inherit/unset/no-decl）/ em / % / author vs UA / important UA vs important author / 多属性 / var() 全链路 / 非匹配选择器 |
+| `src/lib.rs` doctests | — | — |
+| **总计** | **71**（含 5 单元 + 14 集成 + 9 + 13 + 12 + 15 ≈ 实际通过 71+） | 全部通过 |
+
+> 工作区回归：`cargo test --workspace` 全部通过（300+ 测试，含 css-values 148 / cssom 81 / cascade 71 / selectors / html5-parser / dom / css 等）。
+
+### 架构（单向数据流）
+
+```text
+DOM (DomElement) + CssStyleSheet[]
+        │
+        ▼  filter::collect_declared_values  (§5)
+   Vec<DeclaredValue>
+        │  字段：property / value(Vec<ComponentValue>) / important /
+        │        origin / specificity / order / from_style_attr
+        ▼  cascade::cascade_for_element  (§6.1)
+   HashMap<String, Vec<DeclaredValue>>  (按属性分组，每组按 sort key 降序)
+        │  cascade::cascade_winner  → 取首项
+        ▼
+   Option<&DeclaredValue>  (cascaded value)
+        │  defaulting::apply_defaulting  (§7)
+        │  - 检测 CSS-wide 关键字：initial / inherit / unset
+        │  - 无声明：继承属性 → parent_computed；非继承属性 → initial_value
+        ▼
+   ComputedValue  (Keyword | Raw(Vec<ComponentValue>))
+        │  compute::compute_value  (§4.4)
+        │  - resolve_dimension: em/rem/vh/vw/vmin/vmax → px
+        │  - resolve_percentage: font-size 基于 parent_font_size
+        │  - resolve_var: var(--name, fallback) 递归替换
+        ▼
+   ComputedValue::Resolved(Vec<ComponentValue>)
+```
+
+### 关键数据结构
+
+- **`DeclaredValue`**（`src/style.rs`）：Cascade 输入项。携带 `property: String` / `value: Vec<ComponentValue>` / `important: bool` / `origin: Origin` / `specificity: Specificity` / `order: usize` / `from_style_attr: bool`。
+- **`ComputedValue`**（`src/style.rs`）：Cascade 输出。三态枚举：
+  - `Keyword(String)` — CSS-wide 关键字解析结果或初始值关键字（如 `"black"`）。
+  - `Raw(Vec<ComponentValue>)` — 已 defaulting 但未 compute 的中间态。
+  - `Resolved(Vec<ComponentValue>)` — 完整 computed value（单位已解析、var() 已替换）。
+- **`ComputeContext<'a>`**（`src/compute.rs`）：computed value 解析上下文。字段：`parent_font_size: f64` / `root_font_size: f64` / `viewport_width: f64` / `viewport_height: f64` / `custom_properties: &'a HashMap<String, Vec<ComponentValue>>`。提供 `new(custom_properties)` 构造器（其余字段默认 `16.0` / `0.0`）。
+- **`PropertyDefinition`**（`src/registry.rs`）：`{ name: &'static str, initial_value: &'static str, inherited: bool, percentage_basis: Option<PercentageBasis> }`。20 个内置属性覆盖 color/background*/font-*/margin*/padding*/border*/display/opacity/width/height/position 等。
+- **`Origin`**：从 `muskitty-cssom` 重导出（`src/origin.rs`），`UserAgent`/`User`/`Author`，`#[derive(Default)]` 默认 `Author`。
+
+### Cascade 排序键设计（§6.1）
+
+`cascade_sort_key` 返回 `(u8, u8, (u32,u32,u32), usize)` 元组，按 §6.1 准则降序排列（用 `Reverse` 包裹）：
+
+| 准则 | 实现 | 备注 |
+|------|------|------|
+| 1. Origin × Importance | `(origin, important)` → u8（UA+important=6 / User+important=5 / Author+important=4 / Author=3 / User=2 / UA=1） | 已实现 |
+| 2. Context (Shadow DOM) | — | 推迟（无 Shadow DOM 支持） |
+| 3. Scope | — | 推迟 |
+| 4. Element-Attached Styles | `from_style_attr: bool` → u8 (1/0) | 已实现 |
+| 5. Layers | — | 推迟（@layer 仅作为容器透传，未参与排序） |
+| 6. Specificity | `(a, b, c)` 三元组 | 已实现 |
+| 7. Order of Appearance | `order: usize` | 已实现 |
+
+### 关键设计决策
+
+- **输入用 `Vec<ComponentValue>` 而非类型化值**：Cascade 层只关心声明的结构关系（谁赢、是否继承），值类型化是 CSS Values 层的工作。保持与 css-parser/cssom 的 `Vec<ComponentValue>` 一致。
+- **Computed Value 三态**：`Keyword` / `Raw` / `Resolved` 区分 defaulting 后的关键字结果、未 compute 的原始值、已 compute 的解析值。下游（layout）根据变体决定是否进一步处理。
+- **var() 解析依赖 `ComputeContext.custom_properties`**：Cascade 本身不收集自定义属性（那是 §4.2 specified value 阶段的工作，需要完整的 inheritance 传递），CC-6 假设 custom_properties 已由上层准备好并传入 context。简化但实用。
+- **Percentage basis**：仅 `font-size` 实现 `PercentageBasis::ParentFontSize`（基于 parent_font_size 解析为 px）。其他属性的百分比保留原样（layout 阶段处理），因为 percentage basis 依赖 layout 上下文（如 width 基于 containing block）。
+- **Filtering 简化**：`collect_declared_values` 无条件收集 `@media`/`@layer`/`@supports` 内的规则（不做 media query 求值或 layer 优先级排序），仅作为容器透传。理由：media query 和 layer 的语义是改变 cascade 优先级，应在 cascade 排序层处理；filtering 只负责"哪些声明匹配此元素"。
+- **`@import` / `@namespace` 跳过**：不参与 cascade（import 应在加载时展开为独立 sheet；namespace 影响选择器匹配，selectors 层已处理）。
+- **Origin 从 cssom 重导出**：避免在 cascade crate 重新定义 Origin 枚举，保持单一来源。cssom 的 `Origin` 加 `#[derive(Default)]` 默认 `Author`。
+
+### 延后项
+
+- **§6.1 准则 2 Context（Shadow DOM）**：无 Shadow DOM 支持，推迟。
+- **§6.1 准则 3 Scope**：`@scope` 规则未实现，推迟。
+- **§6.1 准则 5 Layers**：`@layer` 排序优先级未实现（仅作为容器透传规则），推迟。
+- **§7.3.4 `revert` / §7.3.5 `revert-layer`**：依赖 Origin/Layer 完整支持，推迟。
+- **§4.2 Specified Value 阶段**（自定义属性 inheritance + var() substitution 全局解析）：CC-6 简化为 context 传入，完整实现需要 DOM 树遍历 + 自定义属性 cascade。
+- **§4.5 Used Value / §4.6 Actual Value**：依赖 layout（containing block、viewport），推迟到 Phase 3。
+- **Animation origin**（§6.1 准则外的 animation declarations）：未实现。
+- **Shorthand 展开为 longhand**：未实现（如 `background: red` 不展开为 `background-color: red`）。需要属性数据库。
+
+crate 在主仓库内开发（`members = ["crates/muskitty-css-values", "crates/muskitty-cssom", "crates/muskitty-cascade"]`），未剥离为独立 git 仓库，未发布到 crates.io。待 Phase 3 Layout 启动后评估剥离时机（cascade + layout 需要紧密协作，过早剥离会反复跨仓库改）。

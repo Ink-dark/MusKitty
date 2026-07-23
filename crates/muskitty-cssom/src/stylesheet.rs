@@ -8,9 +8,26 @@
 
 use crate::CssRule;
 
+/// §6.2: Cascade origin。标识 stylesheet 的来源层级。
+///
+/// 排序优先级（§6.1 准则 1）：UA < User < Author（normal），
+/// Author < User < UA（important）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Origin {
+    /// §6.2: User-agent 默认样式表。
+    UserAgent,
+    /// §6.2: 用户样式表。
+    User,
+    /// §6.2: 作者样式表（默认）。
+    #[default]
+    Author,
+}
+
 /// §8.1: A CSS style sheet.
 #[derive(Debug, Clone)]
 pub struct CssStyleSheet {
+    /// §6.2: cascade origin（UA/User/Author）。
+    pub origin: Origin,
     /// §8.1 L700: location（绝对 URL；嵌入式为 `None`）。
     pub location: Option<String>,
     /// §8.1 L722: media，以 component value 列表表示。
@@ -32,9 +49,10 @@ impl Default for CssStyleSheet {
 }
 
 impl CssStyleSheet {
-    /// 创建一个空的 stylesheet。
+    /// 创建一个空的 stylesheet（默认 origin = Author）。
     pub fn new() -> Self {
         Self {
+            origin: Origin::Author,
             location: None,
             media: Vec::new(),
             title: String::new(),
@@ -84,6 +102,7 @@ mod tests {
     #[test]
     fn can_hold_rules() {
         let ss = CssStyleSheet {
+            origin: crate::Origin::Author,
             location: Some("file:///style.css".to_string()),
             title: "main".to_string(),
             alternate: true,
