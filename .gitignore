@@ -3,33 +3,13 @@ crates/*/target
 *.lock
 .zcode/
 
-# muskitty-html5-parser 作为独立 git 仓库，由 crates/muskitty-html5-parser/.git
-# 自行追踪。主仓库 workspace 仍把它作为 cargo member，但版本控制层面已剥离。
-# 单独克隆 muskitty-html5-parser 时，需先放置到主仓库 crates/ 下才能构建
-# （因为 Cargo.toml 通过 path = "../muskitty-dom" 依赖同级 dom crate）。
+# --- 已剥离的独立 crate（各自有 .git 仓库，在 Cargo.toml exclude 列表中）---
+# 这些目录不在主仓库版本控制中。新设备 clone 后需通过 fetch-crates.ps1 / fetch-crates.sh
+# 拉取到 crates/ 下，workspace member 的 path 依赖才能解析。
 crates/muskitty-html5-parser/
-
-# muskitty-html5-tokenizer 同样作为独立 git 仓库剥离，
-# 由 crates/muskitty-html5-tokenizer/.git 自行追踪。
 crates/muskitty-html5-tokenizer/
-
-# muskitty-dom 同样作为独立 git 仓库剥离，由 crates/muskitty-dom/.git 自行追踪。
-# 主仓库 workspace 仍把它作为 cargo member，但版本控制层面已剥离。
 crates/muskitty-dom/
-
-# muskitty-css-tokenizer 同样作为独立 git 仓库剥离，
-# 由 crates/muskitty-css-tokenizer/.git 自行追踪。
 crates/muskitty-css-tokenizer/
-
-# muskitty-css-parser 同样作为独立 git 仓库剥离，
-# 由 crates/muskitty-css-parser/.git 自行追踪。
 crates/muskitty-css-parser/
-
-# muskitty-selectors 同样作为独立 git 仓库剥离，
-# 由 crates/muskitty-selectors/.git 自行追踪。
-# 主仓库 workspace 仍把它作为 cargo member，但版本控制层面已剥离。
 crates/muskitty-selectors/
-
-# muskitty-css 同样作为独立 git 仓库剥离，
-# 由 crates/muskitty-css/.git 自行追踪。
 crates/muskitty-css/

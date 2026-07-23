@@ -213,7 +213,7 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 仓库策略
 
-**7 个已成熟 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。新 crate `muskitty-css-values` 和 `muskitty-cssom` 在主仓库内作为 workspace member 开发（未剥离、未发布），待成熟后再剥离。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-css-values", "crates/muskitty-cssom"]`，`exclude` 列表排除 7 个已剥离 crate。
+**7 个已成熟 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。新 crate `muskitty-css-values` 和 `muskitty-cssom` 在主仓库内作为 workspace member 开发（未剥离、未发布），待成熟后再剥离。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-css-values", "crates/muskitty-cssom", "crates/muskitty-cascade"]`，`exclude` 列表排除 7 个已剥离 crate。
 
 ### crates.io 发布状态（截至 2026-07-19）
 
