@@ -51,7 +51,7 @@ pub mod origin;
 pub mod registry;
 pub mod style;
 
-pub use cascade::cascade_for_element;
+pub use cascade::{cascade_for_element, cascade_winner};
 pub use compute::compute_value;
 pub use defaulting::apply_defaulting;
 pub use filter::collect_declared_values;
