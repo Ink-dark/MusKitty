@@ -8,13 +8,13 @@
 #     ├── muskitty-css/                (独立仓库)
 #     ├── muskitty-css-parser/         (独立仓库)
 #     ├── muskitty-css-tokenizer/      (独立仓库)
+#     ├── muskitty-css-values/         (独立仓库)
+#     ├── muskitty-cssom/              (独立仓库)
 #     ├── muskitty-dom/                (独立仓库)
 #     ├── muskitty-html5-parser/       (独立仓库)
 #     ├── muskitty-html5-tokenizer/    (独立仓库)
 #     ├── muskitty-selectors/          (独立仓库)
-#     ├── muskitty-cascade/            (尚未独立，在主仓库内)
-#     ├── muskitty-css-values/         (尚未独立，在主仓库内)
-#     └── muskitty-cssom/             (尚未独立，在主仓库内)
+#     └── muskitty-cascade/            (尚未独立，在主仓库内)
 #
 # 用法:
 #   pwsh ./fetch-crates.ps1                # 检查 + 克隆缺失的
@@ -48,6 +48,8 @@ $StandaloneCrates = @(
     'muskitty-css',
     'muskitty-css-parser',
     'muskitty-css-tokenizer',
+    'muskitty-css-values',
+    'muskitty-cssom',
     'muskitty-dom',
     'muskitty-html5-parser',
     'muskitty-html5-tokenizer',
@@ -58,9 +60,7 @@ $StandaloneCrates = @(
 # 尚未独立拆分的 crate（仍包含在主仓库内，跳过远程拉取）
 # ------------------------------------------------------------------------------
 $BundledCrates = @(
-    'muskitty-cascade',
-    'muskitty-css-values',
-    'muskitty-cssom'
+    'muskitty-cascade'
 )
 
 # ------------------------------------------------------------------------------
