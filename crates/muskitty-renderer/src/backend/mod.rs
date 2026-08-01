@@ -14,6 +14,8 @@
 use crate::command::RenderCommand;
 
 pub mod mock;
+#[cfg(feature = "backend-tiny-skia")]
+pub mod tiny_skia;
 
 /// 渲染后端 trait。
 ///
