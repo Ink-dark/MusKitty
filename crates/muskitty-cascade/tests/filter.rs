@@ -205,3 +205,55 @@ fn multiple_stylesheets() {
     // sheet1 的 order 应小于 sheet2
     assert!(declared[0].order < declared[1].order);
 }
+
+#[test]
+fn style_attr_collected() {
+    let element = make_element("div", &[("style", "color: red")]);
+    let sheets: Vec<muskitty_cssom::CssStyleSheet> = vec![];
+
+    let declared = collect_declared_values(&element, &sheets);
+
+    let color_decl = declared.iter().find(|d| d.property == "color");
+    assert!(color_decl.is_some(), "style attr 'color: red' should be collected");
+    let color_decl = color_decl.unwrap();
+    assert!(color_decl.from_style_attr, "from_style_attr should be true");
+    assert_eq!(color_decl.origin, Origin::Author);
+    assert!(!color_decl.important);
+}
+
+#[test]
+fn style_attr_multiple_declarations() {
+    let element = make_element("div", &[("style", "color: red; margin-top: 10px")]);
+    let sheets: Vec<muskitty_cssom::CssStyleSheet> = vec![];
+
+    let declared = collect_declared_values(&element, &sheets);
+    assert_eq!(declared.len(), 2);
+    assert!(declared.iter().all(|d| d.from_style_attr));
+}
+
+#[test]
+fn style_attr_with_important() {
+    let element = make_element("div", &[("style", "color: red !important")]);
+    let sheets: Vec<muskitty_cssom::CssStyleSheet> = vec![];
+
+    let declared = collect_declared_values(&element, &sheets);
+    assert_eq!(declared.len(), 1);
+    assert!(declared[0].important);
+    assert!(declared[0].from_style_attr);
+}
+
+#[test]
+fn style_attr_combined_with_stylesheet() {
+    // div style="color: green" + CSS div { color: red; }
+    // style attr 应通过 from_style_attr 标志胜出
+    let element = make_element("div", &[("style", "color: green")]);
+    let sheet = make_sheet("div { color: red; }", Origin::Author);
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    // 应收集到 2 条声明
+    assert_eq!(declared.len(), 2);
+    // 验证 style attr 的 order > stylesheet 的 order（后出现）
+    let style_decl = declared.iter().find(|d| d.from_style_attr).unwrap();
+    let sheet_decl = declared.iter().find(|d| !d.from_style_attr).unwrap();
+    assert!(style_decl.order > sheet_decl.order, "style attr order should be greater");
+}

@@ -5,17 +5,21 @@
 //! 遍历 stylesheet rules，对每条匹配元素的 CssStyleRule，收集其
 //! declarations 作为 DeclaredValue。条件为 false 的 @media/@supports
 //! 内的 rule 被跳过（本阶段简化为无条件收集，条件评估推迟）。
+//! 同时收集元素 inline `style` 属性中的声明（§6.1 准则 4）。
 
 use crate::style::DeclaredValue;
+use muskitty_css::parser::{parse_a_blocks_contents, Rule};
 use muskitty_cssom::{serialize_component_values, CssRule, CssStyleSheet, Origin};
-use muskitty_selectors::matching::{matches, DomElement};
+use muskitty_selectors::matching::{matches, DomElement, Element as ElementTrait};
 use muskitty_selectors::parser::parse_a_selector;
+use muskitty_selectors::Specificity;
 
 /// §5: 收集元素的所有 declared values。
 ///
 /// 遍历所有 stylesheet，对每条匹配 `element` 的 style rule，
 /// 收集其 declarations。递归处理嵌套 rules 和条件 group rules
 /// （@media/@supports/@container/@layer）。
+/// 最后收集元素 inline `style` 属性中的声明。
 ///
 /// **简化**：条件 group rules 的条件评估推迟，当前无条件收集
 /// 所有嵌套 rules。
@@ -36,7 +40,47 @@ pub fn collect_declared_values(
         );
     }
 
+    // §6.1 准则 4: 收集 inline style 属性的声明
+    collect_from_style_attr(element, &mut order, &mut result);
+
     result
+}
+
+/// 从元素 inline `style` 属性收集声明。
+///
+/// inline style 声明的 specificity 为 (1,0,0,0)（最高优先级），
+/// origin 为 Author，from_style_attr = true。
+fn collect_from_style_attr(
+    element: &DomElement,
+    order: &mut usize,
+    result: &mut Vec<DeclaredValue>,
+) {
+    let style_str = match element.get_attribute("style") {
+        Some(s) => s,
+        None => return,
+    };
+
+    let block_contents = parse_a_blocks_contents(&style_str);
+    // §6.1 准则 4: inline style 通过 from_style_attr 标志单独排序，
+    // specificity 本身为 (0,0,0)（准则 3 不会额外加权）
+    let specificity = Specificity::new(0, 0, 0);
+
+    for rule in &block_contents.rules {
+        if let Rule::Declarations(decls) = rule {
+            for decl in decls {
+                *order += 1;
+                result.push(DeclaredValue {
+                    property: decl.name.clone(),
+                    value: decl.value.clone(),
+                    important: decl.important,
+                    origin: Origin::Author,
+                    specificity,
+                    order: *order,
+                    from_style_attr: true,
+                });
+            }
+        }
+    }
 }
 
 /// 递归遍历 rules，收集匹配元素的 declared values。
