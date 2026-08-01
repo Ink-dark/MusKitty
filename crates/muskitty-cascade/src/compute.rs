@@ -144,7 +144,11 @@ fn resolve_dimension(
 /// 仅 font-size（PercentageBasis::ParentFontSize）和
 /// ParentSameProperty（如果父值是绝对长度）在此阶段解析。
 /// 其他百分比保持原样（推迟到 layout）。
-fn resolve_percentage(numeric: &Numeric, property: &str, ctx: &ComputeContext) -> Vec<ComponentValue> {
+fn resolve_percentage(
+    numeric: &Numeric,
+    property: &str,
+    ctx: &ComputeContext,
+) -> Vec<ComponentValue> {
     let basis = lookup_property(property).map(|d| d.percentages);
 
     match basis {
@@ -171,7 +175,9 @@ fn resolve_percentage(numeric: &Numeric, property: &str, ctx: &ComputeContext) -
         }
         // 其他百分比基准（ParentWidth/ParentHeight/ParentSameProperty/None）
         // 推迟到 layout 阶段解析 — 原样保留
-        _ => vec![ComponentValue::PreservedToken(Token::Percentage(numeric.clone()))],
+        _ => vec![ComponentValue::PreservedToken(Token::Percentage(
+            numeric.clone(),
+        ))],
     }
 }
 
@@ -191,7 +197,9 @@ fn resolve_var(func: &Function, ctx: &ComputeContext, property: &str) -> Vec<Com
             ComponentValue::PreservedToken(Token::Comma) => {
                 after_comma = true;
             }
-            ComponentValue::PreservedToken(Token::Ident(s)) if !after_comma && var_name.is_none() => {
+            ComponentValue::PreservedToken(Token::Ident(s))
+                if !after_comma && var_name.is_none() =>
+            {
                 var_name = Some(s.clone());
             }
             other if after_comma => {
@@ -423,15 +431,17 @@ mod tests {
         let mut props = HashMap::new();
         props.insert(
             "--main-color".to_string(),
-            vec![ComponentValue::PreservedToken(Token::Ident("red".to_string()))],
+            vec![ComponentValue::PreservedToken(Token::Ident(
+                "red".to_string(),
+            ))],
         );
         let ctx = ctx_with_custom(&props);
 
         let var_fn = ComponentValue::Function(Function {
             name: "var".to_string(),
-            value: vec![
-                ComponentValue::PreservedToken(Token::Ident("--main-color".to_string())),
-            ],
+            value: vec![ComponentValue::PreservedToken(Token::Ident(
+                "--main-color".to_string(),
+            ))],
         });
 
         let result = compute_value("color", &[var_fn], &ctx);
@@ -484,10 +494,7 @@ mod tests {
     #[test]
     fn var_resolves_relative_units_in_substitution() {
         let mut props = HashMap::new();
-        props.insert(
-            "--gap".to_string(),
-            vec![dim(2.0, "em")],
-        );
+        props.insert("--gap".to_string(), vec![dim(2.0, "em")]);
         let ctx = ComputeContext {
             parent_font_size: 20.0,
             ..ctx_with_custom(&props)
@@ -495,9 +502,9 @@ mod tests {
 
         let var_fn = ComponentValue::Function(Function {
             name: "var".to_string(),
-            value: vec![
-                ComponentValue::PreservedToken(Token::Ident("--gap".to_string())),
-            ],
+            value: vec![ComponentValue::PreservedToken(Token::Ident(
+                "--gap".to_string(),
+            ))],
         });
 
         // var(--gap) where --gap = 2em, parent font-size = 20px → 40px

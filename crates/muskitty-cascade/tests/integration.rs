@@ -47,10 +47,8 @@ fn compute_property(
 ) -> ComputedValue {
     let declared = collect_declared_values(element, sheets);
     let groups = cascade_for_element(declared);
-    let group: &[muskitty_cascade::DeclaredValue] = groups
-        .get(property)
-        .map(|g| g.as_slice())
-        .unwrap_or(&[]);
+    let group: &[muskitty_cascade::DeclaredValue] =
+        groups.get(property).map(|g| g.as_slice()).unwrap_or(&[]);
     let winner = cascade_winner(group);
     let cascaded = winner.map(|w| w.value.as_slice());
     let specified = apply_defaulting(property, cascaded, parent_computed);
@@ -93,10 +91,7 @@ fn single_rule_single_property() {
 #[test]
 fn higher_specificity_wins() {
     let element = make_element("div", &[("id", "main")]);
-    let sheet = make_sheet(
-        "div { color: red; } #main { color: blue; }",
-        Origin::Author,
-    );
+    let sheet = make_sheet("div { color: red; } #main { color: blue; }", Origin::Author);
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
@@ -135,10 +130,7 @@ fn important_beats_normal() {
 #[test]
 fn later_declaration_wins_on_tie() {
     let element = make_element("div", &[]);
-    let sheet = make_sheet(
-        "div { color: red; } div { color: green; }",
-        Origin::Author,
-    );
+    let sheet = make_sheet("div { color: red; } div { color: green; }", Origin::Author);
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);

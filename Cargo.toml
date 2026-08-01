@@ -6,9 +6,8 @@
 # "crates/muskitty-layout",
 # "crates/muskitty-renderer",
 members = [
-    "crates/muskitty-css-values",
-    "crates/muskitty-cssom",
     "crates/muskitty-cascade",
+    "crates/muskitty-layout",
 ]
 # 以下 crate 都作为独立 git 仓库剥离，各自有自己的 [workspace] 根。
 # exclude 防止父 workspace 误吸入并报 "multiple workspace roots" 错误。
@@ -16,6 +15,8 @@ exclude = [
     "crates/muskitty-css",
     "crates/muskitty-css-tokenizer",
     "crates/muskitty-css-parser",
+    "crates/muskitty-css-values",
+    "crates/muskitty-cssom",
     "crates/muskitty-dom",
     "crates/muskitty-html5-parser",
     "crates/muskitty-html5-tokenizer",
