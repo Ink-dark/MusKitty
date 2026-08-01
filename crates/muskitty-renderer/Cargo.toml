@@ -1,0 +1,24 @@
+[package]
+name = "muskitty-renderer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "CSS Renderer (LayoutResult → RenderCommand[] → backend pixels)"
+repository = "https://github.com/muskitty-dev/muskitty-renderer"
+homepage = "https://github.com/muskitty-dev"
+documentation = "https://docs.rs/muskitty-renderer"
+keywords = ["css", "renderer", "render", "web", "browser"]
+categories = ["rendering", "web-programming"]
+authors = ["MusCat / MusKitty Bit-Torch Community"]
+
+[dependencies]
+muskitty-dom = { path = "../muskitty-dom", version = "0.1.0" }
+muskitty-cascade = { path = "../muskitty-cascade", version = "0.1.0" }
+muskitty-layout = { path = "../muskitty-layout", version = "0.1.0" }
+muskitty-css = { path = "../muskitty-css", version = "0.5.0" }
+
+[dev-dependencies]
+muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.1.0" }
+muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
+muskitty-selectors = { path = "../muskitty-selectors", version = "0.1.0", features = ["dom"] }
