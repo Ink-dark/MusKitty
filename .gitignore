@@ -3,6 +3,10 @@ crates/*/target
 *.lock
 .zcode/
 
+# --- 示例输出（避免二进制文件污染版本库）---
+*.demo.png
+render_demo.png
+
 # --- 已剥离的独立 crate（各自有 .git 仓库，在 Cargo.toml exclude 列表中）---
 # 这些目录不在主仓库版本控制中。新设备 clone 后需通过 fetch-crates.ps1 / fetch-crates.sh
 # 拉取到 crates/ 下，workspace member 的 path 依赖才能解析。
