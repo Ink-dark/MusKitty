@@ -1,20 +1,21 @@
-﻿#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 # ==============================================================================
 # fetch-crates.ps1
 # 放在项目根目录运行，自动拉取 muskitty-dev 下所有 crates 子仓库
 # 目录结构:
 #   ./fetch-crates.ps1       <-- 本脚本
 #   ./crates/
+#     ├── muskitty-cascade/            (独立仓库)
+#     ├── muskitty-layout/             (独立仓库)
 #     ├── muskitty-css/                (独立仓库)
 #     ├── muskitty-css-parser/         (独立仓库)
 #     ├── muskitty-css-tokenizer/      (独立仓库)
-#     ├── muskitty-css-values/         (独立仓库)
-#     ├── muskitty-cssom/              (独立仓库)
-#     ├── muskitty-dom/                (独立仓库)
-#     ├── muskitty-html5-parser/       (独立仓库)
-#     ├── muskitty-html5-tokenizer/    (独立仓库)
-#     ├── muskitty-selectors/          (独立仓库)
-#     └── muskitty-cascade/            (尚未独立，在主仓库内)
+#     ├── muskitty-css-values/        (独立仓库)
+#     ├── muskitty-cssom/             (独立仓库)
+#     ├── muskitty-dom/               (独立仓库)
+#     ├── muskitty-html5-parser/      (独立仓库)
+#     ├── muskitty-html5-tokenizer/   (独立仓库)
+#     └── muskitty-selectors/         (独立仓库)
 #
 # 用法:
 #   pwsh ./fetch-crates.ps1                # 检查 + 克隆缺失的
@@ -45,6 +46,8 @@ $ErrorActionPreference = 'Continue'  # 单个失败不中断整体
 # 已独立拆分的 crate 仓库（需要从 GitHub 单独拉取）
 # ------------------------------------------------------------------------------
 $StandaloneCrates = @(
+    'muskitty-cascade',
+    'muskitty-layout',
     'muskitty-css',
     'muskitty-css-parser',
     'muskitty-css-tokenizer',
@@ -59,9 +62,7 @@ $StandaloneCrates = @(
 # ------------------------------------------------------------------------------
 # 尚未独立拆分的 crate（仍包含在主仓库内，跳过远程拉取）
 # ------------------------------------------------------------------------------
-$BundledCrates = @(
-    'muskitty-cascade'
-)
+$BundledCrates = @()
 
 # ------------------------------------------------------------------------------
 # 辅助函数

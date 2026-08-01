@@ -3,15 +3,13 @@
 # 所有子模块都作为独立 git 仓库剥离，各自有自己的 [workspace] 根。
 # 未来成员预留:
 # "crates/muskitty-network",
-# "crates/muskitty-layout",
 # "crates/muskitty-renderer",
-members = [
-    "crates/muskitty-cascade",
-    "crates/muskitty-layout",
-]
+members = []
 # 以下 crate 都作为独立 git 仓库剥离，各自有自己的 [workspace] 根。
 # exclude 防止父 workspace 误吸入并报 "multiple workspace roots" 错误。
 exclude = [
+    "crates/muskitty-cascade",
+    "crates/muskitty-layout",
     "crates/muskitty-css",
     "crates/muskitty-css-tokenizer",
     "crates/muskitty-css-parser",
