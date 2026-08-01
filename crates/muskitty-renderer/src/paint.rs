@@ -10,7 +10,7 @@
 //! 视口左上角）。
 
 use crate::command::RenderCommand;
-use crate::render_tree::extract_background_color;
+use crate::render_tree::{extract_background_color, extract_border};
 use muskitty_cascade::ComputedStyle;
 use muskitty_dom::{Node, NodeKind};
 use muskitty_layout::LayoutResult;
@@ -82,19 +82,21 @@ fn paint_recursive(
         let canvas_x = offset_x + node_layout.x;
         let canvas_y = offset_y + node_layout.y;
 
-        // 查询 computed style，提取 background-color
+        // 查询 computed style，提取 background-color 与 border
         if let Some(style) = styles.get(&addr) {
-            if let Some(bg) = extract_background_color(style) {
-                if !bg.is_transparent() {
-                    commands.push(RenderCommand::Rect {
-                        x: canvas_x,
-                        y: canvas_y,
-                        width: node_layout.width,
-                        height: node_layout.height,
-                        background: Some(bg),
-                        border: None, // border 推迟到 cascade 注册 border-* 属性后
-                    });
-                }
+            let bg = extract_background_color(style).filter(|c| !c.is_transparent());
+            let border = extract_border(style);
+
+            // 有背景或边框时生成绘制指令
+            if bg.is_some() || border.is_some() {
+                commands.push(RenderCommand::Rect {
+                    x: canvas_x,
+                    y: canvas_y,
+                    width: node_layout.width,
+                    height: node_layout.height,
+                    background: bg,
+                    border,
+                });
             }
         }
 

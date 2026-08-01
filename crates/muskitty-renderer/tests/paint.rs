@@ -13,7 +13,9 @@ use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::{Node, NodeKind};
 use muskitty_layout::{build_layout_tree, compute_layout, LayoutResult};
-use muskitty_renderer::{paint, Backend, Color, MockBackend, PaintInput, RenderCommand};
+use muskitty_renderer::{
+    paint, Backend, Border, BorderStyle, Color, MockBackend, PaintInput, RenderCommand,
+};
 use muskitty_selectors::matching::DomElement;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -303,4 +305,156 @@ fn paint_stylesheet_background_color() {
         }
         _ => panic!("expected Rect"),
     }
+}
+
+// —— B-2: border 测试 ——
+
+#[test]
+fn paint_border_solid_longhand() {
+    let cmds = paint_pipeline(
+        "<div style=\"border-width: 2px; border-style: solid; border-color: black; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect {
+            border, background, ..
+        } => {
+            assert_eq!(*background, None, "no background");
+            assert_eq!(
+                *border,
+                Some(Border {
+                    width: 2.0,
+                    color: Color::BLACK,
+                    style: BorderStyle::Solid,
+                })
+            );
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
+#[test]
+fn paint_border_with_background() {
+    let cmds = paint_pipeline(
+        "<div style=\"background-color: red; border-width: 1px; border-style: solid; border-color: blue; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect {
+            background, border, ..
+        } => {
+            assert_eq!(*background, Some(Color::rgb(255, 0, 0)));
+            let b = border.expect("border should be present");
+            assert_eq!(b.width, 1.0);
+            assert_eq!(b.color, Color::rgb(0, 0, 255));
+            assert_eq!(b.style, BorderStyle::Solid);
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
+#[test]
+fn paint_border_style_none_skipped() {
+    // border-style: none → 不生成边框；且无 background → 不生成指令
+    let cmds = paint_pipeline(
+        "<div style=\"border-width: 2px; border-style: none; border-color: red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert!(cmds.is_empty(), "border-style:none + no bg = no command");
+}
+
+#[test]
+fn paint_border_zero_width_skipped() {
+    let cmds = paint_pipeline(
+        "<div style=\"border-width: 0px; border-style: solid; border-color: red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert!(cmds.is_empty(), "border-width:0 + no bg = no command");
+}
+
+#[test]
+fn paint_border_only_emits_command() {
+    // 仅有 border（无 background）也应生成指令
+    let cmds = paint_pipeline(
+        "<div style=\"border-width: 3px; border-style: dashed; border-color: #ff8800; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect {
+            background, border, ..
+        } => {
+            assert_eq!(*background, None);
+            let b = border.expect("border present");
+            assert_eq!(b.width, 3.0);
+            assert_eq!(b.color, Color::rgb(0xff, 0x88, 0x00));
+            assert_eq!(b.style, BorderStyle::Dashed);
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
+// —— B-2: rgb() / rgba() 颜色函数测试 ——
+
+#[test]
+fn paint_background_rgb_function() {
+    let cmds = paint_pipeline(
+        "<div style=\"background-color: rgb(0, 128, 255); width: 50px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect { background, .. } => {
+            assert_eq!(*background, Some(Color::rgb(0, 128, 255)));
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
+#[test]
+fn paint_background_rgba_function() {
+    let cmds = paint_pipeline(
+        "<div style=\"background-color: rgba(255, 0, 0, 0.5); width: 50px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    // alpha=0.5 → 不透明 → 应生成指令
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect { background, .. } => {
+            let bg = background.expect("background present");
+            assert_eq!(bg.r, 255);
+            assert_eq!(bg.g, 0);
+            assert_eq!(bg.b, 0);
+            assert!(bg.a > 120 && bg.a < 136, "alpha ≈ 128, got {}", bg.a);
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
+#[test]
+fn paint_background_rgb_fully_transparent() {
+    let cmds = paint_pipeline(
+        "<div style=\"background-color: rgba(255, 0, 0, 0); width: 50px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    // alpha=0 → 完全透明 → 跳过
+    assert!(cmds.is_empty(), "alpha=0 should be transparent");
 }

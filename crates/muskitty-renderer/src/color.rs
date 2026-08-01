@@ -3,9 +3,10 @@
 //! 当前支持：
 //! - 命名颜色（CSS Color 4 §10 扩展颜色关键字表的常用子集）
 //! - 十六进制：`#rgb` / `#rgba` / `#rrggbb` / `#rrggbbaa`
+//! - `rgb()` / `rgba()` 函数（CSS Color 4 §6，legacy + space 语法）
 //!
-//! 推迟（B-2 或后续）：
-//! - `rgb()` / `rgba()` / `hsl()` / `hsla()` 函数
+//! 推迟（后续）：
+//! - `hsl()` / `hsla()` 函数
 //! - `currentColor` / system colors
 //! - `oklab()` / `lab()` / `color()` 等
 
@@ -77,15 +78,112 @@ impl Color {
 /// 支持：
 /// - 单个 ident：命名颜色（`red`、`blue`、`transparent` 等）
 /// - 单个 hash token：`#rgb` / `#rgba` / `#rrggbb` / `#rrggbbaa`
+/// - `rgb()` / `rgba()` 函数：legacy（`rgb(255, 0, 0)`）与 space
+///   （`rgb(255 0 0)`）语法，alpha 可选（`/ 0.5` 或第 4 参数）
 pub fn parse_color(values: &[ComponentValue]) -> Option<Color> {
     if values.is_empty() {
         return None;
     }
-    // 仅取首个 component value；多值（如 `rgb(1,2,3)` 的函数形式）推迟。
     match &values[0] {
         ComponentValue::PreservedToken(Token::Ident(name)) => parse_named_color(name),
         ComponentValue::PreservedToken(Token::Hash(hex, _hash_type)) => parse_hex_color(hex),
+        ComponentValue::Function(func) => parse_color_function(&func.name, &func.value),
         _ => None,
+    }
+}
+
+/// 解析 `rgb()` / `rgba()` 函数。
+///
+/// 支持的语法（CSS Color 4 §6）：
+/// - `rgb(255, 0, 0)` / `rgba(255, 0, 0, 0.5)` — legacy comma 语法
+/// - `rgb(255 0 0)` / `rgb(255 0 0 / 0.5)` — space 语法
+/// - 通道值接受 `<number>`（0-255）或 `<percentage>`（0%-100%）
+/// - alpha 接受 `<number>`（0-1）或 `<percentage>`（0%-100%）
+fn parse_color_function(name: &str, args: &[ComponentValue]) -> Option<Color> {
+    let lower = name.to_ascii_lowercase();
+    match lower.as_str() {
+        "rgb" | "rgba" => parse_rgb(args),
+        _ => None,
+    }
+}
+
+/// 解析 rgb/rgba 参数列表。
+fn parse_rgb(args: &[ComponentValue]) -> Option<Color> {
+    // 提取所有数值 token（跳过逗号、空格、斜杠分隔符）
+    let mut numbers: Vec<f64> = Vec::new();
+    let mut alpha: Option<f64> = None;
+    let mut slash_seen = false;
+
+    for cv in args {
+        match cv {
+            ComponentValue::PreservedToken(Token::Number(n)) => {
+                if slash_seen {
+                    alpha = Some(n.value);
+                } else {
+                    numbers.push(n.value);
+                }
+            }
+            ComponentValue::PreservedToken(Token::Percentage(p)) => {
+                if slash_seen {
+                    alpha = Some(p.value / 100.0);
+                } else if numbers.len() < 3 {
+                    // 0%-100% → 0-255
+                    numbers.push(p.value / 100.0 * 255.0);
+                }
+            }
+            ComponentValue::PreservedToken(Token::Comma)
+            | ComponentValue::PreservedToken(Token::Whitespace) => {
+                // 分隔符，跳过
+            }
+            ComponentValue::PreservedToken(Token::Delim('/')) => {
+                // CSS Color 4 space 语法的 alpha 分隔符
+                slash_seen = true;
+            }
+            _ => {}
+        }
+    }
+
+    if numbers.len() < 3 {
+        return None;
+    }
+
+    let r = clamp_channel(numbers[0]);
+    let g = clamp_channel(numbers[1]);
+    let b = clamp_channel(numbers[2]);
+    let a = match alpha {
+        Some(a) => clamp_alpha(a),
+        None => {
+            // rgba legacy 语法：第 4 个数值参数为 alpha
+            if numbers.len() >= 4 {
+                clamp_alpha(numbers[3])
+            } else {
+                255
+            }
+        }
+    };
+
+    Some(Color::rgba(r, g, b, a))
+}
+
+/// 将通道浮点值钳制到 0-255 u8。
+fn clamp_channel(v: f64) -> u8 {
+    if v <= 0.0 {
+        0
+    } else if v >= 255.0 {
+        255
+    } else {
+        v.round() as u8
+    }
+}
+
+/// 将 alpha 浮点值（0.0-1.0）钳制到 0-255 u8。
+fn clamp_alpha(v: f64) -> u8 {
+    if v <= 0.0 {
+        0
+    } else if v >= 1.0 {
+        255
+    } else {
+        (v * 255.0).round() as u8
     }
 }
 
@@ -247,5 +345,100 @@ mod tests {
         assert_eq!(Color::WHITE, Color::rgb(255, 255, 255));
         assert!(Color::TRANSPARENT.is_transparent());
         assert!(!Color::BLACK.is_transparent());
+    }
+
+    // —— rgb() / rgba() 函数测试 ——
+
+    fn parse_color_str(s: &str) -> Option<Color> {
+        use muskitty_css::parser::parse_a_list_of_component_values;
+        let cvs = parse_a_list_of_component_values(s);
+        parse_color(&cvs)
+    }
+
+    #[test]
+    fn rgb_legacy_comma() {
+        assert_eq!(
+            parse_color_str("rgb(255, 0, 0)"),
+            Some(Color::rgb(255, 0, 0))
+        );
+        assert_eq!(
+            parse_color_str("rgb(0, 255, 0)"),
+            Some(Color::rgb(0, 255, 0))
+        );
+        assert_eq!(
+            parse_color_str("rgb(128, 64, 32)"),
+            Some(Color::rgb(128, 64, 32))
+        );
+    }
+
+    #[test]
+    fn rgb_space_syntax() {
+        assert_eq!(parse_color_str("rgb(255 0 0)"), Some(Color::rgb(255, 0, 0)));
+        assert_eq!(
+            parse_color_str("rgb(10 20 30)"),
+            Some(Color::rgb(10, 20, 30))
+        );
+    }
+
+    #[test]
+    fn rgb_with_percentage() {
+        assert_eq!(
+            parse_color_str("rgb(100%, 0%, 0%)"),
+            Some(Color::rgb(255, 0, 0))
+        );
+        assert_eq!(
+            parse_color_str("rgb(50%, 50%, 50%)"),
+            Some(Color::rgb(128, 128, 128))
+        );
+    }
+
+    #[test]
+    fn rgba_legacy_comma_with_alpha() {
+        let c = parse_color_str("rgba(255, 0, 0, 0.5)").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+        assert_eq!(c.a, 128); // 0.5 * 255 ≈ 128
+    }
+
+    #[test]
+    fn rgb_space_syntax_with_alpha() {
+        let c = parse_color_str("rgb(255 0 0 / 0.5)").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.a, 128);
+    }
+
+    #[test]
+    fn rgb_alpha_percentage() {
+        let c = parse_color_str("rgb(255 0 0 / 50%)").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.a, 128);
+    }
+
+    #[test]
+    fn rgb_clamping() {
+        // 超出范围的值被钳制
+        assert_eq!(
+            parse_color_str("rgb(300, -10, 0)"),
+            Some(Color::rgb(255, 0, 0))
+        );
+    }
+
+    #[test]
+    fn rgb_case_insensitive() {
+        assert_eq!(
+            parse_color_str("RGB(255, 0, 0)"),
+            Some(Color::rgb(255, 0, 0))
+        );
+        assert_eq!(
+            parse_color_str("Rgba(255, 0, 0, 1.0)"),
+            Some(Color::rgb(255, 0, 0))
+        );
+    }
+
+    #[test]
+    fn rgb_too_few_args() {
+        assert_eq!(parse_color_str("rgb(255, 0)"), None);
+        assert_eq!(parse_color_str("rgb(255)"), None);
     }
 }

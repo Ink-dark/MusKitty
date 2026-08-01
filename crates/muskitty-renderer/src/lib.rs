@@ -42,4 +42,4 @@ pub use backend::{mock::MockBackend, Backend};
 pub use color::Color;
 pub use command::{Border, BorderStyle, RenderCommand};
 pub use paint::{paint, PaintInput};
-pub use render_tree::{RenderNode, RenderTree};
+pub use render_tree::{extract_background_color, extract_border, RenderNode, RenderTree};
