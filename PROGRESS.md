@@ -1,11 +1,10 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-08-01 | 基于 Phase 2 子阶段 5 完成 + 代码审查修正
+> 最后更新: 2026-08-01 | 基于 Phase 3 Layout 完成 + 审计修复
 >
-> Phase 2 子阶段 5（Cascade + Computed Values）已完成，`muskitty-cascade` v0.1.0 在主仓库内开发（未剥离）。
-> `muskitty-css-values` v0.1.0 和 `muskitty-cssom` v0.1.0 已提取为独立仓库并发布到 crates.io。
-> css-tokenizer v0.2.0 / css-parser v0.2.0 / css v0.5.0 已发布到 crates.io。
-> §5.5.6 `original_text`（custom property source-text tracking）已补回。
+> Phase 3（Layout 层）已完成：`muskitty-layout` v0.1.0 在主仓库内开发（未剥离），46 个测试全绿。
+> `muskitty-cascade` v0.1.0 仍在主仓库内（71 测试全绿），待与 layout 一同剥离。
+> Phase 4（Renderer）即将启动，目标：HTML + CSS → 布局 → 渲染到窗口/图片。
 
 ## 总览
 
@@ -21,8 +20,10 @@
 | **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 148 测试全绿 | v0.1.0 | muskitty-dev/muskitty-css-values |
 | **muskitty-cssom** | ✅ 完成 | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | 81 测试全绿 | v0.1.0 | muskitty-dev/muskitty-cssom |
 | **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 | 71 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
+| **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 集成 | 46 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
+| muskitty-renderer | ⬜ Phase 4 启动 | — | — | — | — |
 | DOM 完整 API (Events/Style/innerHTML) | ⬜ 推迟 | — | — | — | — |
-| muskitty-network / muskitty-layout / muskitty-renderer | ⬜ 远期 | — | — | — | — |
+| muskitty-network | ⬜ 远期 | — | — | — | — |
 
 **14 个 html5lib tokenizer 失败说明**：3 个 xmlViolation（infoset 强制转换，规范范围外）+ 11 个 `<?...>` PI 边界（test2/test3，html5lib 测试套件过时，期望 `Comment` 但现行 WHATWG §13.2.5.72-76 规定产生 `ProcessingInstruction`）。代码遵循现行 WHATWG 规范，测试套件过时。对浏览器级应用无影响（真实网页几乎不会触发这些边界）。
 
@@ -213,7 +214,7 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 仓库策略
 
-**9 个已成熟 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。`muskitty-cascade` 仍在主仓库内作为 workspace member 开发（未剥离、未发布），待 Phase 3 Layout 稳定后再剥离。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-cascade"]`，`exclude` 列表排除 9 个已剥离 crate。
+**9 个已成熟 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。`muskitty-cascade` 和 `muskitty-layout` 仍在主仓库内作为 workspace member 开发（未剥离、未发布），待 Phase 3 收尾后一同剥离。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-cascade", "crates/muskitty-layout"]`，`exclude` 列表排除 9 个已剥离 crate。
 
 ### crates.io 发布状态（截至 2026-07-24）
 
@@ -372,11 +373,45 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 1. ~~**Phase 2 子阶段 3 — CSS Values Module**~~ ✅ 已完成（2026-07-22）并已提取发布（2026-07-24）到 crates.io。
 2. ~~**Phase 2 子阶段 4 — CSSOM**~~ ✅ 已完成（2026-07-22）并已提取发布（2026-07-24）到 crates.io。
 3. ~~**Phase 2 子阶段 5 — Cascade + Computed values**~~ ✅ 已完成（2026-07-23）。
-4. **Cascade 收尾**（Phase 3 前置）：inline `style` 属性收集、清理 `muskitty-css-values` 死依赖。
-5. **Phase 3 — Layout**：引入 `taffy` crate 做 flexbox/grid/block layout。入场门槛已满足。新建 `muskitty-layout` workspace member。
-6. **cascade 提取**：Layout API 稳定后，将 `muskitty-cascade` 剥离为独立仓库并发布。
-7. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟。
-8. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug，**保持现状**。
+4. ~~**Cascade 收尾**（Phase 3 前置）~~ ✅ 已完成（2026-08-01）：inline `style` 属性收集已实现。
+5. ~~**Phase 3 — Layout**~~ ✅ 已完成（2026-08-01）：taffy 0.12 集成，46 个测试全绿，审计修复 7 个 bug。
+6. **Phase 3 收尾**：将 `muskitty-cascade` 和 `muskitty-layout` 剥离为独立仓库并发布到 crates.io。
+7. **Phase 4 — Renderer**：新建 `muskitty-renderer` crate，目标把浏览器跑起来（HTML+CSS → 布局 → 渲染到窗口/图片）。后端优先 GPUI，备选 tiny-skia。
+8. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟。
+9. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug，**保持现状**。
+
+## Phase 3 (Layout 层) — 已完成
+
+**时间**：2026-07-23 → 2026-08-01
+**最终交付**：`muskitty-layout` v0.1.0（本地，未剥离），46 个测试全绿。
+
+### 子阶段
+
+| 子阶段 | 内容 | 状态 |
+|--------|------|------|
+| L-0 | crate 骨架 + Cargo.toml + lib.rs 文档 | ✅ |
+| L-1 | LayoutTree 类型（taffy TaffyTree + NodeId 映射） | ✅ |
+| L-2 | ComputedStyle → taffy Style 映射（style_map.rs） | ✅ |
+| L-3 | DOM + ComputedStyle → LayoutTree 转换（convert.rs） | ✅ |
+| L-4 | 布局计算（compute_layout 函数 + LayoutResult） | ✅ |
+| L-5 | 单元测试（35 style_map + 8 compute） | ✅ |
+| L-6 | 端到端集成测试（7 个：HTML+CSS → cascade → layout → result） | ✅ |
+
+### 审计修复（whatwg-spec-adversarial-review skill）
+
+2026-08-01 对照 CSS Display L3 / Box Model L3 / Flexbox L1 / Box Alignment L3 / Cascade L5 规范审计，发现并修复 7 个 bug：
+
+| # | Bug | 优先级 | 修复 |
+|---|-----|--------|------|
+| B2 | `align-items: normal` 错误回退为 STRETCH | P1 | 显式映射 normal → FLEX_START |
+| B1 | `display: inline-flex/inline-grid` 映射为 Block | P1 | 显式分支 inline-flex → Flex, inline-grid → Grid |
+| B3 | `box-sizing` 默认值用 taffy 的 BorderBox 而非 CSS 初始值 ContentBox | P2 | 初始化改为 ContentBox + 未知值回退到 ContentBox |
+| B4 | `gap: 10px 20px` 双值未解析 | P2 | 新增 extract_gap_pair 正确分离 row-gap/column-gap |
+| B7 | 集成测试断言过弱（c2.x >= c1.x） | P2 | 收紧为 c2.x ~= c1.x + c1.width |
+| B8 | 集成测试 margin 断言过松（x >= 19.0） | P3 | 收紧为 x == 20.0 ± 1.0 |
+| B5 | `flex-grow`/`flex-shrink` 接受负值 | P3 | 添加 >= 0.0 检查 |
+
+**未修复**：B6（`flex` 简写未实现）需 CSSOM 层 shorthand 展开支持，推迟到后续批次。
 
 ## Phase 2 子阶段 2 — Selectors Level 4 ✅
 
