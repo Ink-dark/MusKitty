@@ -214,7 +214,10 @@ fn style_attr_collected() {
     let declared = collect_declared_values(&element, &sheets);
 
     let color_decl = declared.iter().find(|d| d.property == "color");
-    assert!(color_decl.is_some(), "style attr 'color: red' should be collected");
+    assert!(
+        color_decl.is_some(),
+        "style attr 'color: red' should be collected"
+    );
     let color_decl = color_decl.unwrap();
     assert!(color_decl.from_style_attr, "from_style_attr should be true");
     assert_eq!(color_decl.origin, Origin::Author);
@@ -255,5 +258,8 @@ fn style_attr_combined_with_stylesheet() {
     // 验证 style attr 的 order > stylesheet 的 order（后出现）
     let style_decl = declared.iter().find(|d| d.from_style_attr).unwrap();
     let sheet_decl = declared.iter().find(|d| !d.from_style_attr).unwrap();
-    assert!(style_decl.order > sheet_decl.order, "style attr order should be greater");
+    assert!(
+        style_decl.order > sheet_decl.order,
+        "style attr order should be greater"
+    );
 }

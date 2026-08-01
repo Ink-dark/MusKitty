@@ -154,6 +154,79 @@ pub static BUILTIN_PROPERTIES: &[PropertyDefinition] = &[
         inherited: false,
         percentages: PercentageBasis::None,
     },
+    // —— Flexbox 属性（CSS Flexbox Level 1）——
+    PropertyDefinition {
+        name: "flex-direction",
+        initial_value: "row",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "flex-wrap",
+        initial_value: "nowrap",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "justify-content",
+        initial_value: "normal",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "align-items",
+        initial_value: "normal",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "align-self",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "flex-grow",
+        initial_value: "0",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "flex-shrink",
+        initial_value: "1",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "flex-basis",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::ParentWidth,
+    },
+    PropertyDefinition {
+        name: "gap",
+        initial_value: "normal",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "row-gap",
+        initial_value: "normal",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "column-gap",
+        initial_value: "normal",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "box-sizing",
+        initial_value: "content-box",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
 ];
 
 /// 查找属性定义。返回 `None` 表示属性未注册。

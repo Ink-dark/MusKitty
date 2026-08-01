@@ -56,5 +56,5 @@ pub use compute::{compute_value, ComputeContext};
 pub use defaulting::apply_defaulting;
 pub use filter::collect_declared_values;
 pub use origin::Origin;
-pub use registry::{lookup_property, PropertyDefinition};
+pub use registry::{lookup_property, PropertyDefinition, BUILTIN_PROPERTIES};
 pub use style::{ComputedStyle, ComputedValue, DeclaredValue};

@@ -34,10 +34,31 @@ pub type StyleMap = HashMap<usize, ComputedStyle>;
 /// 的 key，供布局结果查询时关联回 DOM 节点。
 pub fn build_layout_tree(root: &Rc<RefCell<Node>>, styles: &StyleMap) -> LayoutTree {
     let mut tree = LayoutTree::new();
-    if let Some(root_id) = build_node_recursive(&mut tree, root, styles) {
-        tree.root = Some(root_id);
+    // 如果根节点是 Element，直接构建；否则查找第一个 Element 子节点
+    // （HTML 解析的根是 Document 节点，需要找到 <html> 元素）
+    let root_element = find_root_element(root);
+    if let Some(root_el) = root_element {
+        if let Some(root_id) = build_node_recursive(&mut tree, &root_el, styles) {
+            tree.root = Some(root_id);
+        }
     }
     tree
+}
+
+/// 查找 DOM 树的根元素。
+///
+/// 如果 `node` 本身是 Element，直接返回；否则递归查找第一个 Element 子节点。
+/// 用于跳过 Document/Doctype 等非元素根节点。
+fn find_root_element(node: &Rc<RefCell<Node>>) -> Option<Rc<RefCell<Node>>> {
+    if matches!(node.borrow().kind, muskitty_dom::NodeKind::Element(_)) {
+        return Some(Rc::clone(node));
+    }
+    for child in node.borrow().child_nodes() {
+        if let Some(found) = find_root_element(child) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// 递归为 DOM 子树构建 taffy 节点。
@@ -61,8 +82,19 @@ fn build_node_recursive(
 
         // display: none → 跳过该节点及其整个子树。
         if let Some(cs) = computed {
-            if let Some(ComputedValue::Keyword(kw)) = cs.get("display") {
-                if kw.eq_ignore_ascii_case("none") {
+            if let Some(cv) = cs.get("display") {
+                let is_none = match cv {
+                    ComputedValue::Keyword(kw) => kw.eq_ignore_ascii_case("none"),
+                    ComputedValue::Resolved(cvs) | ComputedValue::Raw(cvs) => cvs.iter().any(|c| {
+                        matches!(
+                            c,
+                            muskitty_css::parser::ComponentValue::PreservedToken(
+                                muskitty_css::tokenizer::Token::Ident(s)
+                            ) if s.eq_ignore_ascii_case("none")
+                        )
+                    }),
+                };
+                if is_none {
                     return None;
                 }
             }

@@ -19,3 +19,6 @@ muskitty-css = { path = "../muskitty-css", version = "0.5.0" }
 muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
 muskitty-selectors = { path = "../muskitty-selectors", version = "0.1.0", features = ["dom"] }
 taffy = "0.12"
+
+[dev-dependencies]
+muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.1.0" }

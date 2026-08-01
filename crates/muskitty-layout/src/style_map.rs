@@ -135,12 +135,12 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
 
     // —— flex-grow / flex-shrink ——
     if let Some(cv) = cs.get("flex-grow") {
-        if let Some(val) = extract_number(cv.component_values()) {
+        if let Some(val) = extract_number_from_cv(cv) {
             style.flex_grow = val;
         }
     }
     if let Some(cv) = cs.get("flex-shrink") {
-        if let Some(val) = extract_number(cv.component_values()) {
+        if let Some(val) = extract_number_from_cv(cv) {
             style.flex_shrink = val;
         }
     }
@@ -173,9 +173,22 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
 // —— 辅助函数 ——
 
 /// 从 ComputedStyle 中读取指定属性的 Keyword 值（小写化由调用方决定）。
+///
+/// 支持两种来源：
+/// - `ComputedValue::Keyword(s)` — defaulting 产生的初始值
+/// - `ComputedValue::Resolved/Raw([Ident(s)])` — cascade pipeline 产生的关键字
 fn get_keyword(cs: &ComputedStyle, name: &str) -> Option<String> {
     match cs.get(name) {
         Some(ComputedValue::Keyword(kw)) => Some(kw.clone()),
+        Some(ComputedValue::Resolved(cvs)) | Some(ComputedValue::Raw(cvs)) => {
+            // 从 component values 中提取第一个 Ident token
+            for cv in cvs {
+                if let ComponentValue::PreservedToken(Token::Ident(s)) = cv {
+                    return Some(s.clone());
+                }
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -288,30 +301,16 @@ fn extract_percent(cvs: &[ComponentValue]) -> Option<f32> {
     None
 }
 
-/// 从 component value 列表中提取第一个数字值（用于 flex-grow/flex-shrink）。
-fn extract_number(cvs: &[ComponentValue]) -> Option<f32> {
+/// 从 [`ComputedValue`] 中提取第一个数字值（用于 flex-grow/flex-shrink）。
+fn extract_number_from_cv(cv: &ComputedValue) -> Option<f32> {
+    let cvs = match cv {
+        ComputedValue::Resolved(cvs) | ComputedValue::Raw(cvs) => cvs,
+        _ => return None,
+    };
     for cv in cvs {
         if let ComponentValue::PreservedToken(Token::Number(numeric)) = cv {
             return Some(numeric.value as f32);
         }
     }
     None
-}
-
-/// [`ComputedValue`] 内部 component value 切片访问辅助 trait。
-///
-/// [`Resolved`](ComputedValue::Resolved) 与 [`Raw`](ComputedValue::Raw) 都携带
-/// `Vec<ComponentValue>`；[`Keyword`](ComputedValue::Keyword) 无 component values。
-trait ComputedValueExt {
-    /// 返回内部 component value 切片。
-    fn component_values(&self) -> &[ComponentValue];
-}
-
-impl ComputedValueExt for ComputedValue {
-    fn component_values(&self) -> &[ComponentValue] {
-        match self {
-            ComputedValue::Resolved(cvs) | ComputedValue::Raw(cvs) => cvs,
-            ComputedValue::Keyword(_) => &[],
-        }
-    }
 }
