@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 从零用 Rust 重写浏览器核心模块。独立实现，不 fork Chromium。Chromium 源码仅作参考，WHATWG 规范和 WPT 测试套件是行为 ground truth。
 
-当前阶段：Phase 2（CSS 解析层）。HTML 解析层（tokenizer + tree construction + DOM）已完成并剥离为独立仓库；CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配已完成并剥离为独立仓库；7 个 crate 全部发布到 crates.io。Layer 3 (Layout) / Layer 4 (Renderer) / Layer 5 (Network) 是远期工作。
+当前阶段：Phase 2（CSS 解析层）已全部完成，即将进入 Phase 3（Layout）。HTML 解析层（tokenizer + tree construction + DOM）已完成并剥离为独立仓库；CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配 + CSS Values + CSSOM + Cascade 均已完成；9 个 crate 已发布到 crates.io，`muskitty-cascade` 在主仓库内开发（未剥离）。Layer 3 (Layout) 即将启动，Layer 4 (Renderer) / Layer 5 (Network) 是远期工作。
 
-本主仓库 (`Ink-dark/MusKitty`) 现仅作 workspace 协调中心：`members = []`，所有 7 个子 crate 列在 `exclude` 中并各自独立 git 仓库于 `muskitty-dev/` org 下。
+本主仓库 (`Ink-dark/MusKitty`) 作 workspace 协调中心：`members = ["crates/muskitty-cascade"]`，9 个已剥离 crate 列在 `exclude` 中并各自独立 git 仓库于 `muskitty-dev/` org 下。
 
 ## Build & Test Commands
 
-主仓库 `members = []`，没有 crate 可直接 `cargo check`。每个独立 crate 在自己的目录里构建。
+主仓库 `members = ["crates/muskitty-cascade"]`，可直接 `cargo check -p muskitty-cascade`。其他独立 crate 在各自目录里构建。
 
 ```bash
 # 在某个独立 crate 目录下（例如 crates/muskitty-css-parser/）
@@ -33,38 +33,40 @@ cd D:\Muskitty\crates\muskitty-selectors && cargo test
 
 ```
 MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，workspace 协调中心
-├── Cargo.toml                          # members = [], exclude = [7 个已剥离 crate]
+├── Cargo.toml                          # members = [muskitty-cascade], exclude = [9 个已剥离 crate]
 ├── PROGRESS.md                         # 项目进度面板
 ├── CLAUDE.md                           # 本文件（硬约束）
 ├── README.md                           # 项目 README
-├── crates/                             # 每个子目录是独立 git 仓库
-│   ├── muskitty-dom/                   # DOM Core (Node/Element/Text/Comment/...)
-│   ├── muskitty-html5-tokenizer/        # WHATWG §13.2.5 tokenizer (80 states)
-│   ├── muskitty-html5-parser/           # WHATWG §13.2.6 tree construction (23 modes)
-│   ├── muskitty-css-tokenizer/          # CSS Syntax §4.3 tokenizer
-│   ├── muskitty-css-parser/            # CSS Syntax §5 parser + §5.4.1/§5.4.2 grammar hooks
-│   ├── muskitty-css/                    # Facade crate: 重导出 tokenizer + parser
-│   ├── muskitty-selectors/             # Selectors Level 4 parser + matching engine
+├── crates/                             # workspace member + 独立 git 仓库
+│   ├── muskitty-cascade/               # 📦 workspace member (CSS Cascade L5, 未剥离)
+│   ├── muskitty-dom/                   # 🔗 已剥离 (DOM Core)
+│   ├── muskitty-html5-tokenizer/        # 🔗 已剥离 (WHATWG §13.2.5 tokenizer)
+│   ├── muskitty-html5-parser/           # 🔗 已剥离 (WHATWG §13.2.6 tree construction)
+│   ├── muskitty-css-tokenizer/          # 🔗 已剥离 (CSS Syntax §4.3 tokenizer)
+│   ├── muskitty-css-parser/            # 🔗 已剥离 (CSS Syntax §5 parser)
+│   ├── muskitty-css/                    # 🔗 已剥离 (Facade: tokenizer + parser)
+│   ├── muskitty-selectors/             # 🔗 已剥离 (Selectors Level 4)
+│   ├── muskitty-css-values/            # 🔗 已剥离 (CSS Values L4)
+│   ├── muskitty-cssom/                  # 🔗 已剥离 (CSSOM)
 │   # 未来 crate 预留:
-│   # muskitty-css-values/              # Phase 2 子阶段 3
-│   # muskitty-cssom/                   # Phase 2 子阶段 4
-│   # muskitty-cascade/                 # Phase 2 子阶段 5
-│   # muskitty-network/                 # Layer 5
-│   # muskitty-layout/                  # Layer 3
+│   # muskitty-layout/                  # Layer 3 (即将开发)
 │   # muskitty-renderer/                # Layer 4
+│   # muskitty-network/                 # Layer 5
 └── docs/
     ├── spec/                           # 规范源文件（CSS Syntax Overview.bs 等）
+    ├── plans/                          # 当前阶段计划文档
     └── archive/                        # 历史设计文档 / 审查报告
 ```
 
 依赖拓扑（crates.io 发布顺序）：
 
 ```
-muskitty-dom ───────────────────────────────────────────┐
-                                                        ├─→ muskitty-selectors
-muskitty-css-tokenizer ─→ muskitty-css-parser ─→ muskitty-css
-                                                        ├─→ (远期) muskitty-cssom / muskitty-cascade
-muskitty-html5-tokenizer ─→ muskitty-html5-parser
+muskitty-dom ────────────────────────────────────────────┐
+                                                         ├─→ muskitty-selectors ──┐
+muskitty-css-tokenizer ─→ muskitty-css-parser ─→ muskitty-css ──────────────────────┤
+                                                         ├─→ muskitty-css-values  ├─→ muskitty-cascade (in-tree)
+muskitty-html5-tokenizer ─→ muskitty-html5-parser        │
+                                                         └─→ muskitty-cssom ──────┘
 ```
 
 ## Hard Rules

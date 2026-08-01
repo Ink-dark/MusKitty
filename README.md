@@ -14,12 +14,12 @@ is the workspace coordinator and project-level documentation hub.
 | `muskitty-html5-tokenizer` | WHATWG HTML §13.2.5.1–§13.2.5.80 (80/80 states) | v0.1.2 | [muskitty-dev/muskitty-html5-tokenizer](https://github.com/muskitty-dev/muskitty-html5-tokenizer) |
 | `muskitty-html5-parser` | WHATWG HTML §13.2.6 (all insertion modes + AAA / foster parenting / foreign content) | v0.1.2 | [muskitty-dev/muskitty-html5-parser](https://github.com/muskitty-dev/muskitty-html5-parser) |
 | `muskitty-dom` | DOM Living Standard §4–§7 | v0.1.0 | [muskitty-dev/muskitty-dom](https://github.com/muskitty-dev/muskitty-dom) |
-| `muskitty-css-tokenizer` | CSS Syntax §4.3.1–§4.3.13 | v0.1.1 | [muskitty-dev/muskitty-css-tokenizer](https://github.com/muskitty-dev/muskitty-css-tokenizer) |
-| `muskitty-css-parser` | CSS Syntax §5.2–§5.5 + §5.4.1/§5.4.2 grammar hooks | v0.1.0 | [muskitty-dev/muskitty-css-parser](https://github.com/muskitty-dev/muskitty-css-parser) |
-| `muskitty-css` | Facade combining tokenizer + parser | v0.4.0 | [muskitty-dev/muskitty-css](https://github.com/muskitty-dev/muskitty-css) |
+| `muskitty-css-tokenizer` | CSS Syntax §4.3.1–§4.3.13 | v0.2.0 | [muskitty-dev/muskitty-css-tokenizer](https://github.com/muskitty-dev/muskitty-css-tokenizer) |
+| `muskitty-css-parser` | CSS Syntax §5.2–§5.5 + §5.4.1/§5.4.2 grammar hooks | v0.2.0 | [muskitty-dev/muskitty-css-parser](https://github.com/muskitty-dev/muskitty-css-parser) |
+| `muskitty-css` | Facade combining tokenizer + parser | v0.5.0 | [muskitty-dev/muskitty-css](https://github.com/muskitty-dev/muskitty-css) |
 | `muskitty-selectors` | Selectors Level 4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | v0.1.0 | [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors) |
-| `muskitty-css-values` | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | local v0.1.0 | in-tree (📦) |
-| `muskitty-cssom` | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | local v0.1.0 | in-tree (📦) |
+| `muskitty-css-values` | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | v0.1.0 | [muskitty-dev/muskitty-css-values](https://github.com/muskitty-dev/muskitty-css-values) |
+| `muskitty-cssom` | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | v0.1.0 | [muskitty-dev/muskitty-cssom](https://github.com/muskitty-dev/muskitty-cssom) |
 | `muskitty-cascade` | CSS Cascade L5 §4.1–§4.4/§5/§6.1/§7 | local v0.1.0 | in-tree (📦) |
 
 Test status (latest CI): each independent repo runs 6 jobs (Check / Unit
@@ -33,16 +33,16 @@ the per-crate test matrix.
 - Browser UI / Chrome / extensions
 - Networking stack (deferred to a later layer)
 
-The project is currently in Phase 2 (CSS parsing layer). Layer 3 (Layout),
-Layer 4 (Renderer), and Layer 5 (Network) are future work — see
+The project has completed Phase 2 (CSS parsing layer: tokenizer, parser,
+selectors, values, CSSOM, and cascade). Phase 3 (Layout) is the next
+target. Layer 4 (Renderer) and Layer 5 (Network) are future work — see
 [PROGRESS.md](PROGRESS.md) for the layer roadmap.
 
 ## Repository layout
 
 ```
 MusKitty/                              # this repo — workspace coordinator
-├── Cargo.toml                         # members = [cascade, cssom, css-values]
-│                                      # exclude = [7 extracted crates]
+├── Cargo.toml                         # members = [cascade], exclude = [9 extracted crates]
 ├── PROGRESS.md                        # project-wide progress dashboard
 ├── CLAUDE.md                          # engineering rules / hard constraints
 ├── README.md                          # this file
@@ -50,17 +50,18 @@ MusKitty/                              # this repo — workspace coordinator
 ├── fetch-crates.sh                    # macOS/Linux: pull standalone crates
 ├── crates/
 │   ├── muskitty-cascade/              # 📦 workspace member (in-tree, tracked)
-│   ├── muskitty-cssom/                # 📦 workspace member (in-tree, tracked)
-│   ├── muskitty-css-values/           # 📦 workspace member (in-tree, tracked)
 │   ├── muskitty-css/                  # 🔗 extracted → muskitty-dev/muskitty-css
 │   ├── muskitty-css-parser/           # 🔗 extracted → muskitty-dev/muskitty-css-parser
 │   ├── muskitty-css-tokenizer/        # 🔗 extracted → muskitty-dev/muskitty-css-tokenizer
+│   ├── muskitty-css-values/           # 🔗 extracted → muskitty-dev/muskitty-css-values
+│   ├── muskitty-cssom/               # 🔗 extracted → muskitty-dev/muskitty-cssom
 │   ├── muskitty-dom/                  # 🔗 extracted → muskitty-dev/muskitty-dom
 │   ├── muskitty-html5-parser/         # 🔗 extracted → muskitty-dev/muskitty-html5-parser
 │   ├── muskitty-html5-tokenizer/      # 🔗 extracted → muskitty-dev/muskitty-html5-tokenizer
 │   └── muskitty-selectors/            # 🔗 extracted → muskitty-dev/muskitty-selectors
 ├── docs/
 │   ├── spec/                          # source specs
+│   ├── plans/                         # current phase plan documents
 │   └── archive/                       # historical design docs / review reports
 └── .trae/archive/                     # archived phase plans
 ```
@@ -68,9 +69,9 @@ MusKitty/                              # this repo — workspace coordinator
 📦 = workspace member, tracked in this repo.  
 🔗 = extracted as independent repo (gitignored here); use `fetch-crates.ps1` to pull.
 
-The 3 workspace members depend on the extracted crates via `path = "..."`. The
-extracted crates are listed in `Cargo.toml → exclude` (not `members`) and are
-each their own `[workspace]` root.
+The 1 workspace member (`muskitty-cascade`) depends on the extracted crates via
+`path = "..."`. The extracted crates are listed in `Cargo.toml → exclude` (not
+`members`) and are each their own `[workspace]` root.
 
 ## Using the published crates
 
@@ -90,10 +91,9 @@ MSRV: Rust 1.82+ across all crates.
 
 ## Building locally
 
-The 3 workspace members (`muskitty-cascade`, `muskitty-cssom`,
-`muskitty-css-values`) depend on crates that are **not** tracked in this repo
-because each has been extracted to its own repository under
-[`muskitty-dev`](https://github.com/muskitty-dev). A fresh clone will be
+The workspace member (`muskitty-cascade`) depends on crates that are **not**
+tracked in this repo because each has been extracted to its own repository
+under [`muskitty-dev`](https://github.com/muskitty-dev). A fresh clone will be
 missing those directories — run the fetch script first.
 
 ### One-time setup
@@ -102,7 +102,7 @@ missing those directories — run the fetch script first.
 git clone https://github.com/Ink-dark/MusKitty.git
 cd MusKitty
 
-# Pull all 7 standalone dependency crates into crates/
+# Pull all 9 standalone dependency crates into crates/
 pwsh ./fetch-crates.ps1 clone    # Windows
 # or
 ./fetch-crates.sh clone           # macOS / Linux
@@ -114,7 +114,7 @@ pwsh ./fetch-crates.ps1 clone    # Windows
 # Update all standalone crates to latest
 pwsh ./fetch-crates.ps1           # pull mode (default)
 
-# Workspace-wide checks — all 10 crates
+# Workspace-wide checks
 cargo check --workspace
 cargo test --workspace
 cargo fmt --all -- --check
