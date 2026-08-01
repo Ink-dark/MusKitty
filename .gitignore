@@ -6,6 +6,8 @@ crates/*/target
 # --- 已剥离的独立 crate（各自有 .git 仓库，在 Cargo.toml exclude 列表中）---
 # 这些目录不在主仓库版本控制中。新设备 clone 后需通过 fetch-crates.ps1 / fetch-crates.sh
 # 拉取到 crates/ 下，workspace member 的 path 依赖才能解析。
+crates/muskitty-cascade/
+crates/muskitty-layout/
 crates/muskitty-html5-parser/
 crates/muskitty-html5-tokenizer/
 crates/muskitty-dom/
