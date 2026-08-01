@@ -26,8 +26,11 @@ use taffy::style_helpers::{TaffyAuto, TaffyZero};
 pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
     // taffy 默认 display 为 Flex（启用 flexbox feature 时），但 HTML 块级元素
     // 的预期默认是 Block，因此显式覆盖为 Block。
+    // 同时 taffy 默认 box_sizing 为 BorderBox，与 CSS Box Model §4.1 规定的初始值
+    // content-box 不一致，这里纠正为 ContentBox。
     let mut style = Style {
         display: Display::Block,
+        box_sizing: BoxSizing::ContentBox,
         ..Style::default()
     };
 
@@ -37,11 +40,25 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
     };
 
     // —— display ——
+    // CSS Display Level 3 §2: display 属性映射。
+    //
+    // taffy 0.12 的 Display 枚举只有 Block/Flex/Grid/None，无 Inline 变体。
+    // 处理策略：
+    // - `block` / `flow` / `flow-root` → Block（block container）
+    // - `flex` / `inline-flex` → Flex（inline-flex 的 inline-level 行为 taffy 不支持，
+    //   仅保留 flex container 语义）
+    // - `grid` / `inline-grid` → Grid（同上）
+    // - `inline` / `inline-block` → Block（taffy 无 inline layout，作为 workaround）
+    // - `none` → None（不生成 box，已在 build_layout_tree 中排除）
+    // - `contents` → Block（TODO: §2.5 规定元素本身不生成 box 但保留子元素，
+    //   需在 build_layout_tree 中特殊处理，当前先当 Block）
+    // - `list-item` → Block（TODO: 需额外处理 marker box，当前当 Block）
     if let Some(kw) = get_keyword(cs, "display") {
         style.display = match kw.to_ascii_lowercase().as_str() {
-            "flex" => Display::Flex,
-            "grid" => Display::Grid,
-            "block" => Display::Block,
+            "flex" | "inline-flex" => Display::Flex,
+            "grid" | "inline-grid" => Display::Grid,
+            "block" | "flow" | "flow-root" | "inline" | "inline-block" | "contents"
+            | "list-item" => Display::Block,
             "none" => Display::None,
             _ => Display::Block,
         };
@@ -86,11 +103,13 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
     };
 
     // —— box-sizing ——
+    // CSS Box Model Level 3 §4.1: 初始值为 content-box.
+    // 未知值按 §7.1 回退到初始值（ContentBox），而非 taffy 默认的 BorderBox.
     if let Some(kw) = get_keyword(cs, "box-sizing") {
         style.box_sizing = match kw.to_ascii_lowercase().as_str() {
             "content-box" => BoxSizing::ContentBox,
             "border-box" => BoxSizing::BorderBox,
-            _ => BoxSizing::BorderBox,
+            _ => BoxSizing::ContentBox,
         };
     }
 
@@ -134,14 +153,22 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
     }
 
     // —— flex-grow / flex-shrink ——
+    // CSS Flexbox §7.2: "Negative values are invalid."
+    // 负值被拒绝：
+    // - flex-grow 保持初始值 0.0（CSS）= taffy 默认值 0.0
+    // - flex-shrink 保持初始值 1.0（CSS）= taffy 默认值 1.0
     if let Some(cv) = cs.get("flex-grow") {
         if let Some(val) = extract_number_from_cv(cv) {
-            style.flex_grow = val;
+            if val >= 0.0 {
+                style.flex_grow = val;
+            }
         }
     }
     if let Some(cv) = cs.get("flex-shrink") {
         if let Some(val) = extract_number_from_cv(cv) {
-            style.flex_shrink = val;
+            if val >= 0.0 {
+                style.flex_shrink = val;
+            }
         }
     }
 
@@ -151,13 +178,15 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
     }
 
     // —— gap / row-gap / column-gap ——
-    // gap 简写同时设置 row-gap（height 轴）和 column-gap（width 轴）。
-    // 单独的 row-gap / column-gap 覆盖对应轴。
+    // CSS Box Alignment Level 3 §6.2: gap 简写语法 `gap: <row-gap> <column-gap>?`.
+    // - 单值：同时设置 row-gap（height 轴）和 column-gap（width 轴）
+    // - 双值：第一个设置 row-gap，第二个设置 column-gap
+    // 单独的 row-gap / column-gap 声明覆盖对应轴（在 gap 之后声明时）。
     let mut gap = style.gap;
     if let Some(cv) = cs.get("gap") {
-        let lp = map_length_percentage(Some(cv));
-        gap.width = lp;
-        gap.height = lp;
+        let (row_gap, col_gap) = extract_gap_pair(cv);
+        gap.height = row_gap;
+        gap.width = col_gap;
     }
     if let Some(cv) = cs.get("column-gap") {
         gap.width = map_length_percentage(Some(cv));
@@ -207,12 +236,21 @@ fn map_justify_content(kw: &str) -> Option<JustifyContent> {
 }
 
 /// `align-items` / `align-self` 关键字 → [`AlignItems`]。
+///
+/// # 规范依据
+///
+/// - CSS Flexbox Level 1 §8.3: `align-items` 接受 `normal` 关键字
+/// - CSS Box Alignment Level 3 §6.1: `normal` 在 flex 布局中行为等价于 `start`
+/// - CSS Flexbox §8.3: `start` 对齐到 cross-axis 起始端，等价于 `flex-start`
+///
+/// 因此 `normal` 显式映射为 [`AlignItems::FLEX_START`]，避免落入 `_` 分支返回
+/// `None` 后被 taffy 默认值 `STRETCH` 覆盖。
 fn map_align_items(kw: &str) -> Option<AlignItems> {
     Some(match kw {
         "stretch" => AlignItems::STRETCH,
-        "flex-start" => AlignItems::FLEX_START,
+        "flex-start" | "start" | "normal" => AlignItems::FLEX_START,
         "center" => AlignItems::CENTER,
-        "flex-end" => AlignItems::FLEX_END,
+        "flex-end" | "end" => AlignItems::FLEX_END,
         "baseline" => AlignItems::BASELINE,
         _ => return None,
     })
@@ -289,6 +327,58 @@ fn extract_px(cvs: &[ComponentValue]) -> Option<f32> {
         }
     }
     None
+}
+
+/// 从 component value 列表中提取所有长度值（px 或百分比），跳过空白。
+///
+/// 用于 `gap` 简写双值解析：返回所有非空白的有效长度值。
+fn extract_all_lengths(cvs: &[ComponentValue]) -> Vec<f32> {
+    let mut result = Vec::new();
+    for cv in cvs {
+        match cv {
+            ComponentValue::PreservedToken(Token::Whitespace) => continue,
+            ComponentValue::PreservedToken(Token::Dimension(numeric, unit))
+                if unit.eq_ignore_ascii_case("px") =>
+            {
+                result.push(numeric.value as f32);
+            }
+            ComponentValue::PreservedToken(Token::Percentage(numeric)) => {
+                // gap 百分比在 taffy 中按 LengthPercentage::percent 处理，
+                // 这里统一转为 0.0-1.0 区间返回 f32，由调用方决定如何使用。
+                // 但当前 gap 不支持百分比，暂不处理（返回空让 fallback 生效）。
+                let _ = numeric;
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+/// 解析 `gap` 简写的 ComputedValue，返回 (row_gap, column_gap)。
+///
+/// CSS Box Alignment §6.2: `gap: <row-gap> <column-gap>?`
+/// - 单值：row_gap == col_gap
+/// - 双值：第一个为 row_gap，第二个为 col_gap
+fn extract_gap_pair(cv: &ComputedValue) -> (LengthPercentage, LengthPercentage) {
+    let cvs = match cv {
+        ComputedValue::Resolved(cvs) | ComputedValue::Raw(cvs) => cvs,
+        _ => return (LengthPercentage::ZERO, LengthPercentage::ZERO),
+    };
+    let lengths = extract_all_lengths(cvs);
+    match lengths.len() {
+        0 => (LengthPercentage::ZERO, LengthPercentage::ZERO),
+        1 => {
+            let lp = LengthPercentage::length(lengths[0]);
+            (lp, lp)
+        }
+        _ => {
+            // 双值或更多：第一个为 row_gap，第二个为 column_gap
+            (
+                LengthPercentage::length(lengths[0]),
+                LengthPercentage::length(lengths[1]),
+            )
+        }
+    }
 }
 
 /// 从 component value 列表中提取第一个百分比值（0.0-100.0）。

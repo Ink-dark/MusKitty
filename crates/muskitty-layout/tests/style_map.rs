@@ -20,6 +20,27 @@ fn px(val: f64) -> ComputedValue {
     ))])
 }
 
+/// 构造 `Npx Mpx` 双值的 Resolved ComputedValue（用于 `gap` 简写双值测试）。
+fn px_pair(val1: f64, val2: f64) -> ComputedValue {
+    ComputedValue::Resolved(vec![
+        ComponentValue::PreservedToken(Token::Dimension(
+            Numeric {
+                value: val1,
+                is_integer: false,
+            },
+            "px".to_string(),
+        )),
+        ComponentValue::PreservedToken(Token::Whitespace),
+        ComponentValue::PreservedToken(Token::Dimension(
+            Numeric {
+                value: val2,
+                is_integer: false,
+            },
+            "px".to_string(),
+        )),
+    ])
+}
+
 /// 构造 `N%` 的 Resolved ComputedValue。
 fn pct(val: f64) -> ComputedValue {
     ComputedValue::Resolved(vec![ComponentValue::PreservedToken(Token::Percentage(
@@ -76,6 +97,46 @@ fn display_none_maps_to_none() {
     cs.set("display", kw("none"));
     let style = map_style(Some(&cs));
     assert_eq!(style.display, Display::None);
+}
+
+#[test]
+fn display_inline_flex_maps_to_flex() {
+    // CSS Display §2.8: inline-flex = inline-level + flex container.
+    // taffy 只支持 flex container 部分，映射为 Flex。
+    let mut cs = ComputedStyle::new();
+    cs.set("display", kw("inline-flex"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.display, Display::Flex);
+}
+
+#[test]
+fn display_inline_grid_maps_to_grid() {
+    // CSS Display §2.8: inline-grid = inline-level + grid container.
+    // taffy 只支持 grid container 部分，映射为 Grid。
+    let mut cs = ComputedStyle::new();
+    cs.set("display", kw("inline-grid"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.display, Display::Grid);
+}
+
+#[test]
+fn display_inline_maps_to_block() {
+    // CSS Display §2.4: display: inline 是初始值，生成 inline-level box.
+    // taffy 0.12 无 inline layout 支持，作为 workaround 映射为 Block.
+    let mut cs = ComputedStyle::new();
+    cs.set("display", kw("inline"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.display, Display::Block);
+}
+
+#[test]
+fn display_inline_block_maps_to_block() {
+    // CSS Display §2.4: inline-block = inline-level + block container.
+    // taffy 无 inline-level 支持，映射为 Block.
+    let mut cs = ComputedStyle::new();
+    cs.set("display", kw("inline-block"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.display, Display::Block);
 }
 
 #[test]
@@ -210,6 +271,33 @@ fn box_sizing_border_box() {
     assert_eq!(style.box_sizing, BoxSizing::BorderBox);
 }
 
+#[test]
+fn box_sizing_defaults_to_content_box() {
+    // CSS Box Model §4.1: box-sizing 初始值为 content-box.
+    // taffy Style::default() 使用 BorderBox，我们的 map_style 必须纠正为 ContentBox.
+    let cs = ComputedStyle::new();
+    let style = map_style(Some(&cs));
+    assert_eq!(
+        style.box_sizing,
+        BoxSizing::ContentBox,
+        "box-sizing 未设置时应为初始值 ContentBox，而非 taffy 默认的 BorderBox"
+    );
+}
+
+#[test]
+fn box_sizing_unknown_value_falls_back_to_content_box() {
+    // CSS Cascade §7.1: 无效值回退到初始值.
+    // box-sizing 初始值为 content-box.
+    let mut cs = ComputedStyle::new();
+    cs.set("box-sizing", kw("invalid-value"));
+    let style = map_style(Some(&cs));
+    assert_eq!(
+        style.box_sizing,
+        BoxSizing::ContentBox,
+        "未知 box-sizing 值应回退到初始值 ContentBox"
+    );
+}
+
 // —— flexbox 属性 ——
 
 #[test]
@@ -285,6 +373,20 @@ fn align_items_stretch() {
 }
 
 #[test]
+fn align_items_normal_maps_to_flex_start() {
+    // CSS Flexbox §8.3 + Box Alignment §6.1: align-items: normal 在 flex 布局中
+    // 等价于 start (= flex-start)。不能回退到 taffy 默认 STRETCH。
+    let mut cs = ComputedStyle::new();
+    cs.set("align-items", kw("normal"));
+    let style = map_style(Some(&cs));
+    assert_eq!(
+        style.align_items,
+        Some(AlignItems::FLEX_START),
+        "align-items: normal 在 flex 布局中应等价于 flex-start，而非 STRETCH"
+    );
+}
+
+#[test]
 fn align_self_auto_falls_back_to_none() {
     let mut cs = ComputedStyle::new();
     cs.set("align-self", kw("auto"));
@@ -319,6 +421,32 @@ fn flex_shrink_number() {
     cs.set("flex-shrink", num(0.5));
     let style = map_style(Some(&cs));
     assert_eq!(style.flex_shrink, 0.5);
+}
+
+#[test]
+fn flex_grow_negative_value_rejected() {
+    // CSS Flexbox §7.2: "Negative values are invalid."
+    // 负的 flex-grow 应被拒绝，保持初始值 0.0.
+    let mut cs = ComputedStyle::new();
+    cs.set("flex-grow", num(-1.0));
+    let style = map_style(Some(&cs));
+    assert_eq!(
+        style.flex_grow, 0.0,
+        "负的 flex-grow 应被拒绝，保持初始值 0.0"
+    );
+}
+
+#[test]
+fn flex_shrink_negative_value_rejected() {
+    // CSS Flexbox §7.2: "Negative values are invalid."
+    // 负的 flex-shrink 应被拒绝，保持初始值 1.0.
+    let mut cs = ComputedStyle::new();
+    cs.set("flex-shrink", num(-0.5));
+    let style = map_style(Some(&cs));
+    assert_eq!(
+        style.flex_shrink, 1.0,
+        "负的 flex-shrink 应被拒绝，保持 taffy 默认值 1.0"
+    );
 }
 
 #[test]
@@ -358,5 +486,35 @@ fn row_gap_and_column_gap_independent() {
     cs.set("column-gap", px(15.0));
     let style = map_style(Some(&cs));
     assert_eq!(style.gap.height, LengthPercentage::length(5.0));
+    assert_eq!(style.gap.width, LengthPercentage::length(15.0));
+}
+
+#[test]
+fn gap_shorthand_two_values_split_correctly() {
+    // CSS Box Alignment §6.2: gap: <row-gap> <column-gap>?
+    // 两个值时第一个设置 row-gap（height 轴），第二个设置 column-gap（width 轴）。
+    let mut cs = ComputedStyle::new();
+    // gap: 10px 20px → row-gap: 10px (height), column-gap: 20px (width)
+    cs.set("gap", px_pair(10.0, 20.0));
+    let style = map_style(Some(&cs));
+    assert_eq!(
+        style.gap.height,
+        LengthPercentage::length(10.0),
+        "gap 双值的第一个值应设置 row-gap (height 轴)"
+    );
+    assert_eq!(
+        style.gap.width,
+        LengthPercentage::length(20.0),
+        "gap 双值的第二个值应设置 column-gap (width 轴)"
+    );
+}
+
+#[test]
+fn gap_shorthand_single_value_sets_both() {
+    // CSS Box Alignment §6.2: 单值时同时设置 row-gap 和 column-gap.
+    let mut cs = ComputedStyle::new();
+    cs.set("gap", px(15.0));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.gap.height, LengthPercentage::length(15.0));
     assert_eq!(style.gap.width, LengthPercentage::length(15.0));
 }

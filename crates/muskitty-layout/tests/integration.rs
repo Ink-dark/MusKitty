@@ -200,11 +200,16 @@ fn flex_layout_children_positioned() {
         "child2 width should be ~200px, got {}",
         c2.width
     );
+    // CSS Flexbox §4.5: flex row 中相邻 flex item 紧邻排列，
+    // c2.x 应等于 c1.x + c1.width（无 gap/margin 时）。
     assert!(
-        c2.x >= c1.x,
-        "child2 x ({}) should be >= child1 x ({})",
+        (c2.x - (c1.x + c1.width)).abs() < 1.0,
+        "child2 x ({}) should be ~child1.x ({}) + child1.width ({}) = {}, got {}",
         c2.x,
-        c1.x
+        c1.x,
+        c1.width,
+        c1.x + c1.width,
+        c2.x
     );
 }
 
@@ -237,9 +242,11 @@ fn margin_applied_to_position() {
         "width should be ~100px, got {}",
         layout.width
     );
+    // CSS Box Model §2.1: margin-left: 20px 应使元素 x 偏移 20px.
+    // 使用精确断言（±1.0 容差）而非宽松的 x >= 19.0.
     assert!(
-        layout.x >= 20.0 - 1.0,
-        "x should be >= 20px (margin), got {}",
+        (layout.x - 20.0).abs() < 1.0,
+        "x should be ~20px (margin-left), got {}",
         layout.x
     );
 }
