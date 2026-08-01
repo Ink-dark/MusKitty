@@ -1,0 +1,108 @@
+//! 绘制指令（RenderCommand）。
+//!
+//! `paint` 函数输出 `Vec<RenderCommand>`，后端 [`Backend`](crate::backend::Backend)
+//! 消费这些指令栅格化为像素。当前仅 `Rect`，文本/裁剪推迟。
+
+use crate::color::Color;
+
+/// 单条绘制指令。
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum RenderCommand {
+    /// 矩形填充（含可选边框）。
+    ///
+    /// `x` / `y` 为相对画布原点的绝对坐标（已累加父元素偏移），
+    /// `width` / `height` 为元素的 content + padding + border 总尺寸。
+    Rect {
+        /// 左上角 X（px，画布坐标系）。
+        x: f32,
+        /// 左上角 Y（px，画布坐标系）。
+        y: f32,
+        /// 宽度（px）。
+        width: f32,
+        /// 高度（px）。
+        height: f32,
+        /// 背景填充色。`None` 表示不填充（透明）。
+        background: Option<Color>,
+        /// 边框。`None` 表示无边框。
+        ///
+        /// 注意：当前 cascade 尚未注册 border-* 属性，paint 阶段
+        /// 暂不生成边框，该字段保留供后续扩展。
+        border: Option<Border>,
+    },
+}
+
+/// 边框描述。
+///
+/// 当前为等宽四边；后续可扩展为逐边不同。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Border {
+    /// 边框宽度（px）。
+    pub width: f32,
+    /// 边框颜色。
+    pub color: Color,
+    /// 边框样式。
+    pub style: BorderStyle,
+}
+
+/// CSS border-style 关键字（CSS Backgrounds L3 §4.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderStyle {
+    /// `none`：不绘制（默认）。
+    #[default]
+    None,
+    /// `solid`：实线。
+    Solid,
+    /// `dashed`：虚线（推迟）。
+    Dashed,
+    /// `dotted`：点线（推迟）。
+    Dotted,
+}
+
+impl RenderCommand {
+    /// 构造一个纯背景填充矩形（无边框）。
+    pub fn rect(x: f32, y: f32, width: f32, height: f32, background: Color) -> Self {
+        RenderCommand::Rect {
+            x,
+            y,
+            width,
+            height,
+            background: Some(background),
+            border: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rect_command_construction() {
+        let cmd = RenderCommand::rect(10.0, 20.0, 100.0, 50.0, Color::rgb(255, 0, 0));
+        match cmd {
+            RenderCommand::Rect {
+                x,
+                y,
+                width,
+                height,
+                background,
+                border,
+            } => {
+                assert_eq!(x, 10.0);
+                assert_eq!(y, 20.0);
+                assert_eq!(width, 100.0);
+                assert_eq!(height, 50.0);
+                assert_eq!(background, Some(Color::rgb(255, 0, 0)));
+                assert_eq!(border, None);
+            }
+        }
+    }
+
+    #[test]
+    fn border_default_is_none() {
+        let b = Border::default();
+        assert_eq!(b.style, BorderStyle::None);
+        assert_eq!(b.width, 0.0);
+    }
+}
