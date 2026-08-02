@@ -11,7 +11,7 @@ use crate::registry::{lookup_property, PercentageBasis};
 use crate::style::ComputedValue;
 use muskitty_css::parser::{ComponentValue, Function};
 use muskitty_css::tokenizer::{Numeric, Token};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// §4.4: Computed value 计算上下文。
 ///
@@ -55,9 +55,12 @@ pub fn compute_value(
     specified: &[ComponentValue],
     ctx: &ComputeContext,
 ) -> ComputedValue {
+    // §3 CSS Variables: 每条计算路径使用独立的 visited 集合检测 var()
+    // 循环引用（--a → --b → --a 等），避免无限递归导致栈溢出。
+    let mut visited: HashSet<String> = HashSet::new();
     let resolved: Vec<ComponentValue> = specified
         .iter()
-        .flat_map(|cv| resolve_component_value(cv, property, ctx))
+        .flat_map(|cv| resolve_component_value(cv, property, ctx, &mut visited))
         .collect();
 
     ComputedValue::Resolved(resolved)
@@ -70,6 +73,7 @@ fn resolve_component_value(
     cv: &ComponentValue,
     property: &str,
     ctx: &ComputeContext,
+    visited: &mut HashSet<String>,
 ) -> Vec<ComponentValue> {
     match cv {
         // 相对长度单位解析
@@ -82,14 +86,14 @@ fn resolve_component_value(
         }
         // var() 替换
         ComponentValue::Function(func) if func.name.eq_ignore_ascii_case("var") => {
-            resolve_var(func, ctx, property)
+            resolve_var(func, ctx, property, visited)
         }
         // 其他函数（如 calc()）— 递归解析参数
         ComponentValue::Function(func) => {
             let resolved_args: Vec<ComponentValue> = func
                 .value
                 .iter()
-                .flat_map(|arg| resolve_component_value(arg, property, ctx))
+                .flat_map(|arg| resolve_component_value(arg, property, ctx, visited))
                 .collect();
             vec![ComponentValue::Function(Function {
                 name: func.name.clone(),
@@ -185,7 +189,12 @@ fn resolve_percentage(
 ///
 /// `var(--name, fallback)` → 查找自定义属性 --name，
 /// 找到则替换为其值（递归解析），未找到则使用 fallback。
-fn resolve_var(func: &Function, ctx: &ComputeContext, property: &str) -> Vec<ComponentValue> {
+fn resolve_var(
+    func: &Function,
+    ctx: &ComputeContext,
+    property: &str,
+    visited: &mut HashSet<String>,
+) -> Vec<ComponentValue> {
     // 解析参数：第一个 ident 是自定义属性名，逗号后是 fallback
     let mut var_name: Option<String> = None;
     let mut fallback: Vec<ComponentValue> = Vec::new();
@@ -214,20 +223,31 @@ fn resolve_var(func: &Function, ctx: &ComputeContext, property: &str) -> Vec<Com
         None => return Vec::new(), // 无效的 var() 调用
     };
 
-    // 查找自定义属性
-    if let Some(value) = ctx.custom_properties.get(&name) {
+    // §3 CSS Variables "Cycles in Custom Properties":
+    // 若 --name 已在当前替换路径（visited）中，说明其值直接或间接
+    // 依赖自身，该 var() 必须视为 invalid，返回空 Vec。
+    if !visited.insert(name.clone()) {
+        return Vec::new();
+    }
+
+    let result = if let Some(value) = ctx.custom_properties.get(&name) {
         // 递归解析替换值（可能含嵌套 var()）
         value
             .iter()
-            .flat_map(|cv| resolve_component_value(cv, property, ctx))
+            .flat_map(|cv| resolve_component_value(cv, property, ctx, visited))
             .collect()
     } else {
         // 使用 fallback（递归解析）
         fallback
             .iter()
-            .flat_map(|cv| resolve_component_value(cv, property, ctx))
+            .flat_map(|cv| resolve_component_value(cv, property, ctx, visited))
             .collect()
-    }
+    };
+
+    // 本路径解析完成，移除该名字：同一属性可被多条路径引用（DAG），
+    // 只有沿单条替换路径上的重复才构成环。
+    visited.remove(&name);
+    result
 }
 
 #[cfg(test)]
@@ -517,6 +537,121 @@ mod tests {
                 }
                 other => panic!("expected Dimension, got {:?}", other),
             },
+            other => panic!("expected Resolved, got {:?}", other),
+        }
+    }
+
+    // —— §3 var() 循环检测 ——
+
+    fn var_fn(name: &str) -> ComponentValue {
+        ComponentValue::Function(Function {
+            name: "var".to_string(),
+            value: vec![ComponentValue::PreservedToken(Token::Ident(
+                name.to_string(),
+            ))],
+        })
+    }
+
+    #[test]
+    fn var_self_reference_returns_empty() {
+        // --a: var(--a) → 自引用 → 空
+        let mut props = HashMap::new();
+        props.insert("--a".to_string(), vec![var_fn("--a")]);
+        let ctx = ctx_with_custom(&props);
+        let result = compute_value("color", &[var_fn("--a")], &ctx);
+        match result {
+            ComputedValue::Resolved(cvs) => {
+                assert!(cvs.is_empty(), "self-cycle must resolve to empty");
+            }
+            other => panic!("expected Resolved, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn var_two_cycle_returns_empty() {
+        // --a: var(--b); --b: var(--a) → 双环 → 空
+        let mut props = HashMap::new();
+        props.insert("--a".to_string(), vec![var_fn("--b")]);
+        props.insert("--b".to_string(), vec![var_fn("--a")]);
+        let ctx = ctx_with_custom(&props);
+        let result = compute_value("color", &[var_fn("--a")], &ctx);
+        match result {
+            ComputedValue::Resolved(cvs) => {
+                assert!(cvs.is_empty(), "two-cycle must resolve to empty");
+            }
+            other => panic!("expected Resolved, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn var_triangle_cycle_returns_empty() {
+        // --a: var(--b); --b: var(--c); --c: var(--a) → 三角环 → 空
+        let mut props = HashMap::new();
+        props.insert("--a".to_string(), vec![var_fn("--b")]);
+        props.insert("--b".to_string(), vec![var_fn("--c")]);
+        props.insert("--c".to_string(), vec![var_fn("--a")]);
+        let ctx = ctx_with_custom(&props);
+        let result = compute_value("color", &[var_fn("--a")], &ctx);
+        match result {
+            ComputedValue::Resolved(cvs) => {
+                assert!(cvs.is_empty(), "triangle-cycle must resolve to empty");
+            }
+            other => panic!("expected Resolved, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn var_normal_chain_still_resolves() {
+        // --a: var(--b); --b: red → 正常链 → red
+        let mut props = HashMap::new();
+        props.insert("--a".to_string(), vec![var_fn("--b")]);
+        props.insert(
+            "--b".to_string(),
+            vec![ComponentValue::PreservedToken(Token::Ident(
+                "red".to_string(),
+            ))],
+        );
+        let ctx = ctx_with_custom(&props);
+        let result = compute_value("color", &[var_fn("--a")], &ctx);
+        match result {
+            ComputedValue::Resolved(cvs) => {
+                assert_eq!(cvs.len(), 1);
+                match &cvs[0] {
+                    ComponentValue::PreservedToken(Token::Ident(s)) => assert_eq!(s, "red"),
+                    other => panic!("expected Ident, got {:?}", other),
+                }
+            }
+            other => panic!("expected Resolved, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn var_repeated_reference_is_not_a_cycle() {
+        // --a: var(--b) var(--b); --b: red → 同一属性重复引用不是环
+        let mut props = HashMap::new();
+        props.insert("--a".to_string(), vec![var_fn("--b"), var_fn("--b")]);
+        props.insert(
+            "--b".to_string(),
+            vec![ComponentValue::PreservedToken(Token::Ident(
+                "red".to_string(),
+            ))],
+        );
+        let ctx = ctx_with_custom(&props);
+        let result = compute_value("color", &[var_fn("--a")], &ctx);
+        match result {
+            ComputedValue::Resolved(cvs) => {
+                assert_eq!(cvs.len(), 2);
+                let reds = cvs
+                    .iter()
+                    .filter(|cv| {
+                        matches!(
+                            cv,
+                            ComponentValue::PreservedToken(Token::Ident(s)) if s == "red"
+                        )
+                    })
+                    .count();
+                assert_eq!(reds, 2);
+            }
             other => panic!("expected Resolved, got {:?}", other),
         }
     }
