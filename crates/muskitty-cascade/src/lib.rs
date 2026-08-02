@@ -45,6 +45,7 @@
 
 pub mod cascade;
 pub mod compute;
+pub mod custom_properties;
 pub mod defaulting;
 pub mod filter;
 pub mod origin;
@@ -53,6 +54,7 @@ pub mod style;
 
 pub use cascade::{cascade_for_element, cascade_winner};
 pub use compute::{compute_value, ComputeContext};
+pub use custom_properties::collect_custom_properties;
 pub use defaulting::apply_defaulting;
 pub use filter::collect_declared_values;
 pub use origin::Origin;

@@ -6,8 +6,9 @@
 //! ```
 
 use muskitty_cascade::{
-    apply_defaulting, cascade_for_element, cascade_winner, collect_declared_values, compute_value,
-    ComputeContext, ComputedStyle, ComputedValue, BUILTIN_PROPERTIES,
+    apply_defaulting, cascade_for_element, cascade_winner, collect_custom_properties,
+    collect_declared_values, compute_value, ComputeContext, ComputedStyle, ComputedValue,
+    BUILTIN_PROPERTIES,
 };
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
@@ -40,10 +41,8 @@ fn full_pipeline(html: &str, css: &str, viewport_w: f32, viewport_h: f32) -> Pip
         s
     };
 
-    let empty_props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
-    let ctx = ComputeContext::new(&empty_props);
     let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
-    compute_styles_recursive(&dom, &[sheet], &ctx, None, &mut styles);
+    compute_styles_recursive(&dom, &[sheet], None, None, &mut styles);
 
     let mut tree = build_layout_tree(&dom, &styles);
     let layout = compute_layout(&mut tree, viewport_w, viewport_h).expect("layout should succeed");
@@ -59,14 +58,19 @@ fn full_pipeline(html: &str, css: &str, viewport_w: f32, viewport_h: f32) -> Pip
 fn compute_styles_recursive(
     node: &Rc<RefCell<Node>>,
     sheets: &[muskitty_cssom::CssStyleSheet],
-    ctx: &ComputeContext,
+    parent_props: Option<&HashMap<String, Vec<muskitty_css::parser::ComponentValue>>>,
     parent_style: Option<&ComputedStyle>,
     styles: &mut HashMap<usize, ComputedStyle>,
 ) {
     let is_element = matches!(node.borrow().kind, NodeKind::Element(_));
     let addr = Rc::as_ptr(node) as usize;
+    let empty_props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
+    let parent_props = parent_props.unwrap_or(&empty_props);
+    let mut props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
     if is_element {
         let element = DomElement::new(Rc::clone(node));
+        props = collect_custom_properties(&element, sheets, parent_props);
+        let ctx = ComputeContext::new(&props);
         let declared = collect_declared_values(&element, sheets);
         let groups = cascade_for_element(declared);
         let mut cs = ComputedStyle::new();
@@ -79,7 +83,7 @@ fn compute_styles_recursive(
                 parent_style.and_then(|ps| ps.get(property)),
             );
             let computed = match &specified {
-                ComputedValue::Raw(cvs) => compute_value(property, cvs, ctx),
+                ComputedValue::Raw(cvs) => compute_value(property, cvs, &ctx),
                 _ => specified,
             };
             cs.set(property.clone(), computed);
@@ -92,7 +96,7 @@ fn compute_styles_recursive(
                     parent_style.and_then(|ps| ps.get(prop_def.name)),
                 );
                 let computed = match &specified {
-                    ComputedValue::Raw(cvs) => compute_value(prop_def.name, cvs, ctx),
+                    ComputedValue::Raw(cvs) => compute_value(prop_def.name, cvs, &ctx),
                     _ => specified,
                 };
                 cs.set(prop_def.name.to_string(), computed);
@@ -104,7 +108,7 @@ fn compute_styles_recursive(
     let children: Vec<Rc<RefCell<Node>>> = node.borrow().child_nodes().to_vec();
     let parent_cs = styles.get(&addr).cloned();
     for child in &children {
-        compute_styles_recursive(child, sheets, ctx, parent_cs.as_ref(), styles);
+        compute_styles_recursive(child, sheets, Some(&props), parent_cs.as_ref(), styles);
     }
 }
 
@@ -457,4 +461,43 @@ fn paint_background_rgb_fully_transparent() {
     );
     // alpha=0 → 完全透明 → 跳过
     assert!(cmds.is_empty(), "alpha=0 should be transparent");
+}
+
+// —— H-4: var() 端到端（cascade 收集自定义属性 → paint）——
+
+#[test]
+fn paint_var_custom_property_background_color() {
+    // :root 定义 --brand，div 用 var(--brand) 作为 background-color
+    let cmds = paint_pipeline(
+        "<div></div>",
+        ":root { --brand: red; } div { background-color: var(--brand); width: 80px; height: 60px; }",
+        800.0,
+        600.0,
+    );
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect { background, .. } => {
+            assert_eq!(*background, Some(Color::rgb(255, 0, 0)));
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
+#[test]
+fn paint_var_inherited_from_parent() {
+    // 父 div 声明 --brand，子 div 通过 var() 继承
+    let cmds = paint_pipeline(
+        "<div class=\"parent\"><div></div></div>",
+        ".parent { --brand: #00ff00; } div div { background-color: var(--brand); width: 40px; height: 40px; }",
+        800.0,
+        600.0,
+    );
+    // 父 div 无 background，子 div 有 → 恰好 1 条 Rect
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect { background, .. } => {
+            assert_eq!(*background, Some(Color::rgb(0, 255, 0)));
+        }
+        _ => panic!("expected Rect"),
+    }
 }

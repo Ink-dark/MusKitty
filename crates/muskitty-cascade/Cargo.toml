@@ -18,5 +18,8 @@ muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
 muskitty-dom = { path = "../muskitty-dom", version = "0.1.0" }
 muskitty-selectors = { path = "../muskitty-selectors", version = "0.1.0", features = ["dom"] }
 
+[dev-dependencies]
+muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.1.2" }
+
 # cascade 尚未剥离为独立 git 仓库，作为主仓库 workspace member 存在。
 # 删除原 [workspace] 块以避免 "multiple workspace roots" 错误。
