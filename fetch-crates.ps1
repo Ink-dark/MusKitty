@@ -5,13 +5,14 @@
 # 目录结构:
 #   ./fetch-crates.ps1       <-- 本脚本
 #   ./crates/
-#     ├── muskitty-cascade/            (独立仓库)
+#     ├── muskitty-cascade/            (主仓库 member，未剥离)
+#     ├── muskitty-cssom/              (主仓库 member，未剥离)
+#     ├── muskitty-renderer/           (主仓库 member，未剥离)
 #     ├── muskitty-layout/             (独立仓库)
 #     ├── muskitty-css/                (独立仓库)
 #     ├── muskitty-css-parser/         (独立仓库)
 #     ├── muskitty-css-tokenizer/      (独立仓库)
 #     ├── muskitty-css-values/        (独立仓库)
-#     ├── muskitty-cssom/             (独立仓库)
 #     ├── muskitty-dom/               (独立仓库)
 #     ├── muskitty-html5-parser/      (独立仓库)
 #     ├── muskitty-html5-tokenizer/   (独立仓库)
@@ -46,13 +47,11 @@ $ErrorActionPreference = 'Continue'  # 单个失败不中断整体
 # 已独立拆分的 crate 仓库（需要从 GitHub 单独拉取）
 # ------------------------------------------------------------------------------
 $StandaloneCrates = @(
-    'muskitty-cascade',
     'muskitty-layout',
     'muskitty-css',
     'muskitty-css-parser',
     'muskitty-css-tokenizer',
     'muskitty-css-values',
-    'muskitty-cssom',
     'muskitty-dom',
     'muskitty-html5-parser',
     'muskitty-html5-tokenizer',
@@ -60,9 +59,13 @@ $StandaloneCrates = @(
 )
 
 # ------------------------------------------------------------------------------
-# 尚未独立拆分的 crate（仍包含在主仓库内，跳过远程拉取）
+# 尚未独立拆分的 crate（作为主仓库 workspace member 直接版本控制，跳过）
 # ------------------------------------------------------------------------------
-$BundledCrates = @()
+$BundledCrates = @(
+    'muskitty-cascade',
+    'muskitty-cssom',
+    'muskitty-renderer'
+)
 
 # ------------------------------------------------------------------------------
 # 辅助函数

@@ -1,0 +1,22 @@
+[package]
+name = "muskitty-cascade"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "CSS Cascade Level 5 engine (filtering, cascade, defaulting, computed values)"
+repository = "https://github.com/muskitty-dev/muskitty-cascade"
+homepage = "https://github.com/muskitty-dev"
+documentation = "https://docs.rs/muskitty-cascade"
+keywords = ["css", "cascade", "web", "computed-values"]
+categories = ["parser-implementations", "web-programming"]
+authors = ["MusCat / MusKitty Bit-Torch Community"]
+
+[dependencies]
+muskitty-css = { path = "../muskitty-css", version = "0.5.0" }
+muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
+muskitty-dom = { path = "../muskitty-dom", version = "0.1.0" }
+muskitty-selectors = { path = "../muskitty-selectors", version = "0.1.0", features = ["dom"] }
+
+# cascade 尚未剥离为独立 git 仓库，作为主仓库 workspace member 存在。
+# 删除原 [workspace] 块以避免 "multiple workspace roots" 错误。
