@@ -10,15 +10,15 @@
 
 | 编号 | 级别 | 标题 | 状态 |
 |---|---|---|---|
-| C-1 | CRITICAL | `var()` 循环引用导致栈溢出（DoS） | 待修复 |
+| C-1 | CRITICAL | `var()` 循环引用导致栈溢出（DoS） | ✅ 已修复（commit `d1ab542`） |
 | C-2 | CRITICAL | HTML 解析器无输入大小/嵌套深度限制 | ✅ 已修复（commit `29ea57b`） |
 | H-1 | HIGH | `taffy` 布局错误通过 `expect` 跨模块 panic | ✅ 已修复（commit `a088e6b`） |
-| H-2 | HIGH | CSS 解析器递归无深度保护 | 待修复 |
-| H-3 | HIGH | HTML 解析器 reprocess 计数超限触发 `panic!` | 待修复 |
-| H-4 | HIGH | 自定义属性收集缺失，`var()` 在集成路径中完全失效 | 待修复 |
+| H-2 | HIGH | CSS 解析器递归无深度保护 | ✅ 已修复（commit `973d986`） |
+| H-3 | HIGH | HTML 解析器 reprocess 计数超限触发 `panic!` | ✅ 已修复（commit `9adec92`） |
+| H-4 | HIGH | 自定义属性收集缺失，`var()` 在集成路径中完全失效 | ✅ 已修复（commit `3956298`） |
 | M-1 | MEDIUM | DOM 节点地址作为跨模块键，存在地址复用风险 | 待修复 |
 | M-2 | MEDIUM | 模块间错误处理策略不一致 | 待修复 |
-| M-3 | MEDIUM | `Cargo.lock` 未纳入版本控制 | 待修复 |
+| M-3 | MEDIUM | `Cargo.lock` 未纳入版本控制 | ✅ 已修复（commit `5be101b`） |
 | L-1 | LOW | `tiny_skia.rs` 中 `Pixmap::new(1,1).expect(...)` | 可接受 |
 | L-2 | LOW | renderer 信任 `LayoutResult` 中 `width/height` 为有限值 | 可接受 |
 | L-3 | LOW | 无 `unsafe` 代码（内存安全基线良好） | 信息性 |
@@ -52,9 +52,9 @@
 
 ---
 
-## 三、待修复问题（按优先级）
+## 三、问题清单（按优先级）
 
-### C-1：`var()` 循环引用导致栈溢出（DoS）— P0
+### C-1：`var()` 循环引用导致栈溢出（DoS）— P0 ✅
 
 - **位置**：[crates/muskitty-cascade/src/compute.rs](../crates/muskitty-cascade/src/compute.rs) `resolve_var` 函数
 - **根因**：`resolve_var` 递归调用 `resolve_component_value`，对替换值中嵌套的 `var()` 再次解析，但**没有任何循环检测机制**。
@@ -73,8 +73,9 @@
   - `--a: var(--a)` → 自引用返回空
   - `--a: var(--b); --b: var(--c); --c: var(--a)` → 三角环返回空
   - 正常链 `--a: var(--b); --b: red` → 仍能解析为 red
+- **Commit**：`d1ab542`
 
-### H-4：自定义属性收集缺失 — P0
+### H-4：自定义属性收集缺失 — P0 ✅
 
 - **位置**：[crates/muskitty-renderer/tests/end_to_end.rs](../crates/muskitty-renderer/tests/end_to_end.rs) 与 [tests/paint.rs](../crates/muskitty-renderer/tests/paint.rs)
 - **根因**：集成测试和 paint 入口从未实现"从 ComputedStyle 提取 `--*` 属性 → 填充 `custom_properties`"这一步，导致 `var()` 在端到端链路中**永远**命中 fallback 或返回空
@@ -87,8 +88,9 @@
   - 实现 `collect_custom_properties(element, sheets, parent_props) -> HashMap<String, Vec<ComponentValue>>`
   - 子元素继承父级 custom_properties（CSS 变量是继承属性）
   - 修改 `compute_styles_recursive` 在递归计算时传递收集到的 props
+- **Commit**：`3956298`
 
-### C-2 后续：HTML 解析器 reprocess panic — P1（即原 H-3）
+### C-2 后续：HTML 解析器 reprocess panic — P1（即原 H-3）✅
 
 - **位置**：[crates/muskitty-html5-parser/src/parser/mod.rs](../crates/muskitty-html5-parser/src/parser/mod.rs) `run` 方法
 - **根因**：reprocess 计数超限时触发 `panic!` 而非 `Result::Err`，对外暴露为进程崩溃
@@ -96,8 +98,9 @@
 - **规范依据**：WHATWG HTML §13.2.6 reprocess 是状态机正常机制，规范允许 parser "stop parsing"
 - **参考实现**：所有主流浏览器遇到这种异常都会停止当前 token 处理，继续后续 token
 - **修复方案**：将 `panic!` 改为 `errors.push(ParseError::ReprocessLimitExceeded)` 并 `return`
+- **Commit**：`9adec92`（muskitty-html5-parser 仓库）
 
-### H-2：CSS 解析器递归无深度保护 — P2
+### H-2：CSS 解析器递归无深度保护 — P2 ✅
 
 - **位置**：[crates/muskitty-css-parser/src/algorithms.rs](../crates/muskitty-css-parser/src/algorithms.rs) `consume_a_component_value`
 - **根因**：`consume_a_component_value` → `consume_a_simple_block` / `consume_a_function` → `consume_a_component_value`（间接递归）无深度保护
@@ -109,6 +112,7 @@
   - Firefox `kMaxNesting = 200`
   - Servo `MAX_PARSER_NESTING_DEPTH = 100`
 - **修复方案**：在 `TokenStream` 上加 `depth: Cell<u32>`，超 `MAX_NESTING_DEPTH = 1024` 时返回 `ParseError::NestingTooDeep`
+- **Commit**：`973d986`（muskitty-css-parser 仓库）
 
 ### M-1：DOM 节点地址作为跨模块键 — P3
 
@@ -129,11 +133,12 @@
 - **影响**：上游无法统一感知"解析/渲染失败"事件，难以实现降级渲染
 - **修复方案**：定义统一的 `RenderError` 枚举，每个模块在边界返回 `Result`
 
-### M-3：`Cargo.lock` 未纳入版本控制 — P3
+### M-3：`Cargo.lock` 未纳入版本控制 — P3 ✅
 
 - **位置**：[.gitignore](../.gitignore) 第 3 行 `*.lock`
 - **问题**：`*.lock` 被全局忽略，CI/不同构建机器可能拉到不同 patch 版本，引入行为漂移；削弱 CVE 复现性
 - **修复方案**：从 `.gitignore` 移除 `*.lock`，或改为 `*.lock\n!Cargo.lock`，保留 `Cargo.lock`
+- **Commit**：`5be101b`
 
 ---
 
@@ -160,12 +165,12 @@
 
 | 优先级 | 编号 | 漏洞 | 工作量 | 状态 |
 |---|---|---|---|---|
-| P0 | C-1 | `var()` 循环引用 | 小 | 待修复 |
-| P0 | H-4 | 自定义属性收集缺失 | 中 | 待修复 |
-| P1 | H-3 | reprocess panic 改 `Result` | 小 | 待修复 |
-| P2 | H-2 | CSS 解析递归深度 | 小 | 待修复 |
+| P0 | C-1 | `var()` 循环引用 | 小 | ✅ 已修复（`d1ab542`） |
+| P0 | H-4 | 自定义属性收集缺失 | 中 | ✅ 已修复（`3956298`） |
+| P1 | H-3 | reprocess panic 改 `Result` | 小 | ✅ 已修复（`9adec92`） |
+| P2 | H-2 | CSS 解析递归深度 | 小 | ✅ 已修复（`973d986`） |
 | P3 | M-1 | 节点稳定键 | 大 | 待修复 |
 | P3 | M-2 | 错误策略统一 | 大 | 待修复 |
-| P3 | M-3 | Cargo.lock | 小 | 待修复 |
+| P3 | M-3 | Cargo.lock | 小 | ✅ 已修复（`5be101b`） |
 | ✅ | C-2 | HTML 输入/嵌套限制 | 中 | 已修复 |
 | ✅ | H-1 | layout Result 化 | 中 | 已修复 |
