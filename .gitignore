@@ -1,6 +1,7 @@
 /target
 crates/*/target
 *.lock
+!Cargo.lock
 .zcode/
 
 # --- 示例输出（避免二进制文件污染版本库）---
