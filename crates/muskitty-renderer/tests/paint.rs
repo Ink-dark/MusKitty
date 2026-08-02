@@ -46,7 +46,7 @@ fn full_pipeline(html: &str, css: &str, viewport_w: f32, viewport_h: f32) -> Pip
     compute_styles_recursive(&dom, &[sheet], &ctx, None, &mut styles);
 
     let mut tree = build_layout_tree(&dom, &styles);
-    let layout = compute_layout(&mut tree, viewport_w, viewport_h);
+    let layout = compute_layout(&mut tree, viewport_w, viewport_h).expect("layout should succeed");
 
     PipelineResult {
         dom,

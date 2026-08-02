@@ -61,7 +61,7 @@ fn main() {
 
     // 4. layout → LayoutResult
     let mut tree = build_layout_tree(&dom, &styles);
-    let layout = compute_layout(&mut tree, VIEWPORT_W, VIEWPORT_H);
+    let layout = compute_layout(&mut tree, VIEWPORT_W, VIEWPORT_H).expect("layout failed");
 
     // 5. paint → RenderCommand[]
     let input = PaintInput {

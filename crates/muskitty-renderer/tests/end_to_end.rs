@@ -91,7 +91,7 @@ fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
     compute_styles_recursive(&dom, &[sheet], &ctx, None, &mut styles);
 
     let mut tree = build_layout_tree(&dom, &styles);
-    let layout = compute_layout(&mut tree, vw, vh);
+    let layout = compute_layout(&mut tree, vw, vh).expect("layout should succeed");
 
     let input = PaintInput {
         dom: &dom,
