@@ -51,6 +51,7 @@ pub mod filter;
 pub mod origin;
 pub mod registry;
 pub mod style;
+pub mod style_tree;
 
 pub use cascade::{cascade_for_element, cascade_winner};
 pub use compute::{compute_value, ComputeContext};
@@ -60,3 +61,4 @@ pub use filter::collect_declared_values;
 pub use origin::Origin;
 pub use registry::{lookup_property, PropertyDefinition, BUILTIN_PROPERTIES};
 pub use style::{ComputedStyle, ComputedValue, DeclaredValue};
+pub use style_tree::{compute_styles, StyleTreeOptions};

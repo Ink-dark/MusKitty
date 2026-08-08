@@ -40,6 +40,27 @@ impl<'a> ComputeContext<'a> {
             custom_properties,
         }
     }
+
+    /// 用显式 font-size 与视口尺寸构造上下文。
+    ///
+    /// `parent_font_size` 是 em/百分比基准：计算 font-size 属性时为父元素
+    /// font-size；计算其余属性时为元素自身 font-size（em 语义）。`root_font_size`
+    /// 是 rem 基准（根元素 font-size，px）。
+    pub fn with_font_sizes(
+        custom_properties: &'a HashMap<String, Vec<ComponentValue>>,
+        parent_font_size: f64,
+        root_font_size: f64,
+        viewport_width: f64,
+        viewport_height: f64,
+    ) -> Self {
+        Self {
+            parent_font_size,
+            root_font_size,
+            viewport_width,
+            viewport_height,
+            custom_properties,
+        }
+    }
 }
 
 /// §4.4: 将 specified value 转换为 computed value。
