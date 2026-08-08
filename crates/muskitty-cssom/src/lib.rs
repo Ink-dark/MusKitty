@@ -36,7 +36,7 @@ pub mod rule;
 pub mod serialize;
 pub mod stylesheet;
 
-pub use convert::from_stylesheet;
+pub use convert::{from_stylesheet, from_stylesheet_with_origin};
 pub use declaration::{CssDeclaration, CssStyleDeclaration};
 pub use rule::{
     CssContainerRule, CssImportRule, CssLayerBlockRule, CssLayerStatementRule, CssMediaRule,

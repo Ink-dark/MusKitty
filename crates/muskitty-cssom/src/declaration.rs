@@ -8,8 +8,8 @@ use crate::ComponentValue;
 
 /// §8.5: A CSS declaration.
 ///
-/// 一个 CSS 声明包含属性名、值（component value 列表）和
-/// `!important` 标志。
+/// 一个 CSS 声明包含属性名、值（component value 列表）、`!important`
+/// 标志和可选的原始源文本。
 #[derive(Debug, Clone)]
 pub struct CssDeclaration {
     /// 属性名（如 "color"、"font-size"）。
@@ -18,15 +18,20 @@ pub struct CssDeclaration {
     pub value: Vec<ComponentValue>,
     /// 声明是否带 `!important` 标志。
     pub important: bool,
+    /// §5.5.6 L2693-2698: custom property 声明的原始源文本（colon 后、
+    /// semicolon/EOF 前），供 var() 解析使用；普通属性为 `None`
+    /// （P2-16）。
+    pub original_text: Option<String>,
 }
 
 impl CssDeclaration {
-    /// 创建一个新声明。
+    /// 创建一个新声明（`original_text` 为 `None`）。
     pub fn new(name: impl Into<String>, value: Vec<ComponentValue>, important: bool) -> Self {
         Self {
             name: name.into(),
             value,
             important,
+            original_text: None,
         }
     }
 }

@@ -1,7 +1,7 @@
 //! OM-4 端到端转换测试：parse CSS → convert → verify CssStyleSheet 结构。
 
 use muskitty_css::parse_stylesheet;
-use muskitty_cssom::{from_stylesheet, CssRule};
+use muskitty_cssom::{from_stylesheet, from_stylesheet_with_origin, CssRule, Origin};
 
 #[test]
 fn empty_stylesheet() {
@@ -9,6 +9,41 @@ fn empty_stylesheet() {
     let om = from_stylesheet(&ss);
     assert!(om.is_empty());
     assert!(om.css_rules.is_empty());
+}
+
+#[test]
+fn from_stylesheet_with_origin_sets_origin() {
+    // P2-15: 显式指定 origin（from_stylesheet 默认 Author）
+    let ss = parse_stylesheet("a { color: red; }");
+    let om = from_stylesheet_with_origin(&ss, Origin::UserAgent);
+    assert_eq!(om.origin, Origin::UserAgent);
+    assert_eq!(om.len(), 1);
+    // from_stylesheet 保持 Author 兼容
+    let author = from_stylesheet(&ss);
+    assert_eq!(author.origin, Origin::Author);
+}
+
+#[test]
+fn custom_property_original_text_preserved() {
+    // P2-16: custom property 的 original_text 透传（var() 源文本用），
+    // 普通属性不设。
+    let ss = parse_stylesheet(":root { --x: red; color: blue; }");
+    let om = from_stylesheet(&ss);
+    match &om.css_rules[0] {
+        CssRule::Style(r) => {
+            let custom = r.style.get_property("--x").expect("--x decl");
+            assert!(
+                custom.original_text.is_some(),
+                "custom property keeps original_text"
+            );
+            let normal = r.style.get_property("color").expect("color decl");
+            assert!(
+                normal.original_text.is_none(),
+                "regular property has no original_text"
+            );
+        }
+        other => panic!("expected Style, got {:?}", other),
+    }
 }
 
 #[test]

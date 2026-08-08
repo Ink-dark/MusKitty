@@ -20,9 +20,16 @@ use muskitty_css::tokenizer::Token;
 ///
 /// 顶层 `Rule::Declarations`（裸声明，§5.5.1 视为 parse error 残留）
 /// 被跳过；只转换 `Rule::QualifiedRule` 与 `Rule::AtRule`。
+/// origin 默认为 Author（P2-15：需要其他 origin 用
+/// [`from_stylesheet_with_origin`]）。
 pub fn from_stylesheet(ss: &Stylesheet) -> CssStyleSheet {
+    from_stylesheet_with_origin(ss, crate::Origin::Author)
+}
+
+/// 从 [`Stylesheet`] 转换，并显式指定 cascade origin（P2-15）。
+pub fn from_stylesheet_with_origin(ss: &Stylesheet, origin: crate::Origin) -> CssStyleSheet {
     CssStyleSheet {
-        origin: crate::Origin::Author,
+        origin,
         location: None,
         media: Vec::new(),
         title: String::new(),
@@ -221,13 +228,14 @@ fn convert_other(ar: &AtRule) -> OtherRule {
 
 /// 转换 [`Declaration`] → [`CssDeclaration`]。
 ///
-/// 丢弃 `original_text`（CSSOM 层不关心 custom property 的源文本跟踪，
-/// 那是 css-values/var() 解析时用的）。
+/// P2-16: 透传 `original_text`（custom property 的源文本，供 var()
+/// 解析使用）。
 fn convert_declaration(d: &Declaration) -> CssDeclaration {
     CssDeclaration {
         name: d.name.clone(),
         value: d.value.clone(),
         important: d.important,
+        original_text: d.original_text.clone(),
     }
 }
 
