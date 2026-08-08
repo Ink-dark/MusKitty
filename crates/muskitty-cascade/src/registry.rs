@@ -227,6 +227,236 @@ pub static BUILTIN_PROPERTIES: &[PropertyDefinition] = &[
         inherited: false,
         percentages: PercentageBasis::None,
     },
+    // —— P2-7: 补充继承属性 ——
+    PropertyDefinition {
+        name: "cursor",
+        initial_value: "auto",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "direction",
+        initial_value: "ltr",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "letter-spacing",
+        initial_value: "normal",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "white-space",
+        initial_value: "normal",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "word-spacing",
+        initial_value: "normal",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "font-style",
+        initial_value: "normal",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "text-transform",
+        initial_value: "none",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "text-indent",
+        initial_value: "0",
+        inherited: true,
+        percentages: PercentageBasis::ParentWidth,
+    },
+    PropertyDefinition {
+        name: "tab-size",
+        initial_value: "8",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "orphans",
+        initial_value: "2",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "widows",
+        initial_value: "2",
+        inherited: true,
+        percentages: PercentageBasis::None,
+    },
+    // —— P2-7: 补充非继承属性 ——
+    PropertyDefinition {
+        name: "position",
+        initial_value: "static",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "top",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::ParentHeight,
+    },
+    PropertyDefinition {
+        name: "right",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::ParentWidth,
+    },
+    PropertyDefinition {
+        name: "bottom",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::ParentHeight,
+    },
+    PropertyDefinition {
+        name: "left",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::ParentWidth,
+    },
+    PropertyDefinition {
+        name: "z-index",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "overflow",
+        initial_value: "visible",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "min-width",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::ParentWidth,
+    },
+    PropertyDefinition {
+        name: "min-height",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::ParentHeight,
+    },
+    PropertyDefinition {
+        name: "max-width",
+        initial_value: "none",
+        inherited: false,
+        percentages: PercentageBasis::ParentWidth,
+    },
+    PropertyDefinition {
+        name: "max-height",
+        initial_value: "none",
+        inherited: false,
+        percentages: PercentageBasis::ParentHeight,
+    },
+    PropertyDefinition {
+        name: "border-top-width",
+        initial_value: "medium",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "border-right-width",
+        initial_value: "medium",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "border-bottom-width",
+        initial_value: "medium",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "border-left-width",
+        initial_value: "medium",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "border-top-color",
+        initial_value: "currentcolor",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "border-right-color",
+        initial_value: "currentcolor",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "border-bottom-color",
+        initial_value: "currentcolor",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "border-left-color",
+        initial_value: "currentcolor",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "outline-width",
+        initial_value: "medium",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "outline-style",
+        initial_value: "none",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "outline-color",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "flex",
+        initial_value: "0 1 auto",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "order",
+        initial_value: "0",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "align-content",
+        initial_value: "normal",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "justify-items",
+        initial_value: "legacy",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "justify-self",
+        initial_value: "auto",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
 ];
 
 /// 查找属性定义。返回 `None` 表示属性未注册。
@@ -291,5 +521,39 @@ mod tests {
     #[test]
     fn builtin_property_count() {
         assert!(BUILTIN_PROPERTIES.len() >= 20);
+    }
+
+    #[test]
+    fn expanded_registry_inherited() {
+        // P2-7: 补充的继承属性
+        assert!(lookup_property("white-space").unwrap().inherited);
+        assert!(lookup_property("cursor").unwrap().inherited);
+        assert!(lookup_property("letter-spacing").unwrap().inherited);
+        assert!(lookup_property("word-spacing").unwrap().inherited);
+        assert!(lookup_property("font-style").unwrap().inherited);
+        assert!(lookup_property("text-transform").unwrap().inherited);
+    }
+
+    #[test]
+    fn expanded_registry_non_inherited() {
+        // P2-7: 补充的非继承属性
+        assert!(!lookup_property("position").unwrap().inherited);
+        assert!(!lookup_property("z-index").unwrap().inherited);
+        assert!(!lookup_property("overflow").unwrap().inherited);
+        assert!(!lookup_property("border-top-width").unwrap().inherited);
+        assert!(!lookup_property("outline-color").unwrap().inherited);
+    }
+
+    #[test]
+    fn expanded_registry_initial_values() {
+        assert_eq!(
+            lookup_property("white-space").unwrap().initial_value,
+            "normal"
+        );
+        assert_eq!(lookup_property("position").unwrap().initial_value, "static");
+        assert_eq!(
+            lookup_property("overflow").unwrap().initial_value,
+            "visible"
+        );
     }
 }

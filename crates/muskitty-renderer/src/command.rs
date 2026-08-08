@@ -26,8 +26,9 @@ pub enum RenderCommand {
         background: Option<Color>,
         /// 边框。`None` 表示无边框。
         ///
-        /// 注意：当前 cascade 尚未注册 border-* 属性，paint 阶段
-        /// 暂不生成边框，该字段保留供后续扩展。
+        /// 注意：cascade 已注册 border-* 属性（P2-7），但 paint 阶段
+        /// 尚未读取 computed 的边框生成绘制指令，该字段暂恒为 `None`，
+        /// 供后续 Phase 4 扩展。
         border: Option<Border>,
     },
 }
