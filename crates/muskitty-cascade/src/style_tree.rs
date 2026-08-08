@@ -20,7 +20,7 @@ use crate::cascade::{cascade_for_element, cascade_winner};
 use crate::compute::{compute_value_with, ComputeContext, CustomPropertySource};
 use crate::custom_properties::is_css_wide_keyword;
 use crate::defaulting::apply_defaulting;
-use crate::filter::collect_declared_values;
+use crate::filter::{collect_declared_values_prepared, prepare_sheets, PreparedSheets};
 use crate::registry::BUILTIN_PROPERTIES;
 use crate::style::{ComputedStyle, ComputedValue, DeclaredValue};
 use muskitty_css::parser::ComponentValue;
@@ -67,10 +67,12 @@ pub fn compute_styles(
     sheets: &[CssStyleSheet],
     options: &StyleTreeOptions,
 ) -> HashMap<usize, ComputedStyle> {
+    // PERF-1: 选择器解析一次，整树每个元素复用 prepared sheets。
+    let prepared = prepare_sheets(sheets);
     let mut styles = HashMap::new();
     walk(
         root,
-        sheets,
+        &prepared,
         options,
         None, // 根元素无父级自定义属性来源
         None,
@@ -83,6 +85,7 @@ pub fn compute_styles(
 
 /// 自顶向下遍历 DOM 树。
 ///
+/// - `prepared`：已预处理的 sheets（PERF-1，选择器已缓存、整树复用）。
 /// - `parent_source`：父级 `--*` 来源（链式继承，PERF-4；根为 `None`）。
 /// - `parent_style`：父元素 ComputedStyle（继承属性）。
 /// - `parent_font_size`：父元素 font-size（px），根为浏览器默认 16px。
@@ -90,7 +93,7 @@ pub fn compute_styles(
 #[allow(clippy::too_many_arguments)]
 fn walk<'a>(
     node: &Rc<RefCell<Node>>,
-    sheets: &[CssStyleSheet],
+    prepared: &PreparedSheets,
     options: &StyleTreeOptions,
     parent_source: Option<&'a CustomPropertySource<'a>>,
     parent_style: Option<&ComputedStyle>,
@@ -104,7 +107,7 @@ fn walk<'a>(
         for child in &children {
             walk(
                 child,
-                sheets,
+                prepared,
                 options,
                 parent_source,
                 parent_style,
@@ -120,7 +123,7 @@ fn walk<'a>(
 
     // 每元素一次 filter + cascade，派生本元素 `--*` 表 + 属性组（PERF-2）。
     let element = DomElement::new(Rc::clone(node));
-    let declared = collect_declared_values(&element, sheets);
+    let declared = collect_declared_values_prepared(&element, prepared);
     let groups = cascade_for_element(declared);
     let own_props = derive_own_custom_props(&groups);
     // 链式来源：本元素声明优先，未声明回溯父链（PERF-4 零克隆继承）。
@@ -149,7 +152,7 @@ fn walk<'a>(
     for child in &children {
         walk(
             child,
-            sheets,
+            prepared,
             options,
             Some(&source),
             parent_cs.as_ref(),

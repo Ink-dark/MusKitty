@@ -57,7 +57,9 @@ pub use cascade::{cascade_for_element, cascade_winner};
 pub use compute::{compute_value, compute_value_with, ComputeContext, CustomPropertySource};
 pub use custom_properties::collect_custom_properties;
 pub use defaulting::apply_defaulting;
-pub use filter::collect_declared_values;
+pub use filter::{
+    collect_declared_values, collect_declared_values_prepared, prepare_sheets, PreparedSheets,
+};
 pub use origin::Origin;
 pub use registry::{lookup_property, PropertyDefinition, BUILTIN_PROPERTIES};
 pub use style::{ComputedStyle, ComputedValue, DeclaredValue};
