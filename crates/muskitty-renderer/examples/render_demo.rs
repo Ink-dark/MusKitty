@@ -7,20 +7,11 @@
 //!
 //! 输出 `render_demo.png` 到当前工作目录。
 
-use muskitty_cascade::{
-    apply_defaulting, cascade_for_element, cascade_winner, collect_custom_properties,
-    collect_declared_values, compute_value, ComputeContext, ComputedStyle, ComputedValue,
-    BUILTIN_PROPERTIES,
-};
+use muskitty_cascade::{compute_styles, StyleTreeOptions};
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
-use muskitty_dom::{Node, NodeKind};
 use muskitty_layout::{build_layout_tree, compute_layout};
 use muskitty_renderer::{paint, Backend, PaintInput, TinySkiaBackend};
-use muskitty_selectors::matching::DomElement;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
 
 const VIEWPORT_W: f32 = 800.0;
 const VIEWPORT_H: f32 = 600.0;
@@ -55,8 +46,7 @@ fn main() {
     };
 
     // 3. cascade + compute → 每元素 ComputedStyle
-    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
-    compute_styles_recursive(&dom, &[sheet], None, None, &mut styles);
+    let styles = compute_styles(&dom, &[sheet], &StyleTreeOptions::default());
 
     // 4. layout → LayoutResult
     let mut tree = build_layout_tree(&dom, &styles);
@@ -88,62 +78,4 @@ fn main() {
     println!("✓ Rendered to {}", out_path);
     println!("  Viewport: {}x{}", VIEWPORT_W, VIEWPORT_H);
     println!("  Commands: {}", commands.len());
-}
-
-/// 递归计算每个元素的 ComputedStyle。
-fn compute_styles_recursive(
-    node: &Rc<RefCell<Node>>,
-    sheets: &[muskitty_cssom::CssStyleSheet],
-    parent_props: Option<&HashMap<String, Vec<muskitty_css::parser::ComponentValue>>>,
-    parent_style: Option<&ComputedStyle>,
-    styles: &mut HashMap<usize, ComputedStyle>,
-) {
-    let is_element = matches!(node.borrow().kind, NodeKind::Element(_));
-    let addr = Rc::as_ptr(node) as usize;
-    let empty_props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
-    let parent_props = parent_props.unwrap_or(&empty_props);
-    let mut props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
-    if is_element {
-        let element = DomElement::new(Rc::clone(node));
-        props = collect_custom_properties(&element, sheets, parent_props);
-        let ctx = ComputeContext::new(&props);
-        let declared = collect_declared_values(&element, sheets);
-        let groups = cascade_for_element(declared);
-        let mut cs = ComputedStyle::new();
-        for (property, group) in &groups {
-            let winner = cascade_winner(group);
-            let cascaded = winner.map(|w| w.value.as_slice());
-            let specified = apply_defaulting(
-                property,
-                cascaded,
-                parent_style.and_then(|ps| ps.get(property)),
-            );
-            let computed = match &specified {
-                ComputedValue::Raw(cvs) => compute_value(property, cvs, &ctx),
-                _ => specified,
-            };
-            cs.set(property.clone(), computed);
-        }
-        for prop_def in BUILTIN_PROPERTIES.iter() {
-            if !cs.properties.contains_key(prop_def.name) {
-                let specified = apply_defaulting(
-                    prop_def.name,
-                    None,
-                    parent_style.and_then(|ps| ps.get(prop_def.name)),
-                );
-                let computed = match &specified {
-                    ComputedValue::Raw(cvs) => compute_value(prop_def.name, cvs, &ctx),
-                    _ => specified,
-                };
-                cs.set(prop_def.name.to_string(), computed);
-            }
-        }
-        styles.insert(addr, cs);
-    }
-
-    let children: Vec<Rc<RefCell<Node>>> = node.borrow().child_nodes().to_vec();
-    let parent_cs = styles.get(&addr).cloned();
-    for child in &children {
-        compute_styles_recursive(child, sheets, Some(&props), parent_cs.as_ref(), styles);
-    }
 }

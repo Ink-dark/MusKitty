@@ -10,9 +10,7 @@
 //! 这是 muskitty-renderer 的「smoke test」：证明 DOM→CSS→Layout→Render 全链路打通。
 
 use muskitty_cascade::{
-    apply_defaulting, cascade_for_element, cascade_winner, collect_custom_properties,
-    collect_declared_values, compute_value, ComputeContext, ComputedStyle, ComputedValue,
-    BUILTIN_PROPERTIES,
+    compute_styles as compute_styles_tree, ComputedStyle, ComputedValue, StyleTreeOptions,
 };
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
@@ -24,64 +22,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// 递归计算每个元素的 ComputedStyle。
-fn compute_styles_recursive(
-    node: &Rc<RefCell<Node>>,
-    sheets: &[muskitty_cssom::CssStyleSheet],
-    parent_props: Option<&HashMap<String, Vec<muskitty_css::parser::ComponentValue>>>,
-    parent_style: Option<&ComputedStyle>,
-    styles: &mut HashMap<usize, ComputedStyle>,
-) {
-    let is_element = matches!(node.borrow().kind, NodeKind::Element(_));
-    let addr = Rc::as_ptr(node) as usize;
-    let empty_props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
-    let parent_props = parent_props.unwrap_or(&empty_props);
-    let mut props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
-    if is_element {
-        let element = DomElement::new(Rc::clone(node));
-        props = collect_custom_properties(&element, sheets, parent_props);
-        let ctx = ComputeContext::new(&props);
-        let declared = collect_declared_values(&element, sheets);
-        let groups = cascade_for_element(declared);
-        let mut cs = ComputedStyle::new();
-        for (property, group) in &groups {
-            let winner = cascade_winner(group);
-            let cascaded = winner.map(|w| w.value.as_slice());
-            let specified = apply_defaulting(
-                property,
-                cascaded,
-                parent_style.and_then(|ps| ps.get(property)),
-            );
-            let computed = match &specified {
-                ComputedValue::Raw(cvs) => compute_value(property, cvs, &ctx),
-                _ => specified,
-            };
-            cs.set(property.clone(), computed);
-        }
-        for prop_def in BUILTIN_PROPERTIES.iter() {
-            if !cs.properties.contains_key(prop_def.name) {
-                let specified = apply_defaulting(
-                    prop_def.name,
-                    None,
-                    parent_style.and_then(|ps| ps.get(prop_def.name)),
-                );
-                let computed = match &specified {
-                    ComputedValue::Raw(cvs) => compute_value(prop_def.name, cvs, &ctx),
-                    _ => specified,
-                };
-                cs.set(prop_def.name.to_string(), computed);
-            }
-        }
-        styles.insert(addr, cs);
-    }
-
-    let children: Vec<Rc<RefCell<Node>>> = node.borrow().child_nodes().to_vec();
-    let parent_cs = styles.get(&addr).cloned();
-    for child in &children {
-        compute_styles_recursive(child, sheets, Some(&props), parent_cs.as_ref(), styles);
-    }
-}
-
 /// 运行完整 pipeline 并编码为 PNG。
 fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
     let dom = muskitty_html5_parser::parse(html);
@@ -91,8 +31,7 @@ fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
         s.origin = Origin::Author;
         s
     };
-    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
-    compute_styles_recursive(&dom, &[sheet], None, None, &mut styles);
+    let styles = compute_styles_tree(&dom, &[sheet], &StyleTreeOptions::default());
 
     let mut tree = build_layout_tree(&dom, &styles);
     let layout = compute_layout(&mut tree, vw, vh).expect("layout should succeed");
@@ -165,8 +104,7 @@ fn compute_styles(html: &str, css: &str) -> (Rc<RefCell<Node>>, HashMap<usize, C
         s.origin = Origin::Author;
         s
     };
-    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
-    compute_styles_recursive(&dom, &[sheet], None, None, &mut styles);
+    let styles = compute_styles_tree(&dom, &[sheet], &StyleTreeOptions::default());
     (dom, styles)
 }
 
