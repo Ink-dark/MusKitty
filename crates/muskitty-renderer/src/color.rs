@@ -222,6 +222,12 @@ pub fn parse_named_color(name: &str) -> Option<Color> {
 /// 长度 8 时后两字节为 alpha。
 pub fn parse_hex_color(hex: &str) -> Option<Color> {
     let hex = hex.trim_start_matches('#');
+    // P1-10：非 ASCII（如 `#aä`，`ä` 为多字节 UTF-8）或含非十六进制字符时
+    // 直接返回 None。下方 `&hex[a..b]` 是字节切片，若输入含多字节字符会
+    // 在非 char boundary 处 panic；此处先行校验全部字符为 ASCII 十六进制。
+    if !hex.is_ascii() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
     match hex.len() {
         3 => {
             // #rgb → #rrggbb
@@ -337,6 +343,16 @@ mod tests {
     #[test]
     fn hex_invalid_chars() {
         assert_eq!(parse_hex_color("#gggggg"), None);
+    }
+
+    #[test]
+    fn hex_non_ascii_does_not_panic() {
+        // P1-10：`#aä`（ä 为 2 字节 UTF-8）若走字节切片会 panic
+        // "byte index is not a char boundary"。非 ASCII / 非十六进制必须
+        // 返回 None，绝不 panic。
+        assert_eq!(parse_hex_color("#aä"), None);
+        assert_eq!(parse_hex_color("#aaä"), None);
+        assert_eq!(parse_hex_color("#äa"), None);
     }
 
     #[test]
