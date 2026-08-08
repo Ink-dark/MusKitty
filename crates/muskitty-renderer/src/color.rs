@@ -129,6 +129,11 @@ fn parse_rgb(args: &[ComponentValue]) -> Option<Color> {
                 } else if numbers.len() < 3 {
                     // 0%-100% → 0-255
                     numbers.push(p.value / 100.0 * 255.0);
+                } else if alpha.is_none() {
+                    // P1-11：legacy 逗号语法第 4 参百分比 alpha
+                    // （`rgba(255, 0, 0, 50%)`）。三通道已收满后出现的
+                    // 百分比即 alpha，与 `, 0.5` 数值形式等价。
+                    alpha = Some(p.value / 100.0);
                 }
             }
             ComponentValue::PreservedToken(Token::Comma)
@@ -427,6 +432,22 @@ mod tests {
     #[test]
     fn rgb_alpha_percentage() {
         let c = parse_color_str("rgb(255 0 0 / 50%)").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.a, 128);
+    }
+
+    #[test]
+    fn rgba_legacy_percentage_alpha() {
+        // P1-11：legacy 逗号语法第 4 参为百分比 alpha（`rgba(255,0,0,50%)`）
+        // 此前被丢弃 → 渲染为不透明。50% → a == 128。
+        let c = parse_color_str("rgba(255, 0, 0, 50%)").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+        assert_eq!(c.a, 128);
+
+        // 三通道同为百分比 + 第 4 参百分比 alpha
+        let c = parse_color_str("rgba(100%, 0%, 0%, 50%)").unwrap();
         assert_eq!(c.r, 255);
         assert_eq!(c.a, 128);
     }
