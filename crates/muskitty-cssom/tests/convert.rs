@@ -98,6 +98,18 @@ fn import_rule_with_url_function() {
 }
 
 #[test]
+fn import_rule_with_quoted_url_function() {
+    // P1-4: `url("...")`（带引号）在 CSS Syntax §4.3.8 下是 Function
+    // 形态而非 Url token，需从 Function 里提取 href。
+    let ss = parse_stylesheet("@import url(\"style.css\");");
+    let om = from_stylesheet(&ss);
+    match &om.css_rules[0] {
+        CssRule::Import(r) => assert_eq!(r.href, "style.css"),
+        _ => panic!(),
+    }
+}
+
+#[test]
 fn import_rule_with_media() {
     let ss = parse_stylesheet("@import \"style.css\" screen and (min-width: 100px);");
     let om = from_stylesheet(&ss);

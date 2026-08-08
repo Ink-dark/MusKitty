@@ -228,11 +228,20 @@ fn convert_declaration(d: &Declaration) -> CssDeclaration {
 ///
 /// - `Token::String(s)` → `Some(s)`
 /// - `Token::Url(s)` → `Some(s)`
+/// - `Function("url", [String])` → `Some(s)`（§4.3.8：带引号的
+///   `url("...")` 是 Function 形态而非 Url token；P1-4）
 /// - 其它 → `None`
 fn extract_string_or_url(cv: &ComponentValue) -> Option<String> {
     match cv {
         ComponentValue::PreservedToken(Token::String(s)) => Some(s.clone()),
         ComponentValue::PreservedToken(Token::Url(s)) => Some(s.clone()),
+        ComponentValue::Function(f) if f.name.eq_ignore_ascii_case("url") => {
+            if let [ComponentValue::PreservedToken(Token::String(s))] = f.value.as_slice() {
+                Some(s.clone())
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
