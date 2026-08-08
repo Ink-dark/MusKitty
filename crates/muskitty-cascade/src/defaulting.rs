@@ -6,6 +6,8 @@
 //! - `initial`（§7.3.1）→ 属性初始值
 //! - `inherit`（§7.3.2）→ 父元素 computed value
 //! - `unset`（§7.3.3）→ 继承属性当 `inherit`，非继承属性当 `initial`
+//! - `revert`/`revert-layer`（§7.3.4-5）→ 当"无 cascaded value"处理
+//!   （Author-only pipeline 下不存在更低 origin / 已回退的层）
 //! - 无 cascaded value → 继承属性从父继承，非继承属性取初始值
 
 use crate::registry::lookup_property;
@@ -47,6 +49,20 @@ pub fn apply_defaulting(
                     }
                     // §7.3.3: unset → 继承属性当 inherit，非继承当 initial
                     "unset" => {
+                        if is_inherited {
+                            return parent_computed.cloned().unwrap_or_else(initial_keyword);
+                        } else {
+                            return initial_keyword();
+                        }
+                    }
+                    // §7.3.4-5: revert / revert-layer → 当"无 cascaded value"
+                    // 处理（继承属性 inherit、非继承 initial）。
+                    //
+                    // §7.3.4: revert 回退到更低优先级 origin；本 pipeline
+                    // 仅 Author origin，无更低 origin 可取 → 等价于未声明。
+                    // §7.3.5: revert-layer 回退到上一条同名层；层排序在
+                    // filter 内扁平化处理，此处近似"无 cascaded value"。
+                    "revert" | "revert-layer" => {
                         if is_inherited {
                             return parent_computed.cloned().unwrap_or_else(initial_keyword);
                         } else {
@@ -241,6 +257,50 @@ mod tests {
         let result = apply_defaulting("color", Some(&ident("INITIAL")), None);
         match result {
             ComputedValue::Keyword(s) => assert_eq!(s, "black"),
+            other => panic!("expected Keyword, got {:?}", other),
+        }
+    }
+
+    // §7.3.4/7.3.5: revert / revert-layer 关键字
+
+    #[test]
+    fn revert_acts_as_no_cascaded_value_inherited_no_parent() {
+        // Author-only pipeline：revert 回退的更低 origin 不存在 →
+        // 当"无 cascaded value"处理（继承属性无父 → 初始值）
+        let result = apply_defaulting("color", Some(&ident("revert")), None);
+        match result {
+            ComputedValue::Keyword(s) => assert_eq!(s, "black"),
+            other => panic!("expected Keyword, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn revert_acts_as_no_cascaded_value_inherited_with_parent() {
+        let parent = parent_keyword("green");
+        let result = apply_defaulting("color", Some(&ident("revert")), Some(&parent));
+        match result {
+            ComputedValue::Keyword(s) => assert_eq!(s, "green"),
+            other => panic!("expected Keyword, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn revert_acts_as_no_cascaded_value_non_inherited() {
+        // 非继承属性 → 初始值
+        let parent = parent_keyword("block");
+        let result = apply_defaulting("display", Some(&ident("revert")), Some(&parent));
+        match result {
+            ComputedValue::Keyword(s) => assert_eq!(s, "inline"),
+            other => panic!("expected Keyword, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn revert_layer_acts_as_no_cascaded_value() {
+        let parent = parent_keyword("blue");
+        let result = apply_defaulting("color", Some(&ident("revert-layer")), Some(&parent));
+        match result {
+            ComputedValue::Keyword(s) => assert_eq!(s, "blue"),
             other => panic!("expected Keyword, got {:?}", other),
         }
     }
