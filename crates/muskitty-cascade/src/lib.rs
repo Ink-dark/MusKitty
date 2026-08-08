@@ -58,7 +58,8 @@ pub use compute::{compute_value, compute_value_with, ComputeContext, CustomPrope
 pub use custom_properties::collect_custom_properties;
 pub use defaulting::apply_defaulting;
 pub use filter::{
-    collect_declared_values, collect_declared_values_prepared, prepare_sheets, PreparedSheets,
+    collect_declared_values, collect_declared_values_prepared, prepare_sheets,
+    prepare_sheets_with_context, MediaContext, PreparedSheets,
 };
 pub use origin::Origin;
 pub use registry::{lookup_property, PropertyDefinition, BUILTIN_PROPERTIES};

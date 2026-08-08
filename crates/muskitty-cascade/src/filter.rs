@@ -4,8 +4,8 @@
 //!
 //! 遍历 stylesheet rules，对每条匹配元素的 CssStyleRule，收集其
 //! declarations 作为 DeclaredValue。条件为 false 的 @media/@supports
-//! 内的 rule 被跳过（本阶段简化为无条件收集，条件评估推迟）。
-//! 同时收集元素 inline `style` 属性中的声明（§6.1 准则 4）。
+//! 内的 rule 在预处理时被剪枝（P2-6）。同时收集元素 inline `style`
+//! 属性中的声明（§6.1 准则 4）。
 //!
 //! # PERF-1 选择器缓存
 //!
@@ -18,7 +18,7 @@
 
 use crate::registry::lookup_property;
 use crate::style::DeclaredValue;
-use muskitty_css::parser::{parse_a_blocks_contents, ComponentValue, Rule};
+use muskitty_css::parser::{parse_a_blocks_contents, BlockKind, ComponentValue, Rule, SimpleBlock};
 use muskitty_css::tokenizer::Token;
 use muskitty_cssom::{serialize_component_values, CssRule, CssStyleSheet, Origin};
 use muskitty_selectors::matching::{matches, DomElement, Element as ElementTrait};
@@ -56,20 +56,66 @@ struct PreparedDecl {
     important: bool,
 }
 
+/// @media 条件评估上下文（P2-6）。
+///
+/// 预处理时用当前媒体环境判断 `@media` 内的规则是否参与匹配；不命中的
+/// 整组剪枝，元素匹配阶段零开销。
+#[derive(Debug, Clone, Copy)]
+pub struct MediaContext {
+    /// 当前媒体类型（`"screen"` / `"print"` / ...）。
+    pub media_type: &'static str,
+    /// 视口宽度（px）。
+    pub viewport_w: f32,
+    /// 视口高度（px）。
+    pub viewport_h: f32,
+}
+
+impl Default for MediaContext {
+    fn default() -> Self {
+        // 默认屏幕视口 1920×1080。
+        Self {
+            media_type: "screen",
+            viewport_w: 1920.0,
+            viewport_h: 1080.0,
+        }
+    }
+}
+
 /// 预处理 stylesheet 集：每个 style rule 的选择器只解析一次。
 ///
 /// 遍历与旧版 `collect_from_rules` 的递归一致：style rule 收集、
-/// 嵌套子 rules 递归、条件组（@media/@supports/@container/@layer）
-/// 无条件穿过、import/namespace 跳过。选择器解析失败的 rule 跳过但
-/// 仍递归其子 rules（与旧版行为一致）。
+/// 嵌套子 rules 递归、条件组（@media/@supports/@container/@layer）穿过、
+/// import/namespace 跳过。选择器解析失败的 rule 跳过但仍递归其子 rules
+/// （与旧版行为一致）。
 ///
 /// P1-3：跨全部 sheets 按文档序为每个 @layer 名分配全局序号（首次出现
 /// 定序），风格规则携带其所属层的序号。
+///
+/// P2-6：@media 按 [`MediaContext::default`]（screen 1920×1080）评估，
+/// @supports 按属性 registry 评估；不命中的条件组被剪枝。需要其他视口
+/// 或媒体类型时用 [`prepare_sheets_with_context`]。
 pub fn prepare_sheets(sheets: &[CssStyleSheet]) -> PreparedSheets {
+    prepare_sheets_with_context(sheets, &MediaContext::default())
+}
+
+/// 带媒体上下文的预处理（P2-6）。
+///
+/// 同 [`prepare_sheets`]，但按给定 [`MediaContext`] 评估 `@media` 条件，
+/// 剪枝不命中的规则组。
+pub fn prepare_sheets_with_context(
+    sheets: &[CssStyleSheet],
+    media: &MediaContext,
+) -> PreparedSheets {
     let mut rules = Vec::new();
     let mut layers = LayerTracker::new();
     for sheet in sheets {
-        prepare_rules(&sheet.css_rules, sheet.origin, &mut layers, &mut rules);
+        prepare_rules(
+            &sheet.css_rules,
+            sheet.origin,
+            &mut layers,
+            media,
+            &mut rules,
+        );
     }
     PreparedSheets { rules }
 }
@@ -136,6 +182,7 @@ fn prepare_rules(
     rules: &[CssRule],
     origin: Origin,
     layers: &mut LayerTracker,
+    media: &MediaContext,
     out: &mut Vec<PreparedRule>,
 ) {
     for rule in rules {
@@ -164,22 +211,29 @@ fn prepare_rules(
                     });
                 }
                 // 递归处理 CSS nesting 子 rules
-                prepare_rules(&style_rule.css_rules, origin, layers, out);
+                prepare_rules(&style_rule.css_rules, origin, layers, media, out);
             }
             CssRule::Media(r) => {
-                // 简化：无条件收集（条件评估推迟）
-                prepare_rules(&r.css_rules, origin, layers, out);
+                // P2-6: @media 条件不命中 → 整组剪枝（元素匹配阶段零开销）。
+                if eval_media_query(media, &r.condition) {
+                    prepare_rules(&r.css_rules, origin, layers, media, out);
+                }
             }
             CssRule::Supports(r) => {
-                prepare_rules(&r.css_rules, origin, layers, out);
+                // P2-6: @supports 条件按属性 registry 评估，不命中 → 剪枝。
+                if eval_supports_condition(&r.condition) {
+                    prepare_rules(&r.css_rules, origin, layers, media, out);
+                }
             }
             CssRule::Container(r) => {
-                prepare_rules(&r.css_rules, origin, layers, out);
+                // @container 条件需容器查询（依赖布局反馈），恒 true +
+                // 推迟（见 audit P2-6 范围边界）。
+                prepare_rules(&r.css_rules, origin, layers, media, out);
             }
             CssRule::LayerBlock(r) => {
                 // P1-3: 进入层块，层内规则携带该层序号
                 layers.enter(r.name.as_deref());
-                prepare_rules(&r.css_rules, origin, layers, out);
+                prepare_rules(&r.css_rules, origin, layers, media, out);
                 layers.exit();
             }
             CssRule::LayerStatement(r) => {
@@ -190,10 +244,10 @@ fn prepare_rules(
             }
             CssRule::Scope(r) => {
                 // @scope 是作用域容器，子规则照常参与元素匹配
-                prepare_rules(&r.css_rules, origin, layers, out);
+                prepare_rules(&r.css_rules, origin, layers, media, out);
             }
             CssRule::Other(r) => {
-                prepare_rules(&r.child_rules, origin, layers, out);
+                prepare_rules(&r.child_rules, origin, layers, media, out);
             }
             // 非元素匹配 rule 跳过。P2-14：@keyframes 的 Keyframe 块不再
             // 当普通 style rule 参与匹配（消除数据污染）；@font-face /
@@ -390,4 +444,199 @@ fn split_gap_value(value: &[ComponentValue]) -> (Vec<ComponentValue>, Vec<Compon
         [first, second, ..] => (vec![(*first).clone()], vec![(*second).clone()]),
         [] => (vec![], vec![]),
     }
+}
+
+// ── P2-6: @media / @supports 条件评估 ─────────────────────────────
+
+/// 评估 `@media` 条件（P2-6）。
+///
+/// 支持子集：媒体类型 `all` / `screen` / `print`；feature
+/// `(min/max-width/height: <px>)`；逻辑 `not` / `and`（`or` 少见，
+/// 主要用逗号分隔列表 = OR）。未知类型 / 未知 feature / 未知语法 →
+/// `false`（fail-closed）。
+fn eval_media_query(media: &MediaContext, condition: &[ComponentValue]) -> bool {
+    // 顶层逗号分隔的 media query 列表：任一命中即整体 true。
+    for query in split_on_commas(condition) {
+        if eval_media_query_list(media, query) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 求值单个 media query（无顶层逗号）。
+fn eval_media_query_list(media: &MediaContext, query: &[ComponentValue]) -> bool {
+    let mut result: Option<bool> = None;
+    let mut pending_op: Option<&'static str> = None;
+    let mut negate = false;
+
+    for cv in query {
+        match cv {
+            ComponentValue::PreservedToken(Token::Whitespace) => {}
+            ComponentValue::PreservedToken(Token::Ident(name)) => {
+                if name.eq_ignore_ascii_case("not") {
+                    negate = true;
+                } else if name.eq_ignore_ascii_case("and") {
+                    pending_op = Some("and");
+                } else if name.eq_ignore_ascii_case("or") {
+                    pending_op = Some("or");
+                } else {
+                    let mut cond = eval_media_type(media.media_type, name);
+                    if negate {
+                        cond = !cond;
+                        negate = false;
+                    }
+                    combine_condition(&mut result, pending_op.take(), cond);
+                }
+            }
+            ComponentValue::SimpleBlock(b) => {
+                let mut cond = eval_media_feature(media, b);
+                if negate {
+                    cond = !cond;
+                    negate = false;
+                }
+                combine_condition(&mut result, pending_op.take(), cond);
+            }
+            _ => return false, // 未知语法 → fail-closed
+        }
+    }
+
+    result.unwrap_or(false)
+}
+
+/// 求值媒体类型名（大小写不敏感）；未知类型 fail-closed。
+fn eval_media_type(current: &str, name: &str) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        "all" => true,
+        "screen" => current == "screen",
+        "print" => current == "print",
+        _ => false,
+    }
+}
+
+/// 求值媒体 feature（`(min-width: Npx)` 等）；未知 feature fail-closed。
+fn eval_media_feature(media: &MediaContext, b: &SimpleBlock) -> bool {
+    if b.kind != BlockKind::Paren {
+        return false;
+    }
+    let name = match extract_decl_property(b) {
+        Some(n) => n,
+        None => return false,
+    };
+    let value = match extract_media_px(&b.value) {
+        Some(v) => v,
+        None => return false,
+    };
+    match name.as_str() {
+        "min-width" => media.viewport_w >= value,
+        "max-width" => media.viewport_w <= value,
+        "min-height" => media.viewport_h >= value,
+        "max-height" => media.viewport_h <= value,
+        _ => false,
+    }
+}
+
+/// 提取 `(prop: value)` 括号块中的属性名（首个非空白 Ident）；未知 → `None`。
+fn extract_decl_property(b: &SimpleBlock) -> Option<String> {
+    for cv in &b.value {
+        match cv {
+            ComponentValue::PreservedToken(Token::Whitespace) => {}
+            ComponentValue::PreservedToken(Token::Ident(s)) => return Some(s.clone()),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// 从 component value 列表提取首个 px [`Token::Dimension`]。
+fn extract_media_px(values: &[ComponentValue]) -> Option<f32> {
+    for cv in values {
+        if let ComponentValue::PreservedToken(Token::Dimension(n, unit)) = cv {
+            if unit.eq_ignore_ascii_case("px") {
+                return Some(n.value as f32);
+            }
+        }
+    }
+    None
+}
+
+/// 顶层逗号分隔为多个分段（逗号 = OR）。
+fn split_on_commas(cvs: &[ComponentValue]) -> Vec<&[ComponentValue]> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    for (i, cv) in cvs.iter().enumerate() {
+        if matches!(cv, ComponentValue::PreservedToken(Token::Comma)) {
+            segments.push(&cvs[start..i]);
+            start = i + 1;
+        }
+    }
+    segments.push(&cvs[start..]);
+    segments
+}
+
+/// 累积逻辑条件：首项直接置入；后续按 `and` / `or` 连接。
+fn combine_condition(result: &mut Option<bool>, op: Option<&'static str>, cond: bool) {
+    match result {
+        None => *result = Some(cond),
+        Some(prev) => match op {
+            Some("and") => *result = Some(*prev && cond),
+            Some("or") => *result = Some(*prev || cond),
+            // 无逻辑连接符时以最新条件为准（简化）。
+            _ => *result = Some(cond),
+        },
+    }
+}
+
+/// 评估 `@supports` 条件（P2-6）。
+///
+/// `(prop: value)` → registry 含 prop 或 `--*` 前缀 → true；
+/// `not` / `and` / `or` 逻辑；未知 → `false`（fail-closed）。
+fn eval_supports_condition(condition: &[ComponentValue]) -> bool {
+    let mut result: Option<bool> = None;
+    let mut pending_op: Option<&'static str> = None;
+    let mut negate = false;
+
+    for cv in condition {
+        match cv {
+            ComponentValue::PreservedToken(Token::Whitespace) => {}
+            ComponentValue::PreservedToken(Token::Ident(name)) => {
+                if name.eq_ignore_ascii_case("not") {
+                    negate = true;
+                } else if name.eq_ignore_ascii_case("and") {
+                    pending_op = Some("and");
+                } else if name.eq_ignore_ascii_case("or") {
+                    pending_op = Some("or");
+                } else {
+                    return false; // 未知语法 → fail-closed
+                }
+            }
+            ComponentValue::SimpleBlock(b) => {
+                let mut cond = eval_supports_feature(b);
+                if negate {
+                    cond = !cond;
+                    negate = false;
+                }
+                combine_condition(&mut result, pending_op.take(), cond);
+            }
+            _ => return false,
+        }
+    }
+
+    result.unwrap_or(false)
+}
+
+/// 求值 `@supports` 的 `(prop: value)` 声明：属性已注册或为 `--*`。
+fn eval_supports_feature(b: &SimpleBlock) -> bool {
+    if b.kind != BlockKind::Paren {
+        return false;
+    }
+    let name = match extract_decl_property(b) {
+        Some(n) => n,
+        None => return false,
+    };
+    // 自定义属性（大小写敏感）恒支持；普通属性大小写不敏感。
+    if name.starts_with("--") {
+        return true;
+    }
+    lookup_property(&name.to_ascii_lowercase()).is_some()
 }

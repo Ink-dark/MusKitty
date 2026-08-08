@@ -1,6 +1,9 @@
 //! CC-3 Filtering 测试：选择器匹配 → DeclaredValue 收集。
 
-use muskitty_cascade::collect_declared_values;
+use muskitty_cascade::{
+    collect_declared_values, collect_declared_values_prepared, prepare_sheets_with_context,
+    MediaContext,
+};
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::{Attribute, Node};
@@ -94,12 +97,12 @@ fn important_flag_collected() {
 }
 
 #[test]
-fn media_rule_collected() {
+fn media_rule_screen_collected() {
+    // P2-6：@media screen 在默认屏幕视口命中 → 收集。
     let element = make_element("div", &[]);
-    let sheet = make_sheet("@media print { div { color: black; } }", Origin::Author);
+    let sheet = make_sheet("@media screen { div { color: black; } }", Origin::Author);
 
     let declared = collect_declared_values(&element, &[sheet]);
-    // 简化：无条件收集
     assert_eq!(declared.len(), 1);
     assert_eq!(declared[0].property, "color");
 }
@@ -295,4 +298,166 @@ fn style_attr_combined_with_stylesheet() {
         style_decl.order > sheet_decl.order,
         "style attr order should be greater"
     );
+}
+
+// —— P2-6: @media / @supports 条件评估 ——
+
+#[test]
+fn media_print_pruned_on_screen() {
+    // @media print 在默认屏幕视口不命中 → 不产生声明。
+    let element = make_element("div", &[]);
+    let sheet = make_sheet("@media print { div { color: red; } }", Origin::Author);
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert!(
+        declared.is_empty(),
+        "@media print must not produce declarations on screen, got {:?}",
+        declared
+    );
+}
+
+#[test]
+fn media_all_matches() {
+    let element = make_element("div", &[]);
+    let sheet = make_sheet("@media all { div { color: red; } }", Origin::Author);
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert_eq!(declared.len(), 1);
+    assert_eq!(declared[0].property, "color");
+}
+
+#[test]
+fn media_screen_min_width_matches_default_viewport() {
+    // 默认视口 1920 宽 → min-width: 100px 命中。
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@media screen and (min-width: 100px) { div { color: red; } }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert_eq!(declared.len(), 1);
+    assert_eq!(declared[0].property, "color");
+}
+
+#[test]
+fn media_min_width_pruned_on_narrow_viewport() {
+    // 视口宽 50px → min-width: 100px 不命中 → 剪枝。
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@media screen and (min-width: 100px) { div { color: red; } }",
+        Origin::Author,
+    );
+
+    let prepared = prepare_sheets_with_context(
+        &[sheet],
+        &MediaContext {
+            media_type: "screen",
+            viewport_w: 50.0,
+            viewport_h: 1080.0,
+        },
+    );
+    let declared = collect_declared_values_prepared(&element, &prepared);
+    assert!(
+        declared.is_empty(),
+        "narrow viewport must prune min-width:100px rule, got {:?}",
+        declared
+    );
+}
+
+#[test]
+fn media_unknown_feature_fails_closed() {
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@media (orientation: portrait) { div { color: red; } }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert!(
+        declared.is_empty(),
+        "unknown media feature must fail closed, got {:?}",
+        declared
+    );
+}
+
+#[test]
+fn supports_display_flex_matches() {
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@supports (display: flex) { div { color: red; } }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert_eq!(declared.len(), 1);
+    assert_eq!(declared[0].property, "color");
+}
+
+#[test]
+fn supports_custom_property_matches() {
+    // (--foo: red) → custom property → 支持
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@supports (--foo: red) { div { color: red; } }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert_eq!(declared.len(), 1);
+}
+
+#[test]
+fn supports_unknown_property_fails_closed() {
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@supports (bogus-prop: x) { div { color: red; } }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert!(
+        declared.is_empty(),
+        "unknown property in @supports must fail closed, got {:?}",
+        declared
+    );
+}
+
+#[test]
+fn supports_not_inverts() {
+    // not (bogus-prop: x) → 未知属性不成立，not 取反成立 → 收集
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@supports not (bogus-prop: x) { div { color: red; } }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert_eq!(declared.len(), 1);
+}
+
+#[test]
+fn supports_and_chain() {
+    // (display: flex) and (color: red) → 两者都支持 → 收集
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@supports (display: flex) and (color: red) { div { color: red; } }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert_eq!(declared.len(), 1);
+}
+
+#[test]
+fn media_comma_list_is_or() {
+    // @media print, screen → OR，任一命中即收集
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@media print, screen { div { color: red; } }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert_eq!(declared.len(), 1);
 }
