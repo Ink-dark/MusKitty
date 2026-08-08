@@ -67,7 +67,21 @@ fn main() {
 
     // 6. render → PNG via tiny-skia
     let mut backend = TinySkiaBackend::new();
-    backend.render(&commands, VIEWPORT_W as u32, VIEWPORT_H as u32);
+    // P2-18：消费返回的像素输出（此处仅确认形状，PNG 编码走内部 pixmap）。
+    let output = backend.render(&commands, VIEWPORT_W as u32, VIEWPORT_H as u32);
+    if let muskitty_renderer::RenderOutput::Pixels {
+        width,
+        height,
+        data,
+    } = output
+    {
+        println!(
+            "  Pixel buffer: {}x{} ({} bytes)",
+            width,
+            height,
+            data.len()
+        );
+    }
 
     let out_path = "render_demo.png";
     backend

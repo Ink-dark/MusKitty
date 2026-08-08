@@ -12,6 +12,7 @@ use muskitty_dom::Node;
 use muskitty_layout::{build_layout_tree, compute_layout, LayoutResult};
 use muskitty_renderer::{
     paint, Backend, Border, BorderStyle, Color, MockBackend, PaintInput, RenderCommand,
+    RenderOutput,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -278,7 +279,9 @@ fn paint_mock_backend_consumes_commands() {
         600.0,
     );
     let mut backend = MockBackend::new();
-    backend.render(&cmds, 800, 600);
+    // P2-18：Mock 返回 Commands 输出。
+    let output = backend.render(&cmds, 800, 600);
+    assert_eq!(output, RenderOutput::Commands(cmds));
     assert_eq!(backend.len(), 1);
     assert_eq!(backend.width, 800);
     assert_eq!(backend.height, 600);

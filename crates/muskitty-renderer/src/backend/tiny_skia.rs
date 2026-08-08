@@ -18,7 +18,7 @@
 //! - dashed / dotted 样式当前按 solid 渲染（推迟到 tiny-skia 的 dash
 //!   支持接入）。
 
-use crate::backend::Backend;
+use crate::backend::{Backend, RenderOutput};
 use crate::command::{Border, BorderStyle, RenderCommand};
 use tiny_skia::{Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
@@ -75,7 +75,7 @@ impl TinySkiaBackend {
 }
 
 impl Backend for TinySkiaBackend {
-    fn render(&mut self, commands: &[RenderCommand], width: u32, height: u32) {
+    fn render(&mut self, commands: &[RenderCommand], width: u32, height: u32) -> RenderOutput {
         // Pixmap::new 返回 None 当 width/height 为 0 或超过 i32::MAX/4。
         // 回退到 1x1 像素以避免 panic（这种情况下命令通常也无法绘制）。
         let mut pixmap = Pixmap::new(width, height)
@@ -117,6 +117,15 @@ impl Backend for TinySkiaBackend {
         }
 
         self.pixmap = Some(pixmap);
+
+        // P2-18：返回像素数据（RGBA，行长 = width*4）。`pixmap.data()` 保持
+        // 引用有效直到赋值前，故先取引用再 move。
+        let p = self.pixmap.as_ref().expect("pixmap just set");
+        RenderOutput::Pixels {
+            width,
+            height,
+            data: p.data().to_vec(),
+        }
     }
 }
 

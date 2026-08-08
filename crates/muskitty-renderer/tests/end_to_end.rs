@@ -14,7 +14,7 @@ use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::{Node, NodeKind};
 use muskitty_layout::{build_layout_tree, compute_layout};
-use muskitty_renderer::{paint, Backend, PaintInput, TinySkiaBackend};
+use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
 use muskitty_selectors::matching::{DomElement, Element as _};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -42,7 +42,24 @@ fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
     let commands = paint(&input);
 
     let mut backend = TinySkiaBackend::new();
-    backend.render(&commands, vw as u32, vh as u32);
+    // P2-18：render 返回像素输出，测试消费返回值确认尺寸与数据长度。
+    let output = backend.render(&commands, vw as u32, vh as u32);
+    match output {
+        RenderOutput::Pixels {
+            width,
+            height,
+            data,
+        } => {
+            assert_eq!(width, vw as u32, "pixel buffer width");
+            assert_eq!(height, vh as u32, "pixel buffer height");
+            assert_eq!(
+                data.len(),
+                (vw as usize * vh as usize * 4) as usize,
+                "RGBA buffer length"
+            );
+        }
+        other => panic!("expected Pixels from tiny-skia, got {:?}", other),
+    }
     backend
         .encode_png()
         .expect("PNG encoding should succeed after render")
