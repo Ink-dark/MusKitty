@@ -57,7 +57,11 @@ fn convert_rules(rules: &[Rule]) -> Vec<CssRule> {
 /// 返回 `(child_css_rules, extra_declarations)`：`extra_declarations`
 /// 是从 `Rule::Declarations` 收集的声明，由调用方合并到父
 /// `CssStyleDeclaration`。
-fn convert_child_rules(rules: &[Rule]) -> (Vec<CssRule>, Vec<CssDeclaration>) {
+///
+/// `collect_decls`：PERF-8 —— 条件组（@media/@supports/@container/
+/// @layer）丢弃 extra_decls，传 `false` 避免无用的 `Vec` 分配；style
+/// rule 与 @font-face 等需要合并，传 `true`。
+fn convert_child_rules(rules: &[Rule], collect_decls: bool) -> (Vec<CssRule>, Vec<CssDeclaration>) {
     let mut css_rules = Vec::new();
     let mut extra_decls = Vec::new();
     for r in rules {
@@ -66,8 +70,10 @@ fn convert_child_rules(rules: &[Rule]) -> (Vec<CssRule>, Vec<CssDeclaration>) {
             Rule::AtRule(ar) => css_rules.push(convert_at_rule(ar)),
             // 嵌套裸声明：合并到父 style 块（plan 的简化策略）
             Rule::Declarations(decls) => {
-                for d in decls {
-                    extra_decls.push(convert_declaration(d));
+                if collect_decls {
+                    for d in decls {
+                        extra_decls.push(convert_declaration(d));
+                    }
                 }
             }
         }
@@ -81,7 +87,7 @@ fn convert_qualified_rule(qr: &QualifiedRule) -> CssStyleRule {
     for d in &qr.declarations {
         style.push(convert_declaration(d));
     }
-    let (css_rules, extra_decls) = convert_child_rules(&qr.child_rules);
+    let (css_rules, extra_decls) = convert_child_rules(&qr.child_rules, true);
     // 嵌套裸声明追加到父 style 末尾（cascade 后出现胜出）
     for d in extra_decls {
         style.push(d);
@@ -137,7 +143,7 @@ fn convert_import(ar: &AtRule) -> CssImportRule {
 
 /// `@media` → [`CssMediaRule`]。
 fn convert_media(ar: &AtRule) -> CssMediaRule {
-    let (css_rules, _) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]));
+    let (css_rules, _) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]), false);
     CssMediaRule {
         condition: ar.prelude.clone(),
         css_rules,
@@ -173,7 +179,7 @@ fn convert_namespace(ar: &AtRule) -> CssNamespaceRule {
 
 /// `@supports` → [`CssSupportsRule`]。
 fn convert_supports(ar: &AtRule) -> CssSupportsRule {
-    let (css_rules, _) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]));
+    let (css_rules, _) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]), false);
     CssSupportsRule {
         condition: ar.prelude.clone(),
         css_rules,
@@ -185,7 +191,7 @@ fn convert_supports(ar: &AtRule) -> CssSupportsRule {
 fn convert_layer(ar: &AtRule) -> CssRule {
     if let Some(child_rules) = &ar.child_rules {
         // block 形式：@layer [name] { rules }
-        let (css_rules, _) = convert_child_rules(child_rules);
+        let (css_rules, _) = convert_child_rules(child_rules, false);
         // 层名取第一个点分隔名（P1-7）；空 → 匿名层
         let name = extract_dotted_layer_names(&ar.prelude).into_iter().next();
         CssRule::LayerBlock(CssLayerBlockRule { name, css_rules })
@@ -198,7 +204,7 @@ fn convert_layer(ar: &AtRule) -> CssRule {
 
 /// `@container` → [`CssContainerRule`]。
 fn convert_container(ar: &AtRule) -> CssContainerRule {
-    let (css_rules, _) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]));
+    let (css_rules, _) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]), false);
     CssContainerRule {
         condition: ar.prelude.clone(),
         css_rules,
@@ -207,7 +213,8 @@ fn convert_container(ar: &AtRule) -> CssContainerRule {
 
 /// 未识别 at-rule → [`OtherRule`]。
 fn convert_other(ar: &AtRule) -> OtherRule {
-    let (child_rules, extra_decls) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]));
+    let (child_rules, extra_decls) =
+        convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]), true);
     // P1-5：@font-face 等块 at-rule 的声明经 B5 根因修复后已进入
     // `ar.declarations`；若子规则里仍夹带裸声明（convert_child_rules
     // 收集的 `Rule::Declarations`），并入末尾兜底，避免丢失。

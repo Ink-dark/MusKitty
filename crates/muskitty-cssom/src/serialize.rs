@@ -197,12 +197,16 @@ impl ToCss for CssStyleDeclaration {
     fn to_css_string(&self) -> String {
         // 简化版：遍历 declarations，每个声明后加分号，用空格连接。
         // 不做 shorthand 合并（推迟到 Cascade）。
-        let decls: Vec<String> = self
-            .declarations
-            .iter()
-            .map(|d| format!("{};", d.to_css_string()))
-            .collect();
-        decls.join(" ")
+        // PERF-6/7：直写 &mut String，避免中间 Vec<String> 分配。
+        let mut s = String::new();
+        for (i, d) in self.declarations.iter().enumerate() {
+            if i > 0 {
+                s.push(' ');
+            }
+            s.push_str(&d.to_css_string());
+            s.push(';');
+        }
+        s
     }
 }
 
@@ -305,8 +309,16 @@ impl ToCss for CssLayerBlockRule {
 impl ToCss for CssLayerStatementRule {
     /// §8.4: `@layer name1, name2;`
     fn to_css_string(&self) -> String {
-        let names: Vec<String> = self.names.iter().map(|n| serialize_identifier(n)).collect();
-        format!("@layer {};", names.join(", "))
+        // PERF-6/7：直写 &mut String，避免中间 Vec<String> 分配。
+        let mut s = String::from("@layer ");
+        for (i, n) in self.names.iter().enumerate() {
+            if i > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(&serialize_identifier(n));
+        }
+        s.push(';');
+        s
     }
 }
 
@@ -363,8 +375,15 @@ impl ToCss for OtherRule {
 impl ToCss for CssStyleSheet {
     /// rules 用换行连接。
     fn to_css_string(&self) -> String {
-        let rules: Vec<String> = self.css_rules.iter().map(|r| r.to_css_string()).collect();
-        rules.join("\n")
+        // PERF-6/7：直写 &mut String，避免中间 Vec<String> 分配。
+        let mut s = String::new();
+        for (i, r) in self.css_rules.iter().enumerate() {
+            if i > 0 {
+                s.push('\n');
+            }
+            s.push_str(&r.to_css_string());
+        }
+        s
     }
 }
 
