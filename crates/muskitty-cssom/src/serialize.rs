@@ -7,9 +7,10 @@
 //! - §8.6 L2370-2414: CSS Declaration Block 序列化
 
 use crate::{
-    CssContainerRule, CssDeclaration, CssImportRule, CssLayerBlockRule, CssLayerStatementRule,
-    CssMediaRule, CssNamespaceRule, CssRule, CssStyleDeclaration, CssStyleRule, CssStyleSheet,
-    CssSupportsRule, OtherRule,
+    CssContainerRule, CssCounterStyleRule, CssDeclaration, CssFontFaceRule, CssImportRule,
+    CssKeyframeRule, CssKeyframesRule, CssLayerBlockRule, CssLayerStatementRule, CssMediaRule,
+    CssNamespaceRule, CssPageRule, CssPropertyRule, CssRule, CssScopeRule, CssStyleDeclaration,
+    CssStyleRule, CssStyleSheet, CssSupportsRule, OtherRule,
 };
 use muskitty_css::parser::{BlockKind, ComponentValue, Function, SimpleBlock};
 use muskitty_css::tokenizer::{HashType, Numeric, Token};
@@ -218,11 +219,18 @@ impl ToCss for CssRule {
             CssRule::Style(r) => r.to_css_string(),
             CssRule::Import(r) => r.to_css_string(),
             CssRule::Media(r) => r.to_css_string(),
+            CssRule::FontFace(r) => r.to_css_string(),
+            CssRule::Page(r) => r.to_css_string(),
+            CssRule::Keyframes(r) => r.to_css_string(),
+            CssRule::Keyframe(r) => r.to_css_string(),
             CssRule::Namespace(r) => r.to_css_string(),
+            CssRule::CounterStyle(r) => r.to_css_string(),
             CssRule::Supports(r) => r.to_css_string(),
             CssRule::LayerBlock(r) => r.to_css_string(),
             CssRule::LayerStatement(r) => r.to_css_string(),
             CssRule::Container(r) => r.to_css_string(),
+            CssRule::Property(r) => r.to_css_string(),
+            CssRule::Scope(r) => r.to_css_string(),
             CssRule::Other(r) => r.to_css_string(),
         }
     }
@@ -330,6 +338,76 @@ impl ToCss for CssContainerRule {
     }
 }
 
+impl ToCss for CssFontFaceRule {
+    /// `@font-face { descriptors }`
+    fn to_css_string(&self) -> String {
+        serialize_descriptor_at_rule("font-face", "", &self.style)
+    }
+}
+
+impl ToCss for CssPageRule {
+    /// `@page [selector] { descriptors }`
+    fn to_css_string(&self) -> String {
+        let prelude = serialize_component_values(&self.selectors);
+        serialize_descriptor_at_rule("page", &prelude, &self.style)
+    }
+}
+
+impl ToCss for CssKeyframesRule {
+    /// `@keyframes name { keyframe, ... }`
+    fn to_css_string(&self) -> String {
+        let name = self.name.as_deref().unwrap_or("");
+        let mut s = format!("@keyframes {}", serialize_identifier(name));
+        s.push_str(" {");
+        for kf in &self.keyframes {
+            s.push(' ');
+            s.push_str(&kf.to_css_string());
+        }
+        s.push_str(" }");
+        s
+    }
+}
+
+impl ToCss for CssKeyframeRule {
+    /// `from { declarations }`
+    fn to_css_string(&self) -> String {
+        let key_text = serialize_component_values(&self.key_text);
+        let mut s = format!("{} {{", key_text.trim());
+        if !self.style.is_empty() {
+            s.push(' ');
+            s.push_str(&self.style.to_css_string());
+        }
+        s.push_str(" }");
+        s
+    }
+}
+
+impl ToCss for CssCounterStyleRule {
+    /// `@counter-style name { descriptors }`
+    fn to_css_string(&self) -> String {
+        serialize_descriptor_at_rule(
+            "counter-style",
+            &serialize_identifier(&self.name),
+            &self.style,
+        )
+    }
+}
+
+impl ToCss for CssPropertyRule {
+    /// `@property --name { descriptors }`
+    fn to_css_string(&self) -> String {
+        serialize_descriptor_at_rule("property", &serialize_identifier(&self.name), &self.style)
+    }
+}
+
+impl ToCss for CssScopeRule {
+    /// `@scope prelude { rules }`
+    fn to_css_string(&self) -> String {
+        let prelude = serialize_component_values(&self.prelude);
+        serialize_block_at_rule("scope", &prelude, &self.css_rules)
+    }
+}
+
 impl ToCss for OtherRule {
     /// `@name prelude;` 或 `@name prelude { declarations; rules }`
     fn to_css_string(&self) -> String {
@@ -388,6 +466,24 @@ impl ToCss for CssStyleSheet {
 }
 
 // ── 辅助 ──────────────────────────────────────────────────────────
+
+/// 序列化 descriptor at-rule：`@name prelude { descriptors }`。
+///
+/// 供 @font-face/@page/@counter-style/@property 使用（P2-14 类型化变体）。
+fn serialize_descriptor_at_rule(name: &str, prelude: &str, style: &CssStyleDeclaration) -> String {
+    let mut s = format!("@{}", serialize_identifier(name));
+    if !prelude.trim().is_empty() {
+        s.push(' ');
+        s.push_str(prelude);
+    }
+    s.push_str(" {");
+    if !style.is_empty() {
+        s.push(' ');
+        s.push_str(&style.to_css_string());
+    }
+    s.push_str(" }");
+    s
+}
 
 /// 序列化 block at-rule：`@name prelude { rules }`。
 fn serialize_block_at_rule(name: &str, prelude: &str, css_rules: &[CssRule]) -> String {

@@ -39,8 +39,9 @@ pub mod stylesheet;
 pub use convert::{from_stylesheet, from_stylesheet_with_origin};
 pub use declaration::{CssDeclaration, CssStyleDeclaration};
 pub use rule::{
-    CssContainerRule, CssImportRule, CssLayerBlockRule, CssLayerStatementRule, CssMediaRule,
-    CssNamespaceRule, CssRule, CssStyleRule, CssSupportsRule, OtherRule,
+    CssContainerRule, CssCounterStyleRule, CssFontFaceRule, CssImportRule, CssKeyframeRule,
+    CssKeyframesRule, CssLayerBlockRule, CssLayerStatementRule, CssMediaRule, CssNamespaceRule,
+    CssPageRule, CssPropertyRule, CssRule, CssScopeRule, CssStyleRule, CssSupportsRule, OtherRule,
 };
 pub use serialize::{
     serialize_component_value, serialize_component_values, serialize_identifier, serialize_string,

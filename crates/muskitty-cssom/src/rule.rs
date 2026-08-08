@@ -18,16 +18,30 @@ pub enum CssRule {
     Import(CssImportRule),
     /// §8.4 L1699: CSSMediaRule (type=4)
     Media(CssMediaRule),
+    /// §8.4 L1710: CSSFontFaceRule (type=5)
+    FontFace(CssFontFaceRule),
+    /// §8.4 L1772: CSSPageRule (type=6)
+    Page(CssPageRule),
+    /// §8.4 L2080: CSSKeyframesRule (type=7)
+    Keyframes(CssKeyframesRule),
+    /// §8.4 L2155: CSSKeyframeRule (type=8)
+    Keyframe(CssKeyframeRule),
     /// §8.4 L1798: CSSNamespaceRule (type=10)
     Namespace(CssNamespaceRule),
+    /// §8.4: CSSCounterStyleRule (type=11)
+    CounterStyle(CssCounterStyleRule),
     /// §8.4: CSSSupportsRule (type=12)
     Supports(CssSupportsRule),
+    /// §8.4: CSSContainerRule (type=15)
+    Container(CssContainerRule),
     /// §8.4: CSSLayerBlockRule (type=16)
     LayerBlock(CssLayerBlockRule),
     /// §8.4: CSSLayerStatementRule (type=17)
     LayerStatement(CssLayerStatementRule),
-    /// §8.4: CSSContainerRule (type=15)
-    Container(CssContainerRule),
+    /// §8.4: CSSPropertyRule (type=18)
+    Property(CssPropertyRule),
+    /// §8.4: CSSScopeRule (type=19)
+    Scope(CssScopeRule),
     /// 未识别的 at-rule，保留 prelude + block 原样。
     Other(OtherRule),
 }
@@ -39,18 +53,25 @@ impl CssRule {
             CssRule::Style(_) => 1,
             CssRule::Import(_) => 3,
             CssRule::Media(_) => 4,
+            CssRule::FontFace(_) => 5,
+            CssRule::Page(_) => 6,
+            CssRule::Keyframes(_) => 7,
+            CssRule::Keyframe(_) => 8,
             CssRule::Namespace(_) => 10,
+            CssRule::CounterStyle(_) => 11,
             CssRule::Supports(_) => 12,
             CssRule::Container(_) => 15,
             CssRule::LayerBlock(_) => 16,
             CssRule::LayerStatement(_) => 17,
+            CssRule::Property(_) => 18,
+            CssRule::Scope(_) => 19,
             // 0 表示自定义/未标准化的 rule
             CssRule::Other(_) => 0,
         }
     }
 
     /// 该 rule 是否包含子 cssRules（Style/Media/Supports/Container/
-    /// LayerBlock/Other 都可能含子规则）。
+    /// LayerBlock/Scope/Keyframes/Other 都可能含子规则）。
     pub fn has_child_rules(&self) -> bool {
         match self {
             CssRule::Style(r) => !r.css_rules.is_empty(),
@@ -58,8 +79,17 @@ impl CssRule {
             CssRule::Supports(r) => !r.css_rules.is_empty(),
             CssRule::Container(r) => !r.css_rules.is_empty(),
             CssRule::LayerBlock(r) => !r.css_rules.is_empty(),
+            CssRule::Scope(r) => !r.css_rules.is_empty(),
+            CssRule::Keyframes(r) => !r.keyframes.is_empty(),
             CssRule::Other(r) => !r.child_rules.is_empty(),
-            CssRule::Import(_) | CssRule::Namespace(_) | CssRule::LayerStatement(_) => false,
+            CssRule::Import(_)
+            | CssRule::FontFace(_)
+            | CssRule::Page(_)
+            | CssRule::Keyframe(_)
+            | CssRule::Namespace(_)
+            | CssRule::CounterStyle(_)
+            | CssRule::LayerStatement(_)
+            | CssRule::Property(_) => false,
         }
     }
 }
@@ -149,6 +179,71 @@ pub struct CssContainerRule {
     pub css_rules: Vec<CssRule>,
 }
 
+/// §8.4 L1710: CSSFontFaceRule。
+#[derive(Debug, Clone)]
+pub struct CssFontFaceRule {
+    /// @font-face 描述符（font-family/src 等，B5 后进入
+    /// `AtRule.declarations` 并转此块）。
+    pub style: CssStyleDeclaration,
+}
+
+/// §8.4 L1772: CSSPageRule。
+#[derive(Debug, Clone)]
+pub struct CssPageRule {
+    /// page selector prelude（如 `:first`；空为无名页）。
+    pub selectors: Vec<ComponentValue>,
+    /// 页描述符（margin 等）。
+    pub style: CssStyleDeclaration,
+}
+
+/// §8.4 L2080: CSSKeyframesRule。
+#[derive(Debug, Clone)]
+pub struct CssKeyframesRule {
+    /// 动画名（prelude 首个 Ident）。
+    pub name: Option<String>,
+    /// 各关键帧块（from / to / 0% 等）。
+    pub keyframes: Vec<CssKeyframeRule>,
+}
+
+/// §8.4 L2155: CSSKeyframeRule。
+///
+/// P2-14: 关键帧块原本落入 `CssRule::Style`，cascade 会把它当普通
+/// style rule 参与元素匹配（数据污染）；类型化后由 cascade 显式跳过。
+#[derive(Debug, Clone)]
+pub struct CssKeyframeRule {
+    /// 关键帧 selector（`from` / `to` / `0%` / `50%, 100%`）。
+    pub key_text: Vec<ComponentValue>,
+    /// 关键帧声明块。
+    pub style: CssStyleDeclaration,
+}
+
+/// §8.4: CSSCounterStyleRule。
+#[derive(Debug, Clone)]
+pub struct CssCounterStyleRule {
+    /// counter-style 名（prelude 首个 Ident）。
+    pub name: String,
+    /// 描述符块（system/symbols 等）。
+    pub style: CssStyleDeclaration,
+}
+
+/// §8.4: CSSPropertyRule。
+#[derive(Debug, Clone)]
+pub struct CssPropertyRule {
+    /// 注册的 custom property 名（prelude Ident，如 `--foo`）。
+    pub name: String,
+    /// 描述符块（syntax/inherits/initial-value）。
+    pub style: CssStyleDeclaration,
+}
+
+/// §8.4: CSSScopeRule。
+#[derive(Debug, Clone)]
+pub struct CssScopeRule {
+    /// scope prelude（`(start) to (end)`）。
+    pub prelude: Vec<ComponentValue>,
+    /// 子规则。
+    pub css_rules: Vec<CssRule>,
+}
+
 /// 未识别的 at-rule 的 fallback 容器。
 #[derive(Debug, Clone)]
 pub struct OtherRule {
@@ -230,6 +325,61 @@ mod tests {
             17
         );
         assert_eq!(
+            CssRule::FontFace(CssFontFaceRule {
+                style: CssStyleDeclaration::new(),
+            })
+            .type_id(),
+            5
+        );
+        assert_eq!(
+            CssRule::Page(CssPageRule {
+                selectors: Vec::new(),
+                style: CssStyleDeclaration::new(),
+            })
+            .type_id(),
+            6
+        );
+        assert_eq!(
+            CssRule::Keyframes(CssKeyframesRule {
+                name: None,
+                keyframes: Vec::new(),
+            })
+            .type_id(),
+            7
+        );
+        assert_eq!(
+            CssRule::Keyframe(CssKeyframeRule {
+                key_text: Vec::new(),
+                style: CssStyleDeclaration::new(),
+            })
+            .type_id(),
+            8
+        );
+        assert_eq!(
+            CssRule::CounterStyle(CssCounterStyleRule {
+                name: String::new(),
+                style: CssStyleDeclaration::new(),
+            })
+            .type_id(),
+            11
+        );
+        assert_eq!(
+            CssRule::Property(CssPropertyRule {
+                name: String::new(),
+                style: CssStyleDeclaration::new(),
+            })
+            .type_id(),
+            18
+        );
+        assert_eq!(
+            CssRule::Scope(CssScopeRule {
+                prelude: Vec::new(),
+                css_rules: Vec::new(),
+            })
+            .type_id(),
+            19
+        );
+        assert_eq!(
             CssRule::Other(OtherRule {
                 name: String::new(),
                 prelude: Vec::new(),
@@ -257,6 +407,30 @@ mod tests {
         assert!(
             !CssRule::LayerStatement(CssLayerStatementRule { names: Vec::new() }).has_child_rules()
         );
+        assert!(!CssRule::FontFace(CssFontFaceRule {
+            style: CssStyleDeclaration::new(),
+        })
+        .has_child_rules());
+        assert!(!CssRule::Page(CssPageRule {
+            selectors: Vec::new(),
+            style: CssStyleDeclaration::new(),
+        })
+        .has_child_rules());
+        assert!(!CssRule::Keyframe(CssKeyframeRule {
+            key_text: Vec::new(),
+            style: CssStyleDeclaration::new(),
+        })
+        .has_child_rules());
+        assert!(!CssRule::CounterStyle(CssCounterStyleRule {
+            name: String::new(),
+            style: CssStyleDeclaration::new(),
+        })
+        .has_child_rules());
+        assert!(!CssRule::Property(CssPropertyRule {
+            name: String::new(),
+            style: CssStyleDeclaration::new(),
+        })
+        .has_child_rules());
     }
 
     #[test]
@@ -273,6 +447,21 @@ mod tests {
             css_rules: vec![CssRule::Style(CssStyleRule::new(Vec::new()))],
         });
         assert!(media_with_child.has_child_rules());
+
+        let keyframes_with_child = CssRule::Keyframes(CssKeyframesRule {
+            name: None,
+            keyframes: vec![CssKeyframeRule {
+                key_text: Vec::new(),
+                style: CssStyleDeclaration::new(),
+            }],
+        });
+        assert!(keyframes_with_child.has_child_rules());
+
+        let scope_with_child = CssRule::Scope(CssScopeRule {
+            prelude: Vec::new(),
+            css_rules: vec![CssRule::Style(CssStyleRule::new(Vec::new()))],
+        });
+        assert!(scope_with_child.has_child_rules());
     }
 
     #[test]

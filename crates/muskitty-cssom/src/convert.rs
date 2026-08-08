@@ -9,9 +9,10 @@
 //! 引用 css-parser 的 `Stylesheet`，避免生命周期耦合。
 
 use crate::{
-    CssContainerRule, CssDeclaration, CssImportRule, CssLayerBlockRule, CssLayerStatementRule,
-    CssMediaRule, CssNamespaceRule, CssRule, CssStyleDeclaration, CssStyleRule, CssStyleSheet,
-    CssSupportsRule, OtherRule,
+    CssContainerRule, CssCounterStyleRule, CssDeclaration, CssFontFaceRule, CssImportRule,
+    CssKeyframeRule, CssKeyframesRule, CssLayerBlockRule, CssLayerStatementRule, CssMediaRule,
+    CssNamespaceRule, CssPageRule, CssPropertyRule, CssRule, CssScopeRule, CssStyleDeclaration,
+    CssStyleRule, CssStyleSheet, CssSupportsRule, OtherRule,
 };
 use muskitty_css::parser::{AtRule, ComponentValue, Declaration, QualifiedRule, Rule, Stylesheet};
 use muskitty_css::tokenizer::Token;
@@ -102,14 +103,22 @@ fn convert_qualified_rule(qr: &QualifiedRule) -> CssStyleRule {
 /// 转换 [`AtRule`] → 对应的 [`CssRule`] 变体。
 ///
 /// P1-6: at-rule 名大小写不敏感（CSS Syntax §6.3.4），统一转小写再分发。
+/// P2-14: @font-face/@page/@keyframes/@counter-style/@property/@scope 类型化，
+/// 不再落入 `Other`（尤其 @keyframes 的子块不再转 `Style` 污染 cascade）。
 fn convert_at_rule(ar: &AtRule) -> CssRule {
     match ar.name.to_ascii_lowercase().as_str() {
         "import" => CssRule::Import(convert_import(ar)),
         "media" => CssRule::Media(convert_media(ar)),
+        "font-face" => CssRule::FontFace(convert_font_face(ar)),
+        "page" => CssRule::Page(convert_page(ar)),
+        "keyframes" => CssRule::Keyframes(convert_keyframes(ar)),
         "namespace" => CssRule::Namespace(convert_namespace(ar)),
+        "counter-style" => CssRule::CounterStyle(convert_counter_style(ar)),
         "supports" => CssRule::Supports(convert_supports(ar)),
         "layer" => convert_layer(ar),
         "container" => CssRule::Container(convert_container(ar)),
+        "property" => CssRule::Property(convert_property(ar)),
+        "scope" => CssRule::Scope(convert_scope(ar)),
         _ => CssRule::Other(convert_other(ar)),
     }
 }
@@ -211,6 +220,70 @@ fn convert_container(ar: &AtRule) -> CssContainerRule {
     }
 }
 
+/// `@font-face` → [`CssFontFaceRule`]。
+///
+/// B5（P1-5 根因修复）后描述符进入 `AtRule.declarations`，这里转成
+/// `CssStyleDeclaration`。
+fn convert_font_face(ar: &AtRule) -> CssFontFaceRule {
+    CssFontFaceRule {
+        style: convert_declaration_block(ar.declarations.as_deref()),
+    }
+}
+
+/// `@page` → [`CssPageRule`]。
+fn convert_page(ar: &AtRule) -> CssPageRule {
+    CssPageRule {
+        selectors: ar.prelude.clone(),
+        style: convert_declaration_block(ar.declarations.as_deref()),
+    }
+}
+
+/// `@keyframes` → [`CssKeyframesRule`]。
+///
+/// 关键帧块（`from`/`to`/`0%`）是子层 [`Rule::QualifiedRule`]，转为
+/// [`CssKeyframeRule`]（P2-14：不再落入 `CssRule::Style`，避免 cascade
+/// 当普通 style rule 参与元素匹配）。
+fn convert_keyframes(ar: &AtRule) -> CssKeyframesRule {
+    let name = first_ident(&ar.prelude);
+    let mut keyframes = Vec::new();
+    if let Some(child_rules) = &ar.child_rules {
+        for r in child_rules {
+            if let Rule::QualifiedRule(qr) = r {
+                keyframes.push(CssKeyframeRule {
+                    key_text: qr.prelude.clone(),
+                    style: convert_declaration_block(Some(&qr.declarations)),
+                });
+            }
+        }
+    }
+    CssKeyframesRule { name, keyframes }
+}
+
+/// `@counter-style` → [`CssCounterStyleRule`]。
+fn convert_counter_style(ar: &AtRule) -> CssCounterStyleRule {
+    CssCounterStyleRule {
+        name: first_ident(&ar.prelude).unwrap_or_default(),
+        style: convert_declaration_block(ar.declarations.as_deref()),
+    }
+}
+
+/// `@property` → [`CssPropertyRule`]。
+fn convert_property(ar: &AtRule) -> CssPropertyRule {
+    CssPropertyRule {
+        name: first_ident(&ar.prelude).unwrap_or_default(),
+        style: convert_declaration_block(ar.declarations.as_deref()),
+    }
+}
+
+/// `@scope` → [`CssScopeRule`]。
+fn convert_scope(ar: &AtRule) -> CssScopeRule {
+    let (css_rules, _) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]), false);
+    CssScopeRule {
+        prelude: ar.prelude.clone(),
+        css_rules,
+    }
+}
+
 /// 未识别 at-rule → [`OtherRule`]。
 fn convert_other(ar: &AtRule) -> OtherRule {
     let (child_rules, extra_decls) =
@@ -244,6 +317,28 @@ fn convert_declaration(d: &Declaration) -> CssDeclaration {
         important: d.important,
         original_text: d.original_text.clone(),
     }
+}
+
+/// 把 `Option<&[Declaration]>` 转为 [`CssStyleDeclaration`]。
+///
+/// 供 @font-face/@page/@counter-style/@property 等 descriptor at-rule
+/// 使用（B5 后描述符在 `ar.declarations`）。
+fn convert_declaration_block(decls: Option<&[Declaration]>) -> CssStyleDeclaration {
+    let mut style = CssStyleDeclaration::new();
+    if let Some(decls) = decls {
+        for d in decls {
+            style.push(convert_declaration(d));
+        }
+    }
+    style
+}
+
+/// 取 component value 列表中的首个 Ident（用于 at-rule 名）。
+fn first_ident(prelude: &[ComponentValue]) -> Option<String> {
+    prelude.iter().find_map(|cv| match cv {
+        ComponentValue::PreservedToken(Token::Ident(s)) => Some(s.clone()),
+        _ => None,
+    })
 }
 
 // ── 辅助函数 ──────────────────────────────────────────────────────

@@ -302,22 +302,65 @@ fn other_at_rule_statement() {
 }
 
 #[test]
-fn other_at_rule_block_has_declarations() {
-    // P1-5: @font-face 的声明应进入 OtherRule.declarations（不再丢失）
+fn font_face_rule_typed() {
+    // P2-14: @font-face 类型化为 CssRule::FontFace（描述符进 declarations）。
+    // P1-5: 声明不再丢失。
     let ss = parse_stylesheet("@font-face { font-family: X; src: url(x); }");
     let om = from_stylesheet(&ss);
     match &om.css_rules[0] {
-        CssRule::Other(r) => {
-            assert_eq!(r.name, "font-face");
-            let decls = r
+        CssRule::FontFace(r) => {
+            assert_eq!(r.style.len(), 2);
+            let names: Vec<&str> = r
+                .style
                 .declarations
-                .as_ref()
-                .expect("declarations should be Some");
-            assert_eq!(decls.len(), 2);
-            assert_eq!(decls[0].name, "font-family");
-            assert_eq!(decls[1].name, "src");
+                .iter()
+                .map(|d| d.name.as_str())
+                .collect();
+            assert_eq!(names, vec!["font-family", "src"]);
         }
-        other => panic!("expected Other, got {:?}", other),
+        other => panic!("expected FontFace, got {:?}", other),
+    }
+}
+
+#[test]
+fn keyframes_rule_typed() {
+    // P2-14: @keyframes 类型化为 CssRule::Keyframes，from/to 块转
+    // CssKeyframeRule（不再是 CssRule::Style，避免 cascade 污染）。
+    let ss = parse_stylesheet("@keyframes fade { from { opacity: 0; } to { opacity: 1; } }");
+    let om = from_stylesheet(&ss);
+    match &om.css_rules[0] {
+        CssRule::Keyframes(r) => {
+            assert_eq!(r.name.as_deref(), Some("fade"));
+            assert_eq!(r.keyframes.len(), 2);
+            let key_texts: Vec<String> = r
+                .keyframes
+                .iter()
+                .map(|kf| {
+                    muskitty_cssom::serialize_component_values(&kf.key_text)
+                        .trim()
+                        .to_string()
+                })
+                .collect();
+            assert_eq!(key_texts, vec!["from", "to"]);
+            assert_eq!(r.keyframes[0].style.len(), 1);
+            assert_eq!(r.keyframes[0].style.declarations[0].name, "opacity");
+        }
+        other => panic!("expected Keyframes, got {:?}", other),
+    }
+}
+
+#[test]
+fn page_and_property_typed() {
+    let ss = parse_stylesheet("@page { margin: 1cm; } @property --foo { syntax: \"<length>\"; }");
+    let om = from_stylesheet(&ss);
+    assert!(matches!(om.css_rules[0], CssRule::Page(_)));
+    match &om.css_rules[1] {
+        CssRule::Property(r) => {
+            assert_eq!(r.name, "--foo");
+            assert_eq!(r.style.len(), 1);
+            assert_eq!(r.style.declarations[0].name, "syntax");
+        }
+        other => panic!("expected Property, got {:?}", other),
     }
 }
 
