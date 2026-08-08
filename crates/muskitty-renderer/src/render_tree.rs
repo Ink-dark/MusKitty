@@ -10,7 +10,7 @@
 
 use crate::color::Color;
 use crate::command::{Border, BorderStyle};
-use muskitty_cascade::{ComputedStyle, ComputedValue};
+use muskitty_cascade::ComputedStyle;
 use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
 use muskitty_layout::NodeLayout;
@@ -44,22 +44,12 @@ impl RenderTree {
 
 /// 从 ComputedStyle 提取 background-color。
 ///
-/// 未设置或无法解析时返回 `None`（调用方按透明处理）。
+/// 未设置或无法解析时返回 `None`（调用方按透明处理）。单态化（P2-20）后
+/// 值统一为 token 序列，`parse_color` 同时覆盖命名色/hex/rgb 函数与
+/// `transparent`（`parse_named_color` 内含），无需再按来源分支。
 pub fn extract_background_color(style: &ComputedStyle) -> Option<Color> {
     let cv = style.get("background-color")?;
-    match cv {
-        ComputedValue::Resolved(values) | ComputedValue::Raw(values) => {
-            crate::color::parse_color(values)
-        }
-        ComputedValue::Keyword(kw) => {
-            // 关键字值：可能是 "transparent" 或命名颜色
-            if kw.eq_ignore_ascii_case("transparent") {
-                Some(Color::TRANSPARENT)
-            } else {
-                crate::color::parse_named_color(kw)
-            }
-        }
-    }
+    crate::color::parse_color(cv.tokens())
 }
 
 /// 从 ComputedStyle 提取边框。
@@ -94,16 +84,7 @@ pub fn extract_border(style: &ComputedStyle) -> Option<Border> {
 /// 解析 `border-style` 关键字。
 fn parse_border_style(style: &ComputedStyle) -> Option<BorderStyle> {
     let cv = style.get("border-style")?;
-    let kw = match cv {
-        ComputedValue::Keyword(kw) => kw.as_str(),
-        ComputedValue::Resolved(values) | ComputedValue::Raw(values) => {
-            // 取首个 ident
-            values.iter().find_map(|v| match v {
-                ComponentValue::PreservedToken(Token::Ident(s)) => Some(s.as_str()),
-                _ => None,
-            })?
-        }
-    };
+    let kw = cv.keyword()?;
     match kw.to_ascii_lowercase().as_str() {
         "none" => Some(BorderStyle::None),
         "solid" => Some(BorderStyle::Solid),
@@ -118,12 +99,8 @@ fn parse_border_style(style: &ComputedStyle) -> Option<BorderStyle> {
 /// 当前仅支持 `<length>` 的 px 单位；其他单位（em/rem/pt）推迟。
 fn parse_border_width(style: &ComputedStyle) -> Option<f32> {
     let cv = style.get("border-width")?;
-    let values = match cv {
-        ComputedValue::Resolved(values) | ComputedValue::Raw(values) => values,
-        ComputedValue::Keyword(_) => return None,
-    };
     // 取首个 dimension token
-    for v in values {
+    for v in cv.tokens() {
         if let ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) = v {
             if unit.eq_ignore_ascii_case("px") {
                 return Some(numeric.value as f32);
@@ -137,16 +114,5 @@ fn parse_border_width(style: &ComputedStyle) -> Option<f32> {
 /// 解析 `border-color`。
 fn parse_border_color(style: &ComputedStyle) -> Option<Color> {
     let cv = style.get("border-color")?;
-    match cv {
-        ComputedValue::Resolved(values) | ComputedValue::Raw(values) => {
-            crate::color::parse_color(values)
-        }
-        ComputedValue::Keyword(kw) => {
-            if kw.eq_ignore_ascii_case("transparent") {
-                Some(Color::TRANSPARENT)
-            } else {
-                crate::color::parse_named_color(kw)
-            }
-        }
-    }
+    crate::color::parse_color(cv.tokens())
 }

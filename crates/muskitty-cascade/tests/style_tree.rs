@@ -6,7 +6,7 @@
 //!
 //! rem 用根元素 font-size 作基准，自根向下传播。
 
-use muskitty_cascade::{compute_styles, ComputedStyle, ComputedValue, StyleTreeOptions};
+use muskitty_cascade::{compute_styles, ComputedStyle, StyleTreeOptions};
 use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
 use muskitty_cssom::{from_stylesheet, Origin};
@@ -59,18 +59,14 @@ fn style_px(cs: &ComputedStyle, prop: &str) -> f64 {
     let cv = cs
         .get(prop)
         .unwrap_or_else(|| panic!("{prop} not in style"));
-    match cv {
-        ComputedValue::Resolved(cvs) => {
-            for v in cvs {
-                if let ComponentValue::PreservedToken(Token::Dimension(n, u)) = v {
-                    assert_eq!(u, "px", "expected px for {prop}");
-                    return n.value;
-                }
-            }
-            panic!("{prop} has no px dimension in {:?}", cvs);
+    let cvs = cv.tokens();
+    for v in cvs {
+        if let ComponentValue::PreservedToken(Token::Dimension(n, u)) = v {
+            assert_eq!(u, "px", "expected px for {prop}");
+            return n.value;
         }
-        other => panic!("expected Resolved for {prop}, got {:?}", other),
     }
+    panic!("{prop} has no px dimension in {:?}", cvs);
 }
 
 #[test]
@@ -154,17 +150,13 @@ fn style_ident(cs: &ComputedStyle, prop: &str) -> String {
     let cv = cs
         .get(prop)
         .unwrap_or_else(|| panic!("{prop} not in style"));
-    match cv {
-        ComputedValue::Resolved(cvs) => {
-            for v in cvs {
-                if let ComponentValue::PreservedToken(Token::Ident(s)) = v {
-                    return s.clone();
-                }
-            }
-            panic!("{prop} has no Ident in {:?}", cvs);
+    let cvs = cv.tokens();
+    for v in cvs {
+        if let ComponentValue::PreservedToken(Token::Ident(s)) = v {
+            return s.clone();
         }
-        other => panic!("expected Resolved for {prop}, got {:?}", other),
     }
+    panic!("{prop} has no Ident in {:?}", cvs);
 }
 
 // —— P2-4: CSS-wide 关键字不写入 `--*` 表 ——

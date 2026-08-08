@@ -246,7 +246,11 @@ fn compute_element_style<'a>(
 /// 对单个属性执行 defaulting + compute。
 ///
 /// cascade 胜者 → `apply_defaulting`（CSS-wide 关键字/继承/初始值）→
-/// 若是 `Raw` 中间态则 `compute_value_with` 解析相对单位与 var()。
+/// `compute_value_with` 解析相对单位与 var()。单态化（P2-20）后值统一为
+/// token 序列，defaulting 产物（关键字初始值、父计算值）再跑一次
+/// compute_value_with 是幂等的（px Dimension 与 Ident 均原样返回），
+/// 故不再区分 Raw/Keyword。
+///
 /// 值含无效 var()（`Err`）时按 unset 处理（css-variables-1 §3.1：
 /// invalid at computed-value time）：继承属性取父值、非继承属性取初始值
 /// —— 与未声明的 `apply_defaulting(property, None, parent)` 等价（P2-5）。
@@ -260,58 +264,50 @@ fn compute_one(
     let cascaded = winner.map(|w| w.value.as_slice());
     let parent_value = parent_style.and_then(|ps| ps.get(property));
     let specified = apply_defaulting(property, cascaded, parent_value);
-    match &specified {
-        ComputedValue::Raw(cvs) => match compute_value_with(property, cvs, ctx) {
-            Ok(computed) => computed,
-            Err(()) => apply_defaulting(property, None, parent_value),
-        },
-        _ => specified,
+    match compute_value_with(property, specified.tokens(), ctx) {
+        Ok(computed) => computed,
+        Err(()) => apply_defaulting(property, None, parent_value),
     }
 }
 
-/// 将 font-size 的 `Keyword` 值归一化为 px `Resolved`。
+/// 将 font-size 的关键字形态值归一化为 px Dimension。
 ///
-/// 关键字形态（`medium`、初始值数字字符串）说明该值来自 defaulting 而非
-/// 显式长度声明；CSS 语义下 font-size 的计算值是长度，故转成 px Dimension。
-/// 已是 `Resolved`/`Raw` 的（显式 px/em 等）原样保留。
+/// 单态化（P2-20）后关键字即 `[Ident(s)]`；关键字形态（`medium`、初始值）
+/// 说明该值来自 defaulting 而非显式长度声明，CSS 语义下 font-size 的计算值
+/// 是长度，故转成 px Dimension。已是 Dimension（显式 px/em 等解析结果）
+/// 的原样保留。
 fn normalize_font_size(cv: ComputedValue, px: f64) -> ComputedValue {
-    match cv {
-        ComputedValue::Keyword(_) => {
-            ComputedValue::Resolved(vec![ComponentValue::PreservedToken(Token::Dimension(
-                Numeric {
-                    value: px,
-                    is_integer: false,
-                },
-                "px".to_string(),
-            ))])
-        }
-        other => other,
+    if cv.keyword().is_some() {
+        ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Dimension(
+            Numeric {
+                value: px,
+                is_integer: false,
+            },
+            "px".to_string(),
+        ))])
+    } else {
+        cv
     }
 }
 
 /// 从 ComputedStyle 的 font-size 值提取 px 数值。
 ///
-/// - `Resolved`/`Raw`：取第一个 px Dimension。
-/// - `Keyword`：`medium`（=16px）或数字字符串（如初始值 "16px"）。
-/// - 其余返回 `None`（调用方回退到父 font-size）。
+/// 统一按 token 序列处理：优先取第一个 px Dimension；退化为单个 Ident
+/// 关键字时按 `medium`（=16px）或数字字符串解析。其余返回 `None`
+/// （调用方回退到父 font-size）。
 fn extract_font_size_px(cv: &ComputedValue) -> Option<f64> {
-    match cv {
-        ComputedValue::Resolved(cvs) | ComputedValue::Raw(cvs) => {
-            cvs.iter().find_map(|v| match v {
-                ComponentValue::PreservedToken(Token::Dimension(n, u))
-                    if u.eq_ignore_ascii_case("px") =>
-                {
-                    Some(n.value)
-                }
-                _ => None,
-            })
+    let cvs = cv.tokens();
+    if let Some(n) = cvs.iter().find_map(|v| match v {
+        ComponentValue::PreservedToken(Token::Dimension(n, u)) if u.eq_ignore_ascii_case("px") => {
+            Some(n.value)
         }
-        ComputedValue::Keyword(s) => {
-            if s.eq_ignore_ascii_case("medium") {
-                Some(DEFAULT_FONT_SIZE)
-            } else {
-                s.trim().parse::<f64>().ok()
-            }
-        }
+        _ => None,
+    }) {
+        return Some(n);
+    }
+    match cv.keyword() {
+        Some(s) if s.eq_ignore_ascii_case("medium") => Some(DEFAULT_FONT_SIZE),
+        Some(s) => s.trim().parse::<f64>().ok(),
+        None => None,
     }
 }

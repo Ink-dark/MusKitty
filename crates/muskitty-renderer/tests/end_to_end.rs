@@ -9,9 +9,7 @@
 //!
 //! 这是 muskitty-renderer 的「smoke test」：证明 DOM→CSS→Layout→Render 全链路打通。
 
-use muskitty_cascade::{
-    compute_styles as compute_styles_tree, ComputedStyle, ComputedValue, StyleTreeOptions,
-};
+use muskitty_cascade::{compute_styles as compute_styles_tree, ComputedStyle, StyleTreeOptions};
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::{Node, NodeKind};
@@ -134,14 +132,13 @@ fn assert_color_ident(
     let el = find_element_by_id(dom, id).unwrap_or_else(|| panic!("element #{id} not found"));
     let addr = Rc::as_ptr(el.inner()) as usize;
     let cs = &styles[&addr];
-    match cs.get("color") {
-        Some(ComputedValue::Resolved(cvs)) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(
-                muskitty_css::tokenizer::Token::Ident(s),
-            ) => assert_eq!(s, expected),
-            other => panic!("expected Ident, got {:?}", other),
-        },
-        other => panic!("expected Resolved color, got {:?}", other),
+    // 单态化（P2-20）：关键字/解析值统一为 token 序列，直接取首个 token。
+    let cvs = cs.get("color").expect("color not in style").tokens();
+    match &cvs[0] {
+        muskitty_css::parser::ComponentValue::PreservedToken(
+            muskitty_css::tokenizer::Token::Ident(s),
+        ) => assert_eq!(s, expected),
+        other => panic!("expected Ident, got {:?}", other),
     }
 }
 

@@ -29,12 +29,8 @@ pub fn apply_defaulting(
 ) -> ComputedValue {
     let def = lookup_property(property);
     let is_inherited = def.map(|d| d.inherited).unwrap_or(false);
-    let initial_keyword = || {
-        ComputedValue::Keyword(
-            def.map(|d| d.initial_value.to_string())
-                .unwrap_or_else(|| "initial".to_string()),
-        )
-    };
+    let initial_keyword =
+        || ComputedValue::from_keyword(def.map(|d| d.initial_value).unwrap_or("initial"));
 
     match cascaded {
         Some(cvs) => {
@@ -73,7 +69,7 @@ pub fn apply_defaulting(
                 }
             }
             // 普通值 → 原样返回（CC-6 compute_value 进一步处理）
-            ComputedValue::Raw(cvs.to_vec())
+            ComputedValue::from_tokens(cvs.to_vec())
         }
         // §7.1-7.2: cascade 无结果时的 defaulting
         None => {
@@ -117,7 +113,7 @@ mod tests {
     }
 
     fn parent_keyword(s: &str) -> ComputedValue {
-        ComputedValue::Keyword(s.to_string())
+        ComputedValue::from_keyword(s)
     }
 
     // §7.3.1: initial 关键字
@@ -126,20 +122,14 @@ mod tests {
     fn initial_keyword_returns_property_initial_value() {
         // color 的初始值是 "black"
         let result = apply_defaulting("color", Some(&ident("initial")), None);
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "black"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("black"));
     }
 
     #[test]
     fn initial_keyword_for_non_inherited_property() {
         // display 的初始值是 "inline"
         let result = apply_defaulting("display", Some(&ident("initial")), None);
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "inline"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("inline"));
     }
 
     // §7.3.2: inherit 关键字
@@ -148,20 +138,14 @@ mod tests {
     fn inherit_keyword_returns_parent_computed() {
         let parent = parent_keyword("red");
         let result = apply_defaulting("color", Some(&ident("inherit")), Some(&parent));
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "red"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("red"));
     }
 
     #[test]
     fn inherit_keyword_no_parent_falls_back_to_initial() {
         // 根元素无父 → 初始值
         let result = apply_defaulting("color", Some(&ident("inherit")), None);
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "black"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("black"));
     }
 
     // §7.3.3: unset 关键字
@@ -171,10 +155,7 @@ mod tests {
         // color 是继承属性 → unset 当 inherit
         let parent = parent_keyword("blue");
         let result = apply_defaulting("color", Some(&ident("unset")), Some(&parent));
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "blue"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("blue"));
     }
 
     #[test]
@@ -182,20 +163,14 @@ mod tests {
         // display 是非继承属性 → unset 当 initial
         let parent = parent_keyword("block");
         let result = apply_defaulting("display", Some(&ident("unset")), Some(&parent));
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "inline"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("inline"));
     }
 
     #[test]
     fn unset_on_inherited_no_parent_falls_back_to_initial() {
         // color 继承属性，无父 → 初始值
         let result = apply_defaulting("color", Some(&ident("unset")), None);
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "black"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("black"));
     }
 
     // §7.1-7.2: cascade 无结果时的 defaulting
@@ -204,30 +179,21 @@ mod tests {
     fn no_cascaded_value_inherited_property_inherits_from_parent() {
         let parent = parent_keyword("green");
         let result = apply_defaulting("color", None, Some(&parent));
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "green"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("green"));
     }
 
     #[test]
     fn no_cascaded_value_non_inherited_property_uses_initial() {
         let parent = parent_keyword("block");
         let result = apply_defaulting("display", None, Some(&parent));
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "inline"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("inline"));
     }
 
     #[test]
     fn no_cascaded_value_inherited_no_parent_uses_initial() {
         // 根元素，继承属性无父 → 初始值
         let result = apply_defaulting("color", None, None);
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "black"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("black"));
     }
 
     // 普通值透传
@@ -235,30 +201,21 @@ mod tests {
     #[test]
     fn normal_value_passes_through_as_raw() {
         let result = apply_defaulting("color", Some(&ident("red")), None);
-        match result {
-            ComputedValue::Raw(cvs) => assert_eq!(cvs.len(), 1),
-            other => panic!("expected Raw, got {:?}", other),
-        }
+        assert_eq!(result.tokens().len(), 1);
     }
 
     #[test]
     fn unknown_property_initial_keyword() {
         // 未注册属性 → 初始值回退为 "initial" 字符串
         let result = apply_defaulting("unknown-prop", Some(&ident("initial")), None);
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "initial"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("initial"));
     }
 
     #[test]
     fn keyword_case_insensitive() {
         // CSS 关键字大小写不敏感
         let result = apply_defaulting("color", Some(&ident("INITIAL")), None);
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "black"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("black"));
     }
 
     // §7.3.4/7.3.5: revert / revert-layer 关键字
@@ -268,20 +225,14 @@ mod tests {
         // Author-only pipeline：revert 回退的更低 origin 不存在 →
         // 当"无 cascaded value"处理（继承属性无父 → 初始值）
         let result = apply_defaulting("color", Some(&ident("revert")), None);
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "black"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("black"));
     }
 
     #[test]
     fn revert_acts_as_no_cascaded_value_inherited_with_parent() {
         let parent = parent_keyword("green");
         let result = apply_defaulting("color", Some(&ident("revert")), Some(&parent));
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "green"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("green"));
     }
 
     #[test]
@@ -289,19 +240,13 @@ mod tests {
         // 非继承属性 → 初始值
         let parent = parent_keyword("block");
         let result = apply_defaulting("display", Some(&ident("revert")), Some(&parent));
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "inline"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("inline"));
     }
 
     #[test]
     fn revert_layer_acts_as_no_cascaded_value() {
         let parent = parent_keyword("blue");
         let result = apply_defaulting("color", Some(&ident("revert-layer")), Some(&parent));
-        match result {
-            ComputedValue::Keyword(s) => assert_eq!(s, "blue"),
-            other => panic!("expected Keyword, got {:?}", other),
-        }
+        assert_eq!(result.keyword(), Some("blue"));
     }
 }

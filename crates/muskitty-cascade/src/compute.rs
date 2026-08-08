@@ -133,7 +133,7 @@ pub fn compute_value(
     ctx: &ComputeContext,
 ) -> ComputedValue {
     compute_value_with(property, specified, ctx)
-        .unwrap_or_else(|_| ComputedValue::Resolved(Vec::new()))
+        .unwrap_or_else(|_| ComputedValue::from_tokens(Vec::new()))
 }
 
 /// §4.4: 同 [`compute_value`]，但报告 invalid-at-computed-value。
@@ -153,7 +153,7 @@ pub fn compute_value_with(
 ) -> Result<ComputedValue, ()> {
     let mut resolver = VarResolver::new(ctx);
     let resolved = resolver.resolve_tokens(specified, property)?;
-    Ok(ComputedValue::Resolved(resolved))
+    Ok(ComputedValue::from_tokens(resolved))
 }
 
 /// 单个自定义属性的解析结果。
@@ -485,18 +485,14 @@ mod tests {
             ..empty_ctx()
         };
         let result = compute_value("margin-top", &[dim(2.0, "em")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert_eq!(cvs.len(), 1);
-                match &cvs[0] {
-                    ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                        assert_eq!(n.value, 40.0);
-                        assert_eq!(u, "px");
-                    }
-                    other => panic!("expected Dimension, got {:?}", other),
-                }
+        let cvs = result.tokens();
+        assert_eq!(cvs.len(), 1);
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
+                assert_eq!(n.value, 40.0);
+                assert_eq!(u, "px");
             }
-            other => panic!("expected Resolved, got {:?}", other),
+            other => panic!("expected Dimension, got {:?}", other),
         }
     }
 
@@ -507,15 +503,13 @@ mod tests {
             ..empty_ctx()
         };
         let result = compute_value("margin-top", &[dim(3.0, "rem")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => match &cvs[0] {
-                ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                    assert_eq!(n.value, 54.0);
-                    assert_eq!(u, "px");
-                }
-                other => panic!("expected Dimension, got {:?}", other),
-            },
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
+                assert_eq!(n.value, 54.0);
+                assert_eq!(u, "px");
+            }
+            other => panic!("expected Dimension, got {:?}", other),
         }
     }
 
@@ -526,14 +520,12 @@ mod tests {
             ..empty_ctx()
         };
         let result = compute_value("height", &[dim(50.0, "vh")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => match &cvs[0] {
-                ComponentValue::PreservedToken(Token::Dimension(n, _)) => {
-                    assert_eq!(n.value, 500.0);
-                }
-                other => panic!("expected Dimension, got {:?}", other),
-            },
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Dimension(n, _)) => {
+                assert_eq!(n.value, 500.0);
+            }
+            other => panic!("expected Dimension, got {:?}", other),
         }
     }
 
@@ -544,14 +536,12 @@ mod tests {
             ..empty_ctx()
         };
         let result = compute_value("width", &[dim(25.0, "vw")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => match &cvs[0] {
-                ComponentValue::PreservedToken(Token::Dimension(n, _)) => {
-                    assert_eq!(n.value, 200.0);
-                }
-                other => panic!("expected Dimension, got {:?}", other),
-            },
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Dimension(n, _)) => {
+                assert_eq!(n.value, 200.0);
+            }
+            other => panic!("expected Dimension, got {:?}", other),
         }
     }
 
@@ -564,40 +554,34 @@ mod tests {
         };
         // vmin = min(800, 600) = 600, 10vmin = 60px
         let result = compute_value("width", &[dim(10.0, "vmin")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => match &cvs[0] {
-                ComponentValue::PreservedToken(Token::Dimension(n, _)) => {
-                    assert_eq!(n.value, 60.0);
-                }
-                other => panic!("expected Dimension, got {:?}", other),
-            },
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Dimension(n, _)) => {
+                assert_eq!(n.value, 60.0);
+            }
+            other => panic!("expected Dimension, got {:?}", other),
         }
         // vmax = max(800, 600) = 800, 10vmax = 80px
         let result = compute_value("width", &[dim(10.0, "vmax")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => match &cvs[0] {
-                ComponentValue::PreservedToken(Token::Dimension(n, _)) => {
-                    assert_eq!(n.value, 80.0);
-                }
-                other => panic!("expected Dimension, got {:?}", other),
-            },
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Dimension(n, _)) => {
+                assert_eq!(n.value, 80.0);
+            }
+            other => panic!("expected Dimension, got {:?}", other),
         }
     }
 
     #[test]
     fn px_unit_preserved() {
         let result = compute_value("width", &[dim(100.0, "px")], &empty_ctx());
-        match result {
-            ComputedValue::Resolved(cvs) => match &cvs[0] {
-                ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                    assert_eq!(n.value, 100.0);
-                    assert_eq!(u, "px");
-                }
-                other => panic!("expected Dimension, got {:?}", other),
-            },
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
+                assert_eq!(n.value, 100.0);
+                assert_eq!(u, "px");
+            }
+            other => panic!("expected Dimension, got {:?}", other),
         }
     }
 
@@ -611,15 +595,13 @@ mod tests {
         };
         // font-size: 150% → 30px
         let result = compute_value("font-size", &[pct(150.0)], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => match &cvs[0] {
-                ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                    assert_eq!(n.value, 30.0);
-                    assert_eq!(u, "px");
-                }
-                other => panic!("expected Dimension, got {:?}", other),
-            },
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
+                assert_eq!(n.value, 30.0);
+                assert_eq!(u, "px");
+            }
+            other => panic!("expected Dimension, got {:?}", other),
         }
     }
 
@@ -627,14 +609,12 @@ mod tests {
     fn width_percentage_preserved() {
         // width 的百分比推迟到 layout — 原样保留
         let result = compute_value("width", &[pct(50.0)], &empty_ctx());
-        match result {
-            ComputedValue::Resolved(cvs) => match &cvs[0] {
-                ComponentValue::PreservedToken(Token::Percentage(n)) => {
-                    assert_eq!(n.value, 50.0);
-                }
-                other => panic!("expected Percentage, got {:?}", other),
-            },
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Percentage(n)) => {
+                assert_eq!(n.value, 50.0);
+            }
+            other => panic!("expected Percentage, got {:?}", other),
         }
     }
 
@@ -659,17 +639,13 @@ mod tests {
         });
 
         let result = compute_value("color", &[var_fn], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert_eq!(cvs.len(), 1);
-                match &cvs[0] {
-                    ComponentValue::PreservedToken(Token::Ident(s)) => {
-                        assert_eq!(s, "red");
-                    }
-                    other => panic!("expected Ident, got {:?}", other),
-                }
+        let cvs = result.tokens();
+        assert_eq!(cvs.len(), 1);
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Ident(s)) => {
+                assert_eq!(s, "red");
             }
-            other => panic!("expected Resolved, got {:?}", other),
+            other => panic!("expected Ident, got {:?}", other),
         }
     }
 
@@ -689,20 +665,16 @@ mod tests {
         });
 
         let result = compute_value("color", &[var_fn], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                // Whitespace is preserved in fallback
-                let idents: Vec<_> = cvs
-                    .iter()
-                    .filter_map(|cv| match cv {
-                        ComponentValue::PreservedToken(Token::Ident(s)) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .collect();
-                assert!(idents.contains(&"blue".to_string()));
-            }
-            other => panic!("expected Resolved, got {:?}", other),
-        }
+        let cvs = result.tokens();
+        // Whitespace is preserved in fallback
+        let idents: Vec<_> = cvs
+            .iter()
+            .filter_map(|cv| match cv {
+                ComponentValue::PreservedToken(Token::Ident(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(idents.contains(&"blue".to_string()));
     }
 
     #[test]
@@ -723,15 +695,13 @@ mod tests {
 
         // var(--gap) where --gap = 2em, parent font-size = 20px → 40px
         let result = compute_value("margin-top", &[var_fn], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => match &cvs[0] {
-                ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                    assert_eq!(n.value, 40.0);
-                    assert_eq!(u, "px");
-                }
-                other => panic!("expected Dimension, got {:?}", other),
-            },
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
+                assert_eq!(n.value, 40.0);
+                assert_eq!(u, "px");
+            }
+            other => panic!("expected Dimension, got {:?}", other),
         }
     }
 
@@ -753,12 +723,10 @@ mod tests {
         props.insert("--a".to_string(), vec![var_fn("--a")]);
         let ctx = ctx_with_custom(&props);
         let result = compute_value("color", &[var_fn("--a")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert!(cvs.is_empty(), "self-cycle must resolve to empty");
-            }
-            other => panic!("expected Resolved, got {:?}", other),
-        }
+        assert!(
+            result.tokens().is_empty(),
+            "self-cycle must resolve to empty"
+        );
     }
 
     #[test]
@@ -769,12 +737,10 @@ mod tests {
         props.insert("--b".to_string(), vec![var_fn("--a")]);
         let ctx = ctx_with_custom(&props);
         let result = compute_value("color", &[var_fn("--a")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert!(cvs.is_empty(), "two-cycle must resolve to empty");
-            }
-            other => panic!("expected Resolved, got {:?}", other),
-        }
+        assert!(
+            result.tokens().is_empty(),
+            "two-cycle must resolve to empty"
+        );
     }
 
     #[test]
@@ -786,12 +752,10 @@ mod tests {
         props.insert("--c".to_string(), vec![var_fn("--a")]);
         let ctx = ctx_with_custom(&props);
         let result = compute_value("color", &[var_fn("--a")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert!(cvs.is_empty(), "triangle-cycle must resolve to empty");
-            }
-            other => panic!("expected Resolved, got {:?}", other),
-        }
+        assert!(
+            result.tokens().is_empty(),
+            "triangle-cycle must resolve to empty"
+        );
     }
 
     #[test]
@@ -807,15 +771,11 @@ mod tests {
         );
         let ctx = ctx_with_custom(&props);
         let result = compute_value("color", &[var_fn("--a")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert_eq!(cvs.len(), 1);
-                match &cvs[0] {
-                    ComponentValue::PreservedToken(Token::Ident(s)) => assert_eq!(s, "red"),
-                    other => panic!("expected Ident, got {:?}", other),
-                }
-            }
-            other => panic!("expected Resolved, got {:?}", other),
+        let cvs = result.tokens();
+        assert_eq!(cvs.len(), 1);
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Ident(s)) => assert_eq!(s, "red"),
+            other => panic!("expected Ident, got {:?}", other),
         }
     }
 
@@ -832,22 +792,18 @@ mod tests {
         );
         let ctx = ctx_with_custom(&props);
         let result = compute_value("color", &[var_fn("--a")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert_eq!(cvs.len(), 2);
-                let reds = cvs
-                    .iter()
-                    .filter(|cv| {
-                        matches!(
-                            cv,
-                            ComponentValue::PreservedToken(Token::Ident(s)) if s == "red"
-                        )
-                    })
-                    .count();
-                assert_eq!(reds, 2);
-            }
-            other => panic!("expected Resolved, got {:?}", other),
-        }
+        let cvs = result.tokens();
+        assert_eq!(cvs.len(), 2);
+        let reds = cvs
+            .iter()
+            .filter(|cv| {
+                matches!(
+                    cv,
+                    ComponentValue::PreservedToken(Token::Ident(s)) if s == "red"
+                )
+            })
+            .count();
+        assert_eq!(reds, 2);
     }
 
     // —— var() 记忆化（P1-1 / PERF-3）与 invalid-at-computed-value（P2-5）——
@@ -884,22 +840,18 @@ mod tests {
         }
         let ctx = ctx_with_custom(&props);
         let result = compute_value("color", &[var_fn(&format!("--v{}", N))], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert_eq!(cvs.len(), 1 << N, "doubling chain expands to 2^N tokens");
-                let reds = cvs
-                    .iter()
-                    .filter(|cv| {
-                        matches!(
-                            cv,
-                            ComponentValue::PreservedToken(Token::Ident(s)) if s == "red"
-                        )
-                    })
-                    .count();
-                assert_eq!(reds, 1 << N, "all tokens must be `red`");
-            }
-            other => panic!("expected Resolved, got {:?}", other),
-        }
+        let cvs = result.tokens();
+        assert_eq!(cvs.len(), 1 << N, "doubling chain expands to 2^N tokens");
+        let reds = cvs
+            .iter()
+            .filter(|cv| {
+                matches!(
+                    cv,
+                    ComponentValue::PreservedToken(Token::Ident(s)) if s == "red"
+                )
+            })
+            .count();
+        assert_eq!(reds, 1 << N, "all tokens must be `red`");
     }
 
     #[test]
@@ -913,23 +865,19 @@ mod tests {
         props.insert("--b".to_string(), vec![var_fn_fb("--a", "blue")]);
         let ctx = ctx_with_custom(&props);
         let result = compute_value("color", &[var_fn("--a")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                let idents: Vec<_> = cvs
-                    .iter()
-                    .filter_map(|cv| match cv {
-                        ComponentValue::PreservedToken(Token::Ident(s)) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .collect();
-                assert!(
-                    idents.iter().any(|s| s == "blue"),
-                    "expected fallback blue, got {:?}",
-                    idents
-                );
-            }
-            other => panic!("expected Resolved, got {:?}", other),
-        }
+        let cvs = result.tokens();
+        let idents: Vec<_> = cvs
+            .iter()
+            .filter_map(|cv| match cv {
+                ComponentValue::PreservedToken(Token::Ident(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            idents.iter().any(|s| s == "blue"),
+            "expected fallback blue, got {:?}",
+            idents
+        );
     }
 
     #[test]
@@ -938,19 +886,15 @@ mod tests {
         let props = HashMap::new();
         let ctx = ctx_with_custom(&props);
         let result = compute_value("color", &[var_fn_fb("--nope", "green")], &ctx);
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert!(
-                    cvs.iter().any(|cv| matches!(
-                        cv,
-                        ComponentValue::PreservedToken(Token::Ident(s)) if s == "green"
-                    )),
-                    "expected fallback green, got {:?}",
-                    cvs
-                );
-            }
-            other => panic!("expected Resolved, got {:?}", other),
-        }
+        let cvs = result.tokens();
+        assert!(
+            cvs.iter().any(|cv| matches!(
+                cv,
+                ComponentValue::PreservedToken(Token::Ident(s)) if s == "green"
+            )),
+            "expected fallback green, got {:?}",
+            cvs
+        );
     }
 
     #[test]
@@ -968,8 +912,8 @@ mod tests {
             compute_value_with("color", &[bad], &ctx).is_err(),
             "var(color) must be Err via compute_value_with"
         );
-        // 兼容包装：compute_value 对该场景返回空 Resolved（旧行为）
-        match compute_value(
+        // 兼容包装：compute_value 对该场景返回空 tokens（旧行为）
+        let empty = compute_value(
             "color",
             &[ComponentValue::Function(Function {
                 name: "var".to_string(),
@@ -978,10 +922,8 @@ mod tests {
                 ))],
             })],
             &ctx,
-        ) {
-            ComputedValue::Resolved(cvs) => assert!(cvs.is_empty()),
-            other => panic!("expected empty Resolved, got {:?}", other),
-        }
+        );
+        assert!(empty.tokens().is_empty());
     }
 
     // —— 混合值 ——
@@ -990,17 +932,13 @@ mod tests {
     fn keyword_value_preserved() {
         let id = ComponentValue::PreservedToken(Token::Ident("auto".to_string()));
         let result = compute_value("width", &[id], &empty_ctx());
-        match result {
-            ComputedValue::Resolved(cvs) => {
-                assert_eq!(cvs.len(), 1);
-                match &cvs[0] {
-                    ComponentValue::PreservedToken(Token::Ident(s)) => {
-                        assert_eq!(s, "auto");
-                    }
-                    other => panic!("expected Ident, got {:?}", other),
-                }
+        let cvs = result.tokens();
+        assert_eq!(cvs.len(), 1);
+        match &cvs[0] {
+            ComponentValue::PreservedToken(Token::Ident(s)) => {
+                assert_eq!(s, "auto");
             }
-            other => panic!("expected Resolved, got {:?}", other),
+            other => panic!("expected Ident, got {:?}", other),
         }
     }
 }

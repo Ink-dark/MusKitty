@@ -1,6 +1,7 @@
 //! §4.1 DeclaredValue + §4.4 ComputedValue + ComputedStyle。
 
 use muskitty_css::parser::ComponentValue;
+use muskitty_css::tokenizer::Token;
 use muskitty_cssom::Origin;
 use muskitty_selectors::Specificity;
 
@@ -29,14 +30,39 @@ pub struct DeclaredValue {
 }
 
 /// §4.4: Computed value（cascade 输出）。
+///
+/// 单态：三态（Keyword/Raw/Resolved）合并为统一 token 序列（P2-20）。
+/// 关键字值即 `[Ident(s)]`；相对单位已解析为 px 的 Dimension；无法解析的
+/// 原始值原样保留 component values。下游一律按 token 序列消费，不再区分
+/// 值来源。
 #[derive(Debug, Clone)]
-pub enum ComputedValue {
-    /// 已解析为绝对值（相对单位已转换）。
-    Resolved(Vec<ComponentValue>),
-    /// 关键字值（如 "auto"、"none"）。
-    Keyword(String),
-    /// 未识别的属性值（原样保留 component values）。
-    Raw(Vec<ComponentValue>),
+pub struct ComputedValue(pub Vec<ComponentValue>);
+
+impl ComputedValue {
+    /// 从关键字构造（`[Ident(s)]`）。
+    pub fn from_keyword(s: &str) -> Self {
+        Self(vec![ComponentValue::PreservedToken(Token::Ident(
+            s.to_string(),
+        ))])
+    }
+
+    /// 从 component value 列表构造。
+    pub fn from_tokens(tokens: Vec<ComponentValue>) -> Self {
+        Self(tokens)
+    }
+
+    /// 底层 token 序列。
+    pub fn tokens(&self) -> &[ComponentValue] {
+        &self.0
+    }
+
+    /// 取首个 Ident 关键字（`None` 若无 ident token）。
+    pub fn keyword(&self) -> Option<&str> {
+        self.0.iter().find_map(|cv| match cv {
+            ComponentValue::PreservedToken(Token::Ident(s)) => Some(s.as_str()),
+            _ => None,
+        })
+    }
 }
 
 /// 每元素的 computed style 表。

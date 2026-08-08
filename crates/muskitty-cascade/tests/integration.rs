@@ -52,9 +52,20 @@ fn compute_property(
     let winner = cascade_winner(group);
     let cascaded = winner.map(|w| w.value.as_slice());
     let specified = apply_defaulting(property, cascaded, parent_computed);
-    match &specified {
-        ComputedValue::Raw(cvs) => compute_value(property, cvs, ctx),
-        _ => specified,
+    // 单态化（P2-20）：defaulting 产物与原始声明统一为 token 序列，直接
+    // 计算（幂等），不再区分 Raw/Keyword 来源。
+    compute_value(property, specified.tokens(), ctx)
+}
+
+/// 断言 computed value 首 token 为 `value unit` 的 Dimension（如 40px）。
+fn assert_dimension(cv: &ComputedValue, value: f64, unit: &str) {
+    let cvs = cv.tokens();
+    match &cvs[0] {
+        muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
+            assert_eq!(n.value, value);
+            assert_eq!(u, unit);
+        }
+        other => panic!("expected Dimension, got {:?}", other),
     }
 }
 
@@ -74,18 +85,8 @@ fn single_rule_single_property() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => {
-            assert_eq!(cvs.len(), 1);
-            match &cvs[0] {
-                muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                    assert_eq!(s, "red");
-                }
-                other => panic!("expected Ident, got {:?}", other),
-            }
-        }
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.tokens().len(), 1);
+    assert_eq!(result.keyword(), Some("red"));
 }
 
 #[test]
@@ -95,15 +96,7 @@ fn higher_specificity_wins() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "blue"); // #main 的特异性更高
-            }
-            other => panic!("expected Ident, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("blue")); // #main 的特异性更高
 }
 
 #[test]
@@ -116,15 +109,7 @@ fn important_beats_normal() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "blue"); // !important 胜出
-            }
-            other => panic!("expected Ident, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("blue")); // !important 胜出
 }
 
 #[test]
@@ -134,15 +119,7 @@ fn later_declaration_wins_on_tie() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "green"); // 后出现的胜出
-            }
-            other => panic!("expected Ident, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("green")); // 后出现的胜出
 }
 
 // —— Defaulting ——
@@ -155,10 +132,7 @@ fn no_declaration_uses_initial_value() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Keyword(s) => assert_eq!(s, "black"),
-        other => panic!("expected Keyword 'black', got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("black"));
 }
 
 #[test]
@@ -167,13 +141,10 @@ fn inherited_property_inherits_from_parent() {
     let element = make_element("div", &[]);
     let sheet = make_sheet("div { font-size: 16px; }", Origin::Author);
     let ctx = default_ctx();
-    let parent_color = ComputedValue::Keyword("red".to_string());
+    let parent_color = ComputedValue::from_keyword("red");
 
     let result = compute_property(&element, &[sheet], "color", Some(&parent_color), &ctx);
-    match result {
-        ComputedValue::Keyword(s) => assert_eq!(s, "red"),
-        other => panic!("expected Keyword 'red', got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("red"));
 }
 
 #[test]
@@ -181,13 +152,10 @@ fn initial_keyword_resets_to_initial() {
     let element = make_element("div", &[]);
     let sheet = make_sheet("div { color: initial; }", Origin::Author);
     let ctx = default_ctx();
-    let parent_color = ComputedValue::Keyword("red".to_string());
+    let parent_color = ComputedValue::from_keyword("red");
 
     let result = compute_property(&element, &[sheet], "color", Some(&parent_color), &ctx);
-    match result {
-        ComputedValue::Keyword(s) => assert_eq!(s, "black"),
-        other => panic!("expected Keyword 'black', got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("black"));
 }
 
 #[test]
@@ -195,13 +163,10 @@ fn inherit_keyword_explicitly_inherits() {
     let element = make_element("div", &[]);
     let sheet = make_sheet("div { color: inherit; }", Origin::Author);
     let ctx = default_ctx();
-    let parent_color = ComputedValue::Keyword("blue".to_string());
+    let parent_color = ComputedValue::from_keyword("blue");
 
     let result = compute_property(&element, &[sheet], "color", Some(&parent_color), &ctx);
-    match result {
-        ComputedValue::Keyword(s) => assert_eq!(s, "blue"),
-        other => panic!("expected Keyword 'blue', got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("blue"));
 }
 
 // —— 相对单位解析 ——
@@ -216,16 +181,7 @@ fn em_resolves_in_full_pipeline() {
     };
 
     let result = compute_property(&element, &[sheet], "margin-top", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                assert_eq!(n.value, 40.0); // 2em * 20px = 40px
-                assert_eq!(u, "px");
-            }
-            other => panic!("expected Dimension, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_dimension(&result, 40.0, "px"); // 2em * 20px = 40px
 }
 
 #[test]
@@ -238,16 +194,7 @@ fn font_size_percentage_resolves_in_full_pipeline() {
     };
 
     let result = compute_property(&element, &[sheet], "font-size", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                assert_eq!(n.value, 30.0); // 150% * 20px = 30px
-                assert_eq!(u, "px");
-            }
-            other => panic!("expected Dimension, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_dimension(&result, 30.0, "px"); // 150% * 20px = 30px
 }
 
 // —— 多 origin ——
@@ -260,15 +207,7 @@ fn author_beats_user_agent() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[ua_sheet, author_sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "red"); // Author 胜出
-            }
-            other => panic!("expected Ident, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("red")); // Author 胜出
 }
 
 #[test]
@@ -279,15 +218,7 @@ fn important_ua_beats_important_author() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[ua_sheet, author_sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "gray"); // Important UA 胜出
-            }
-            other => panic!("expected Ident, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("gray")); // Important UA 胜出
 }
 
 // —— 多属性 ——
@@ -304,40 +235,15 @@ fn multiple_properties_computed() {
 
     // color
     let color = compute_property(&element, &sheets, "color", None, &ctx);
-    match color {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "red");
-            }
-            other => panic!("expected Ident, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(color.keyword(), Some("red"));
 
     // font-size
     let font_size = compute_property(&element, &sheets, "font-size", None, &ctx);
-    match font_size {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                assert_eq!(n.value, 16.0);
-                assert_eq!(u, "px");
-            }
-            other => panic!("expected Dimension, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_dimension(&font_size, 16.0, "px");
 
     // display
     let display = compute_property(&element, &sheets, "display", None, &ctx);
-    match display {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "block");
-            }
-            other => panic!("expected Ident, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(display.keyword(), Some("block"));
 }
 
 // —— var() 全链路 ——
@@ -356,15 +262,7 @@ fn var_in_full_pipeline() {
     let ctx = ComputeContext::new(&props);
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "blue");
-            }
-            other => panic!("expected Ident 'blue', got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("blue"));
 }
 
 // —— Cascade Layers（P1-3）——
@@ -380,15 +278,7 @@ fn unlayered_normal_beats_layered_normal_in_pipeline() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "red");
-            }
-            other => panic!("expected Ident 'red', got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("red"));
 }
 
 #[test]
@@ -402,15 +292,7 @@ fn earlier_layer_wins_for_important_in_pipeline() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "red");
-            }
-            other => panic!("expected Ident 'red', got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("red"));
 }
 
 #[test]
@@ -424,15 +306,7 @@ fn later_layer_wins_for_normal_in_pipeline() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "blue");
-            }
-            other => panic!("expected Ident 'blue', got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("blue"));
 }
 
 // —— 属性名大小写 + 未知属性（P2-2/P2-21）——
@@ -445,15 +319,7 @@ fn case_insensitive_property_name_collected() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
-                assert_eq!(s, "red");
-            }
-            other => panic!("expected Ident 'red', got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("red"));
 }
 
 #[test]
@@ -488,16 +354,7 @@ fn gap_shorthand_overrides_column_gap() {
     let ctx = default_ctx();
 
     let result = compute_property(&element, &[sheet], "column-gap", None, &ctx);
-    match result {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                assert_eq!(n.value, 10.0);
-                assert_eq!(u, "px");
-            }
-            other => panic!("expected Dimension 10px, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_dimension(&result, 10.0, "px");
 }
 
 #[test]
@@ -508,28 +365,10 @@ fn gap_shorthand_two_values_split() {
     let ctx = default_ctx();
 
     let row = compute_property(&element, &[sheet.clone()], "row-gap", None, &ctx);
-    match row {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                assert_eq!(n.value, 10.0);
-                assert_eq!(u, "px");
-            }
-            other => panic!("expected Dimension 10px, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_dimension(&row, 10.0, "px");
 
     let col = compute_property(&element, &[sheet], "column-gap", None, &ctx);
-    match col {
-        ComputedValue::Resolved(cvs) => match &cvs[0] {
-            muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
-                assert_eq!(n.value, 20.0);
-                assert_eq!(u, "px");
-            }
-            other => panic!("expected Dimension 20px, got {:?}", other),
-        },
-        other => panic!("expected Resolved, got {:?}", other),
-    }
+    assert_dimension(&col, 20.0, "px");
 }
 
 #[test]
@@ -555,8 +394,5 @@ fn non_matching_selector_falls_back_to_initial() {
 
     // span 不匹配 div 选择器 → 无声明 → 初始值 "black"
     let result = compute_property(&element, &[sheet], "color", None, &ctx);
-    match result {
-        ComputedValue::Keyword(s) => assert_eq!(s, "black"),
-        other => panic!("expected Keyword 'black', got {:?}", other),
-    }
+    assert_eq!(result.keyword(), Some("black"));
 }
