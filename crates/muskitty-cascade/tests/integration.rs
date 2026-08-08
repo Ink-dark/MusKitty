@@ -367,6 +367,74 @@ fn var_in_full_pipeline() {
     }
 }
 
+// —— Cascade Layers（P1-3）——
+
+#[test]
+fn unlayered_normal_beats_layered_normal_in_pipeline() {
+    // §6.1 准则 5: 未分层 normal 声明胜过分层 normal（隐式 final 层）
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "div { color: red; } @layer a { div { color: blue; } }",
+        Origin::Author,
+    );
+    let ctx = default_ctx();
+
+    let result = compute_property(&element, &[sheet], "color", None, &ctx);
+    match result {
+        ComputedValue::Resolved(cvs) => match &cvs[0] {
+            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
+                assert_eq!(s, "red");
+            }
+            other => panic!("expected Ident 'red', got {:?}", other),
+        },
+        other => panic!("expected Resolved, got {:?}", other),
+    }
+}
+
+#[test]
+fn earlier_layer_wins_for_important_in_pipeline() {
+    // §6.1 准则 5: important 声明早层胜
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@layer a { div { color: red !important; } } @layer b { div { color: blue !important; } }",
+        Origin::Author,
+    );
+    let ctx = default_ctx();
+
+    let result = compute_property(&element, &[sheet], "color", None, &ctx);
+    match result {
+        ComputedValue::Resolved(cvs) => match &cvs[0] {
+            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
+                assert_eq!(s, "red");
+            }
+            other => panic!("expected Ident 'red', got {:?}", other),
+        },
+        other => panic!("expected Resolved, got {:?}", other),
+    }
+}
+
+#[test]
+fn later_layer_wins_for_normal_in_pipeline() {
+    // §6.1 准则 5: normal 声明晚层胜
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@layer a { div { color: red; } } @layer b { div { color: blue; } }",
+        Origin::Author,
+    );
+    let ctx = default_ctx();
+
+    let result = compute_property(&element, &[sheet], "color", None, &ctx);
+    match result {
+        ComputedValue::Resolved(cvs) => match &cvs[0] {
+            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
+                assert_eq!(s, "blue");
+            }
+            other => panic!("expected Ident 'blue', got {:?}", other),
+        },
+        other => panic!("expected Resolved, got {:?}", other),
+    }
+}
+
 // —— 非匹配选择器 → defaulting ——
 
 #[test]

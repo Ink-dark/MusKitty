@@ -41,6 +41,8 @@ struct PreparedRule {
     specificity: Specificity,
     /// 来源 origin。
     origin: Origin,
+    /// 所属 @layer 的全局序号（P1-3）；`None` = 未分层。
+    layer_order: Option<usize>,
     /// 声明块（元素无关，prepare 时克隆）。
     declarations: Vec<PreparedDecl>,
 }
@@ -58,16 +60,82 @@ struct PreparedDecl {
 /// 嵌套子 rules 递归、条件组（@media/@supports/@container/@layer）
 /// 无条件穿过、import/namespace 跳过。选择器解析失败的 rule 跳过但
 /// 仍递归其子 rules（与旧版行为一致）。
+///
+/// P1-3：跨全部 sheets 按文档序为每个 @layer 名分配全局序号（首次出现
+/// 定序），风格规则携带其所属层的序号。
 pub fn prepare_sheets(sheets: &[CssStyleSheet]) -> PreparedSheets {
     let mut rules = Vec::new();
+    let mut layers = LayerTracker::new();
     for sheet in sheets {
-        prepare_rules(&sheet.css_rules, sheet.origin, &mut rules);
+        prepare_rules(&sheet.css_rules, sheet.origin, &mut layers, &mut rules);
     }
     PreparedSheets { rules }
 }
 
+/// @layer 全局序号分配器（P1-3）。
+///
+/// 按文档序首次出现的层名分配递增序号；匿名层每次出现分配新序号。
+/// 嵌套层采用扁平近似（`docs/audit-2026-08-08-full-scan.md` P1-3）：内层
+/// 块以其自身名/匿名身份获得独立序号，不拼接父层名。
+struct LayerTracker {
+    /// 已见层名 → 序号。
+    by_name: std::collections::HashMap<String, usize>,
+    /// 下一个待分配的序号。
+    next: usize,
+    /// 当前嵌套层序号栈（`None` 不入栈；栈空 = 顶层）。
+    stack: Vec<Option<usize>>,
+}
+
+impl LayerTracker {
+    fn new() -> Self {
+        Self {
+            by_name: std::collections::HashMap::new(),
+            next: 0,
+            stack: Vec::new(),
+        }
+    }
+
+    /// 声明（或再次引用）一个层，返回其全局序号。首次出现分配新序号；
+    /// 匿名层（`None`）总是分配新序号。
+    fn declare(&mut self, name: Option<&str>) -> usize {
+        match name {
+            Some(n) => *self.by_name.entry(n.to_string()).or_insert_with(|| {
+                let i = self.next;
+                self.next += 1;
+                i
+            }),
+            None => {
+                let i = self.next;
+                self.next += 1;
+                i
+            }
+        }
+    }
+
+    /// 进入一个层块：登记序号并压栈。
+    fn enter(&mut self, name: Option<&str>) {
+        let idx = self.declare(name);
+        self.stack.push(Some(idx));
+    }
+
+    /// 退出当前层块。
+    fn exit(&mut self) {
+        self.stack.pop();
+    }
+
+    /// 当前层序号（顶层 = `None`）。
+    fn current(&self) -> Option<usize> {
+        self.stack.last().copied().flatten()
+    }
+}
+
 /// 递归遍历 rules，构建扁平化的 [`PreparedRule`] 列表。
-fn prepare_rules(rules: &[CssRule], origin: Origin, out: &mut Vec<PreparedRule>) {
+fn prepare_rules(
+    rules: &[CssRule],
+    origin: Origin,
+    layers: &mut LayerTracker,
+    out: &mut Vec<PreparedRule>,
+) {
     for rule in rules {
         match rule {
             CssRule::Style(style_rule) => {
@@ -89,30 +157,40 @@ fn prepare_rules(rules: &[CssRule], origin: Origin, out: &mut Vec<PreparedRule>)
                         selector_list,
                         specificity,
                         origin,
+                        layer_order: layers.current(),
                         declarations,
                     });
                 }
                 // 递归处理 CSS nesting 子 rules
-                prepare_rules(&style_rule.css_rules, origin, out);
+                prepare_rules(&style_rule.css_rules, origin, layers, out);
             }
             CssRule::Media(r) => {
                 // 简化：无条件收集（条件评估推迟）
-                prepare_rules(&r.css_rules, origin, out);
+                prepare_rules(&r.css_rules, origin, layers, out);
             }
             CssRule::Supports(r) => {
-                prepare_rules(&r.css_rules, origin, out);
+                prepare_rules(&r.css_rules, origin, layers, out);
             }
             CssRule::Container(r) => {
-                prepare_rules(&r.css_rules, origin, out);
+                prepare_rules(&r.css_rules, origin, layers, out);
             }
             CssRule::LayerBlock(r) => {
-                prepare_rules(&r.css_rules, origin, out);
+                // P1-3: 进入层块，层内规则携带该层序号
+                layers.enter(r.name.as_deref());
+                prepare_rules(&r.css_rules, origin, layers, out);
+                layers.exit();
+            }
+            CssRule::LayerStatement(r) => {
+                // P1-3: statement 形式声明层名（定序），无子规则
+                for name in &r.names {
+                    layers.declare(Some(name));
+                }
             }
             CssRule::Other(r) => {
-                prepare_rules(&r.child_rules, origin, out);
+                prepare_rules(&r.child_rules, origin, layers, out);
             }
             // 非样式 rule 跳过
-            CssRule::Import(_) | CssRule::Namespace(_) | CssRule::LayerStatement(_) => {}
+            CssRule::Import(_) | CssRule::Namespace(_) => {}
         }
     }
 }
@@ -161,6 +239,7 @@ pub fn collect_declared_values_prepared(
                     specificity: rule.specificity,
                     order,
                     from_style_attr: false,
+                    layer_order: rule.layer_order,
                 });
             }
         }
@@ -203,6 +282,8 @@ fn collect_from_style_attr(
                     specificity,
                     order: *order,
                     from_style_attr: true,
+                    // inline style 不在任何 @layer 内
+                    layer_order: None,
                 });
             }
         }

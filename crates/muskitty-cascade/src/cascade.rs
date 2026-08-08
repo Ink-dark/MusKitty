@@ -2,11 +2,12 @@
 //!
 //! 规范源: `d:\csswg\css-cascade-5\Overview.md` §6.1 L855-994
 //!
-//! 按 4 个准则降序排序 declared values（推迟了 Context/Scope/Layers）：
+//! 按 5 个准则降序排序 declared values（推迟了 Context/Scope）：
 //! 1. Origin and Importance（§6.1 准则 1）
 //! 2. Element-Attached Styles（§6.1 准则 4）
-//! 3. Specificity（§6.1 准则 6）
-//! 4. Order of Appearance（§6.1 准则 7）
+//! 3. Cascade Layers（§6.1 准则 5，P1-3）
+//! 4. Specificity（§6.1 准则 6）
+//! 5. Order of Appearance（§6.1 准则 7）
 //!
 //! 输出是按属性分组的有序列表（首项为 cascade 胜出者）。
 //! 保留完整列表是为了支持 `revert*` 关键字（推迟）。
@@ -43,9 +44,10 @@ pub fn cascade_winner(group: &[DeclaredValue]) -> Option<&DeclaredValue> {
 /// 返回 tuple，按 lexicographic 降序比较：
 /// 1. Origin × Importance（6 级）
 /// 2. Element-Attached Styles（style attr 优先）
-/// 3. Specificity（(A, B, C) 降序）
-/// 4. Order（文档序，后出现的优先）
-fn cascade_sort_key(d: &DeclaredValue) -> (u8, u8, (u32, u32, u32), usize) {
+/// 3. Layers（normal 晚层胜、important 早层胜、未分层 normal 全胜 / 未分层 important 全败）
+/// 4. Specificity（(A, B, C) 降序）
+/// 5. Order（文档序，后出现的优先）
+fn cascade_sort_key(d: &DeclaredValue) -> (u8, u8, i64, (u32, u32, u32), usize) {
     // §6.1 准则 1: Origin and Importance
     // 优先级从高到低（推迟 Transition/Animation）：
     //   Important UA (6) > Important User (5) > Important Author (4)
@@ -62,13 +64,24 @@ fn cascade_sort_key(d: &DeclaredValue) -> (u8, u8, (u32, u32, u32), usize) {
     // §6.1 准则 4: Element-Attached Styles
     let style_attr: u8 = if d.from_style_attr { 1 } else { 0 };
 
+    // §6.1 准则 5: Cascade Layers（P1-3）
+    // normal：层序号大的（晚）胜；未分层（None）最大 → 全胜（隐式 final 层）。
+    // important：层序号小的（早）胜（取负）；未分层最小 → 全败（隐式首层）。
+    // 降序比较下，key 越大越优先。
+    let layer_key: i64 = match d.layer_order {
+        Some(i) if d.important => -(i as i64),
+        Some(i) => i as i64,
+        None if d.important => i64::MIN,
+        None => i64::MAX,
+    };
+
     // §6.1 准则 6: Specificity
     let spec = (d.specificity.a, d.specificity.b, d.specificity.c);
 
     // §6.1 准则 7: Order of Appearance（后出现的胜出，大值优先）
     let order = d.order;
 
-    (origin_importance, style_attr, spec, order)
+    (origin_importance, style_attr, layer_key, spec, order)
 }
 
 #[cfg(test)]
@@ -95,6 +108,7 @@ mod tests {
             specificity,
             order,
             from_style_attr: false,
+            layer_order: None,
         }
     }
 
@@ -213,6 +227,58 @@ mod tests {
         let groups = cascade_for_element(declared);
         let winner = cascade_winner(&groups["color"]).unwrap();
         assert_eq!(winner.order, 2);
+    }
+
+    // §6.1 准则 5: Cascade Layers（P1-3）
+
+    #[test]
+    fn unlayered_normal_beats_layered_normal() {
+        // 未分层 normal 声明胜过分层 normal（未分层 = 隐式 final 层）
+        let mut layered = make_decl("color", Origin::Author, false, Specificity::default(), 1);
+        layered.layer_order = Some(0);
+        let unlayered = make_decl("color", Origin::Author, false, Specificity::default(), 2);
+
+        let groups = cascade_for_element(vec![layered, unlayered]);
+        let winner = cascade_winner(&groups["color"]).unwrap();
+        assert!(winner.layer_order.is_none(), "unlayered should win");
+    }
+
+    #[test]
+    fn later_layer_wins_for_normal() {
+        // normal 声明：晚层胜
+        let mut layer0 = make_decl("color", Origin::Author, false, Specificity::default(), 1);
+        layer0.layer_order = Some(0);
+        let mut layer1 = make_decl("color", Origin::Author, false, Specificity::default(), 2);
+        layer1.layer_order = Some(1);
+
+        let groups = cascade_for_element(vec![layer0, layer1]);
+        let winner = cascade_winner(&groups["color"]).unwrap();
+        assert_eq!(winner.layer_order, Some(1));
+    }
+
+    #[test]
+    fn earlier_layer_wins_for_important() {
+        // important 声明：早层胜（层顺序反转）
+        let mut layer0 = make_decl("color", Origin::Author, true, Specificity::default(), 1);
+        layer0.layer_order = Some(0);
+        let mut layer1 = make_decl("color", Origin::Author, true, Specificity::default(), 2);
+        layer1.layer_order = Some(1);
+
+        let groups = cascade_for_element(vec![layer0, layer1]);
+        let winner = cascade_winner(&groups["color"]).unwrap();
+        assert_eq!(winner.layer_order, Some(0));
+    }
+
+    #[test]
+    fn layered_important_beats_unlayered_important() {
+        // 分层 important 胜过未分层 important（未分层 = 隐式首层）
+        let unlayered = make_decl("color", Origin::Author, true, Specificity::default(), 1);
+        let mut layered = make_decl("color", Origin::Author, true, Specificity::default(), 2);
+        layered.layer_order = Some(0);
+
+        let groups = cascade_for_element(vec![unlayered, layered]);
+        let winner = cascade_winner(&groups["color"]).unwrap();
+        assert_eq!(winner.layer_order, Some(0));
     }
 
     #[test]

@@ -23,6 +23,9 @@ pub struct DeclaredValue {
     pub order: usize,
     /// §6.1 准则 4: 是否来自 `style` 属性。
     pub from_style_attr: bool,
+    /// §6.1 准则 5: 所属 @layer 的全局序号（按首次出现分配；
+    /// `None` = 未分层，即隐式层）。P1-3。
+    pub layer_order: Option<usize>,
 }
 
 /// §4.4: Computed value（cascade 输出）。
