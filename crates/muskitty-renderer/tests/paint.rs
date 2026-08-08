@@ -201,6 +201,60 @@ fn paint_nested_divs_both_with_background() {
 }
 
 #[test]
+fn paint_contents_splice_absolute_coords() {
+    // P2-19: paint 读 NodeLayout::abs_x/abs_y（画布绝对坐标），不再沿 DOM
+    // 祖先累加偏移。display:contents 把 span 的后代 splice 为 flex 容器的
+    // 直接子盒，DOM 祖先链 div>span>div ≠ taffy 父链 div>inner。
+    // inner 绝对坐标 = (padding-left 10 + margin-left 5, padding-top 10) = (15, 10)。
+    let cmds = paint_pipeline(
+        "<div style='display: flex; padding-left: 10px; padding-top: 10px; background-color: red;'>\
+           <span style='display: contents'>\
+             <div style='width: 50px; height: 50px; background-color: blue; margin-left: 5px;'></div>\
+           </span>\
+         </div>",
+        "",
+        800.0,
+        600.0,
+    );
+    // 父 flex 容器先绘制（red，abs 0,0），随后 inner（blue，abs 15,10）。
+    assert_eq!(cmds.len(), 2, "flex container + inner should both paint");
+    match (&cmds[0], &cmds[1]) {
+        (
+            RenderCommand::Rect {
+                background: bg1,
+                x: x1,
+                y: y1,
+                ..
+            },
+            RenderCommand::Rect {
+                background: bg2,
+                x: x2,
+                y: y2,
+                ..
+            },
+        ) => {
+            assert_eq!(
+                *bg1,
+                Some(Color::rgb(255, 0, 0)),
+                "flex container red first"
+            );
+            assert!((*x1 - 0.0).abs() < 1.0, "flex container x ~0, got {x1}");
+            assert!((*y1 - 0.0).abs() < 1.0, "flex container y ~0, got {y1}");
+            assert_eq!(*bg2, Some(Color::rgb(0, 0, 255)), "inner blue second");
+            assert!(
+                (*x2 - 15.0).abs() < 1.0,
+                "inner x ~15 (padding 10 + margin 5), got {x2}"
+            );
+            assert!(
+                (*y2 - 10.0).abs() < 1.0,
+                "inner y ~10 (padding-top), got {y2}"
+            );
+        }
+        _ => panic!("expected two Rect commands"),
+    }
+}
+
+#[test]
 fn paint_display_none_skipped() {
     let cmds = paint_pipeline(
         "<div style=\"background-color: red; display: none; width: 100px; height: 100px\"></div>",
