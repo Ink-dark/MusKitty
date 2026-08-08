@@ -312,6 +312,7 @@ fn collect_from_style_attr(
 /// - 非 `--*` 属性名统一转小写（CSS 属性名大小写不敏感，§6.3.4）。
 /// - 未注册且非 `--*` 的属性丢弃（不进入 cascade；`--*` 是自定义属性，
 ///   大小写敏感，原样保留）。
+///
 /// 返回 `Some(归一化名)`；`None` 表示该声明应被丢弃。
 fn normalize_property_name(name: &str) -> Option<String> {
     if name.starts_with("--") {

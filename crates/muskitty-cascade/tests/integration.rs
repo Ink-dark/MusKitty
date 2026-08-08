@@ -364,7 +364,13 @@ fn gap_shorthand_two_values_split() {
     let sheet = make_sheet("div { gap: 10px 20px; }", Origin::Author);
     let ctx = default_ctx();
 
-    let row = compute_property(&element, &[sheet.clone()], "row-gap", None, &ctx);
+    let row = compute_property(
+        &element,
+        std::slice::from_ref(&sheet),
+        "row-gap",
+        None,
+        &ctx,
+    );
     assert_dimension(&row, 10.0, "px");
 
     let col = compute_property(&element, &[sheet], "column-gap", None, &ctx);
