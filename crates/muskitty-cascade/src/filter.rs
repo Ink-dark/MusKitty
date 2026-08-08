@@ -19,6 +19,7 @@
 use crate::registry::lookup_property;
 use crate::style::DeclaredValue;
 use muskitty_css::parser::{parse_a_blocks_contents, ComponentValue, Rule};
+use muskitty_css::tokenizer::Token;
 use muskitty_cssom::{serialize_component_values, CssRule, CssStyleSheet, Origin};
 use muskitty_selectors::matching::{matches, DomElement, Element as ElementTrait};
 use muskitty_selectors::parser::parse_a_selector;
@@ -231,22 +232,18 @@ pub fn collect_declared_values_prepared(
     for rule in &prepared.rules {
         if matches(&rule.selector_list, element) {
             for decl in &rule.declarations {
-                // P2-2/P2-21: 属性名归一化 + 未知属性过滤
-                let property = match normalize_property_name(&decl.name) {
-                    Some(p) => p,
-                    None => continue,
-                };
                 order += 1;
-                result.push(DeclaredValue {
-                    property,
-                    value: decl.value.clone(),
-                    important: decl.important,
-                    origin: rule.origin,
-                    specificity: rule.specificity,
+                push_declared(
+                    &mut result,
                     order,
-                    from_style_attr: false,
-                    layer_order: rule.layer_order,
-                });
+                    &decl.name,
+                    &decl.value,
+                    decl.important,
+                    rule.origin,
+                    rule.specificity,
+                    rule.layer_order,
+                    false,
+                );
             }
         }
     }
@@ -279,23 +276,19 @@ fn collect_from_style_attr(
     for rule in &block_contents.rules {
         if let Rule::Declarations(decls) = rule {
             for decl in decls {
-                // P2-2/P2-21: 属性名归一化 + 未知属性过滤（与 sheets 路径一致）
-                let property = match normalize_property_name(&decl.name) {
-                    Some(p) => p,
-                    None => continue,
-                };
                 *order += 1;
-                result.push(DeclaredValue {
-                    property,
-                    value: decl.value.clone(),
-                    important: decl.important,
-                    origin: Origin::Author,
+                push_declared(
+                    result,
+                    *order,
+                    &decl.name,
+                    &decl.value,
+                    decl.important,
+                    Origin::Author,
                     specificity,
-                    order: *order,
-                    from_style_attr: true,
                     // inline style 不在任何 @layer 内
-                    layer_order: None,
-                });
+                    None,
+                    true,
+                );
             }
         }
     }
@@ -314,5 +307,73 @@ fn normalize_property_name(name: &str) -> Option<String> {
         Some(name.to_ascii_lowercase())
     } else {
         None
+    }
+}
+
+/// 收集一条声明的 DeclaredValue（sheets 与 inline style 共用）。
+///
+/// 统一处理：
+/// - P2-2/P2-21：属性名归一化 + 未知属性过滤（[`normalize_property_name`]）。
+/// - P2-9：`gap` 简写展开为 `row-gap` + `column-gap` 两条合成声明
+///   （同 `order`，取第 1/第 2 分量），不再产出 `gap` 自身。
+///
+/// `order` 由调用方递增后传入。
+#[allow(clippy::too_many_arguments)]
+fn push_declared(
+    result: &mut Vec<DeclaredValue>,
+    order: usize,
+    name: &str,
+    value: &[ComponentValue],
+    important: bool,
+    origin: Origin,
+    specificity: Specificity,
+    layer_order: Option<usize>,
+    from_style_attr: bool,
+) {
+    let property = match normalize_property_name(name) {
+        Some(p) => p,
+        None => return,
+    };
+    if property == "gap" {
+        let (row, col) = split_gap_value(value);
+        for (p, v) in [("row-gap", row), ("column-gap", col)] {
+            result.push(DeclaredValue {
+                property: p.to_string(),
+                value: v,
+                important,
+                origin,
+                specificity,
+                order,
+                layer_order,
+                from_style_attr,
+            });
+        }
+    } else {
+        result.push(DeclaredValue {
+            property,
+            value: value.to_vec(),
+            important,
+            origin,
+            specificity,
+            order,
+            layer_order,
+            from_style_attr,
+        });
+    }
+}
+
+/// 将 `gap` 简写值拆分为 `(row-gap, column-gap)` 分量（P2-9）。
+///
+/// CSS Box Alignment §6.2: `gap: <row-gap> <column-gap>?`。单值时双轴复用；
+/// 跳过空白 token。
+fn split_gap_value(value: &[ComponentValue]) -> (Vec<ComponentValue>, Vec<ComponentValue>) {
+    let parts: Vec<&ComponentValue> = value
+        .iter()
+        .filter(|cv| !matches!(cv, ComponentValue::PreservedToken(Token::Whitespace)))
+        .collect();
+    match parts.as_slice() {
+        [first] => (vec![(*first).clone()], vec![(*first).clone()]),
+        [first, second, ..] => (vec![(*first).clone()], vec![(*second).clone()]),
+        [] => (vec![], vec![]),
     }
 }

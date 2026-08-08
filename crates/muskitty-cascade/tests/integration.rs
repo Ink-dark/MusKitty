@@ -478,6 +478,73 @@ fn custom_property_case_preserved() {
     assert!(props.contains(&"--Main"));
 }
 
+// —— gap 简写展开（P2-9）——
+
+#[test]
+fn gap_shorthand_overrides_column_gap() {
+    // gap 简写在收集时展开为 row-gap + column-gap，后声明覆盖 column-gap
+    let element = make_element("div", &[]);
+    let sheet = make_sheet("div { column-gap: 20px; gap: 10px; }", Origin::Author);
+    let ctx = default_ctx();
+
+    let result = compute_property(&element, &[sheet], "column-gap", None, &ctx);
+    match result {
+        ComputedValue::Resolved(cvs) => match &cvs[0] {
+            muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
+                assert_eq!(n.value, 10.0);
+                assert_eq!(u, "px");
+            }
+            other => panic!("expected Dimension 10px, got {:?}", other),
+        },
+        other => panic!("expected Resolved, got {:?}", other),
+    }
+}
+
+#[test]
+fn gap_shorthand_two_values_split() {
+    // gap: 10px 20px → row-gap=10px, column-gap=20px
+    let element = make_element("div", &[]);
+    let sheet = make_sheet("div { gap: 10px 20px; }", Origin::Author);
+    let ctx = default_ctx();
+
+    let row = compute_property(&element, &[sheet.clone()], "row-gap", None, &ctx);
+    match row {
+        ComputedValue::Resolved(cvs) => match &cvs[0] {
+            muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
+                assert_eq!(n.value, 10.0);
+                assert_eq!(u, "px");
+            }
+            other => panic!("expected Dimension 10px, got {:?}", other),
+        },
+        other => panic!("expected Resolved, got {:?}", other),
+    }
+
+    let col = compute_property(&element, &[sheet], "column-gap", None, &ctx);
+    match col {
+        ComputedValue::Resolved(cvs) => match &cvs[0] {
+            muskitty_css::parser::ComponentValue::PreservedToken(Token::Dimension(n, u)) => {
+                assert_eq!(n.value, 20.0);
+                assert_eq!(u, "px");
+            }
+            other => panic!("expected Dimension 20px, got {:?}", other),
+        },
+        other => panic!("expected Resolved, got {:?}", other),
+    }
+}
+
+#[test]
+fn gap_shorthand_no_longer_emits_gap_itself() {
+    // P2-9: gap 不再作为独立属性进入级联
+    let element = make_element("div", &[]);
+    let sheet = make_sheet("div { gap: 10px; }", Origin::Author);
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    let props: Vec<&str> = declared.iter().map(|d| d.property.as_str()).collect();
+    assert!(!props.contains(&"gap"), "gap should be expanded away");
+    assert!(props.contains(&"row-gap"));
+    assert!(props.contains(&"column-gap"));
+}
+
 // —— 非匹配选择器 → defaulting ——
 
 #[test]
