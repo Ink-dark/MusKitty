@@ -55,7 +55,7 @@ fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
             assert_eq!(height, vh as u32, "pixel buffer height");
             assert_eq!(
                 data.len(),
-                (vw as usize * vh as usize * 4) as usize,
+                vw as usize * vh as usize * 4,
                 "RGBA buffer length"
             );
         }

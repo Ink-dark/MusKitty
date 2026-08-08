@@ -109,8 +109,10 @@ fn parse_color_function(name: &str, args: &[ComponentValue]) -> Option<Color> {
 
 /// 解析 rgb/rgba 参数列表。
 fn parse_rgb(args: &[ComponentValue]) -> Option<Color> {
-    // 提取所有数值 token（跳过逗号、空格、斜杠分隔符）
-    let mut numbers: Vec<f64> = Vec::new();
+    // PERF-11：固定大小数组代替 Vec 堆分配。`count` 记录已收通道数；
+    // alpha 单独跟踪（slash 分隔或 legacy 第 4 参）。
+    let mut channels = [0.0f64; 4];
+    let mut count = 0usize;
     let mut alpha: Option<f64> = None;
     let mut slash_seen = false;
 
@@ -119,16 +121,18 @@ fn parse_rgb(args: &[ComponentValue]) -> Option<Color> {
             ComponentValue::PreservedToken(Token::Number(n)) => {
                 if slash_seen {
                     alpha = Some(n.value);
-                } else {
-                    numbers.push(n.value);
+                } else if count < channels.len() {
+                    channels[count] = n.value;
+                    count += 1;
                 }
             }
             ComponentValue::PreservedToken(Token::Percentage(p)) => {
                 if slash_seen {
                     alpha = Some(p.value / 100.0);
-                } else if numbers.len() < 3 {
+                } else if count < 3 {
                     // 0%-100% → 0-255
-                    numbers.push(p.value / 100.0 * 255.0);
+                    channels[count] = p.value / 100.0 * 255.0;
+                    count += 1;
                 } else if alpha.is_none() {
                     // P1-11：legacy 逗号语法第 4 参百分比 alpha
                     // （`rgba(255, 0, 0, 50%)`）。三通道已收满后出现的
@@ -148,19 +152,19 @@ fn parse_rgb(args: &[ComponentValue]) -> Option<Color> {
         }
     }
 
-    if numbers.len() < 3 {
+    if count < 3 {
         return None;
     }
 
-    let r = clamp_channel(numbers[0]);
-    let g = clamp_channel(numbers[1]);
-    let b = clamp_channel(numbers[2]);
+    let r = clamp_channel(channels[0]);
+    let g = clamp_channel(channels[1]);
+    let b = clamp_channel(channels[2]);
     let a = match alpha {
         Some(a) => clamp_alpha(a),
         None => {
             // rgba legacy 语法：第 4 个数值参数为 alpha
-            if numbers.len() >= 4 {
-                clamp_alpha(numbers[3])
+            if count >= 4 {
+                clamp_alpha(channels[3])
             } else {
                 255
             }

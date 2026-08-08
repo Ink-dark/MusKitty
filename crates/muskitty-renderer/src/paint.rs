@@ -44,12 +44,16 @@ pub struct PaintInput<'a> {
 /// z-index / 层叠上下文排序推迟。
 pub fn paint(input: &PaintInput) -> Vec<RenderCommand> {
     let mut commands = Vec::new();
+    // PERF-11：跨递归层复用的子节点缓冲，避免每层 child_nodes().to_vec()
+    // 新建临时 Vec。
+    let mut children = Vec::new();
     paint_recursive(
         input.dom,
         input.styles,
         input.layout,
         input.viewport,
         &mut commands,
+        &mut children,
     );
     commands
 }
@@ -64,6 +68,7 @@ fn paint_recursive(
     layout: &LayoutResult,
     viewport: Option<(f32, f32, f32, f32)>,
     commands: &mut Vec<RenderCommand>,
+    children_scratch: &mut Vec<Rc<RefCell<Node>>>,
 ) {
     let addr = Rc::as_ptr(node) as usize;
 
@@ -106,11 +111,16 @@ fn paint_recursive(
     }
 
     // 递归子节点（无论本节点是否绘制；display:contents 等无盒元素的后代
-    // 仍需在 DOM 先序中遍历到）。
-    let children: Vec<Rc<RefCell<Node>>> = node.borrow().child_nodes().to_vec();
+    // 仍需在 DOM 先序中遍历到）。PERF-11：子节点收集进复用缓冲，`take`
+    // 为本次局部分片（递归期间缓冲保持空给子层复用）；递归结束后归还，
+    // 让最深层的分配 capacity 被最外层持续复用。
+    children_scratch.clear();
+    children_scratch.extend(node.borrow().child_nodes().iter().cloned());
+    let children = std::mem::take(children_scratch);
     for child in &children {
-        paint_recursive(child, styles, layout, viewport, commands);
+        paint_recursive(child, styles, layout, viewport, commands, children_scratch);
     }
+    *children_scratch = children;
 }
 
 // 单元测试见 tests/paint.rs（使用 muskitty-html5-parser 构造真实 DOM）。
