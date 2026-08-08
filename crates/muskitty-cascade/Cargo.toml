@@ -15,6 +15,8 @@ authors = ["MusCat / MusKitty Bit-Torch Community"]
 [dependencies]
 muskitty-css = { path = "../muskitty-css", version = "0.5.0" }
 muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
+# muskitty-dom 目前仅在测试模块使用；compute_style_tree 公共 API（style_tree.rs）上线后
+# 将成为正式生产依赖（DOM 树遍历）。保持 [dependencies] 而非降级 dev-deps。
 muskitty-dom = { path = "../muskitty-dom", version = "0.1.0" }
 muskitty-selectors = { path = "../muskitty-selectors", version = "0.1.0", features = ["dom"] }
 

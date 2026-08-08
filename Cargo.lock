@@ -147,9 +147,7 @@ version = "0.1.0"
 dependencies = [
  "muskitty-cascade",
  "muskitty-css",
- "muskitty-cssom",
  "muskitty-dom",
- "muskitty-selectors",
  "taffy",
 ]
 
