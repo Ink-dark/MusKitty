@@ -57,6 +57,7 @@ fn main() {
         dom: &dom,
         styles: &styles,
         layout: &layout,
+        viewport: None,
     };
     let commands = paint(&input);
 

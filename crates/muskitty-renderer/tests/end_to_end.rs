@@ -38,6 +38,7 @@ fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
         dom: &dom,
         styles: &styles,
         layout: &layout,
+        viewport: None,
     };
     let commands = paint(&input);
 

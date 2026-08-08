@@ -27,6 +27,12 @@ pub struct PaintInput<'a> {
     pub styles: &'a HashMap<usize, ComputedStyle>,
     /// 布局计算结果。
     pub layout: &'a LayoutResult,
+    /// 视口矩形 `(x, y, width, height)`。`None` = 不剔除。
+    ///
+    /// 完全位于视口外的元素矩形不生成绘制指令（P3-6）；与视口相交或
+    /// 完全在内的保留。剔除只影响本节点指令，不影响子节点递归（后代
+    /// 可能落在视口内）。
+    pub viewport: Option<(f32, f32, f32, f32)>,
 }
 
 /// 执行绘制，生成绘制指令列表。
@@ -38,7 +44,13 @@ pub struct PaintInput<'a> {
 /// z-index / 层叠上下文排序推迟。
 pub fn paint(input: &PaintInput) -> Vec<RenderCommand> {
     let mut commands = Vec::new();
-    paint_recursive(input.dom, input.styles, input.layout, &mut commands);
+    paint_recursive(
+        input.dom,
+        input.styles,
+        input.layout,
+        input.viewport,
+        &mut commands,
+    );
     commands
 }
 
@@ -50,6 +62,7 @@ fn paint_recursive(
     node: &Rc<RefCell<Node>>,
     styles: &HashMap<usize, ComputedStyle>,
     layout: &LayoutResult,
+    viewport: Option<(f32, f32, f32, f32)>,
     commands: &mut Vec<RenderCommand>,
 ) {
     let addr = Rc::as_ptr(node) as usize;
@@ -59,20 +72,34 @@ fn paint_recursive(
         // 查询布局结果；display:none / contents / 非渲染标签不在布局树中
         // （或无盒），自然跳过。
         if let Some(node_layout) = layout.get(addr) {
-            if let Some(style) = styles.get(&addr) {
-                let bg = extract_background_color(style).filter(|c| !c.is_transparent());
-                let border = extract_border(style);
+            // P3-6: viewport culling —— 完全位于视口外的矩形跳过本节点
+            // 绘制（子节点仍递归，后代可能落在视口内）。
+            let in_viewport = match viewport {
+                Some((vx, vy, vw, vh)) => {
+                    !(node_layout.abs_x + node_layout.width <= vx
+                        || node_layout.abs_y + node_layout.height <= vy
+                        || node_layout.abs_x >= vx + vw
+                        || node_layout.abs_y >= vy + vh)
+                }
+                None => true,
+            };
 
-                // 有背景或边框时生成绘制指令（绝对坐标）。
-                if bg.is_some() || border.is_some() {
-                    commands.push(RenderCommand::Rect {
-                        x: node_layout.abs_x,
-                        y: node_layout.abs_y,
-                        width: node_layout.width,
-                        height: node_layout.height,
-                        background: bg,
-                        border,
-                    });
+            if in_viewport {
+                if let Some(style) = styles.get(&addr) {
+                    let bg = extract_background_color(style).filter(|c| !c.is_transparent());
+                    let border = extract_border(style);
+
+                    // 有背景或边框时生成绘制指令（绝对坐标）。
+                    if bg.is_some() || border.is_some() {
+                        commands.push(RenderCommand::Rect {
+                            x: node_layout.abs_x,
+                            y: node_layout.abs_y,
+                            width: node_layout.width,
+                            height: node_layout.height,
+                            background: bg,
+                            border,
+                        });
+                    }
                 }
             }
         }
@@ -82,7 +109,7 @@ fn paint_recursive(
     // 仍需在 DOM 先序中遍历到）。
     let children: Vec<Rc<RefCell<Node>>> = node.borrow().child_nodes().to_vec();
     for child in &children {
-        paint_recursive(child, styles, layout, commands);
+        paint_recursive(child, styles, layout, viewport, commands);
     }
 }
 

@@ -49,8 +49,19 @@ fn full_pipeline(html: &str, css: &str, viewport_w: f32, viewport_h: f32) -> Pip
     }
 }
 
-/// 运行 paint 并返回指令列表。
+/// 运行 paint 并返回指令列表（不剔除，viewport = None）。
 fn paint_pipeline(html: &str, css: &str, vw: f32, vh: f32) -> Vec<RenderCommand> {
+    paint_pipeline_with_viewport(html, css, vw, vh, None)
+}
+
+/// 运行 paint 并返回指令列表（可指定 viewport 剔除）。
+fn paint_pipeline_with_viewport(
+    html: &str,
+    css: &str,
+    vw: f32,
+    vh: f32,
+    viewport: Option<(f32, f32, f32, f32)>,
+) -> Vec<RenderCommand> {
     let PipelineResult {
         dom,
         styles,
@@ -60,6 +71,7 @@ fn paint_pipeline(html: &str, css: &str, vw: f32, vh: f32) -> Vec<RenderCommand>
         dom: &dom,
         styles: &styles,
         layout: &layout,
+        viewport,
     };
     paint(&input)
 }
@@ -493,4 +505,49 @@ fn paint_var_inherited_from_parent() {
         }
         _ => panic!("expected Rect"),
     }
+}
+
+// —— P3-6: viewport culling ——
+
+#[test]
+fn paint_viewport_culling_skips_out_of_viewport() {
+    // 元素完全位于视口外 → 不生成绘制指令。
+    let cmds = paint_pipeline_with_viewport(
+        "<div style=\"background-color: red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+        // viewport 从 (200, 200) 起，元素 (0,0)-(100,50) 完全在外
+        Some((200.0, 200.0, 100.0, 100.0)),
+    );
+    assert!(
+        cmds.is_empty(),
+        "element fully outside viewport should be culled, got {:?}",
+        cmds
+    );
+
+    // 元素与视口相交 → 保留。
+    let cmds = paint_pipeline_with_viewport(
+        "<div style=\"background-color: red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+        // viewport (50,25)-(150,125) 与元素 (0,0)-(100,50) 相交
+        Some((50.0, 25.0, 100.0, 100.0)),
+    );
+    assert_eq!(
+        cmds.len(),
+        1,
+        "element intersecting viewport should still paint"
+    );
+
+    // 无 viewport（None）→ 不剔除。
+    let cmds = paint_pipeline_with_viewport(
+        "<div style=\"background-color: red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+        None,
+    );
+    assert_eq!(cmds.len(), 1, "None viewport disables culling");
 }
