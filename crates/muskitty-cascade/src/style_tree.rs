@@ -17,7 +17,8 @@
 //! font-size（先字体后其余属性，em 语义 = 元素自身 font-size）。
 
 use crate::cascade::{cascade_for_element, cascade_winner};
-use crate::compute::{compute_value, ComputeContext};
+use crate::compute::{compute_value_with, ComputeContext, CustomPropertySource};
+use crate::custom_properties::is_css_wide_keyword;
 use crate::defaulting::apply_defaulting;
 use crate::filter::collect_declared_values;
 use crate::registry::BUILTIN_PROPERTIES;
@@ -67,12 +68,11 @@ pub fn compute_styles(
     options: &StyleTreeOptions,
 ) -> HashMap<usize, ComputedStyle> {
     let mut styles = HashMap::new();
-    let empty_props = HashMap::new();
     walk(
         root,
         sheets,
         options,
-        &empty_props,
+        None, // 根元素无父级自定义属性来源
         None,
         DEFAULT_FONT_SIZE,
         None,
@@ -83,16 +83,16 @@ pub fn compute_styles(
 
 /// 自顶向下遍历 DOM 树。
 ///
-/// - `parent_props`：父级 `--*` 表（继承）。
+/// - `parent_source`：父级 `--*` 来源（链式继承，PERF-4；根为 `None`）。
 /// - `parent_style`：父元素 ComputedStyle（继承属性）。
 /// - `parent_font_size`：父元素 font-size（px），根为浏览器默认 16px。
 /// - `root_font_size`：根元素 font-size（px）；根元素自身计算时为 `None`。
 #[allow(clippy::too_many_arguments)]
-fn walk(
+fn walk<'a>(
     node: &Rc<RefCell<Node>>,
     sheets: &[CssStyleSheet],
     options: &StyleTreeOptions,
-    parent_props: &HashMap<String, Vec<ComponentValue>>,
+    parent_source: Option<&'a CustomPropertySource<'a>>,
     parent_style: Option<&ComputedStyle>,
     parent_font_size: f64,
     root_font_size: Option<f64>,
@@ -106,7 +106,7 @@ fn walk(
                 child,
                 sheets,
                 options,
-                parent_props,
+                parent_source,
                 parent_style,
                 parent_font_size,
                 root_font_size,
@@ -118,18 +118,23 @@ fn walk(
 
     let addr = Rc::as_ptr(node) as usize;
 
-    // 每元素一次 filter + cascade，派生自定义属性表 + 属性组（PERF-2）。
+    // 每元素一次 filter + cascade，派生本元素 `--*` 表 + 属性组（PERF-2）。
     let element = DomElement::new(Rc::clone(node));
     let declared = collect_declared_values(&element, sheets);
     let groups = cascade_for_element(declared);
-    let props = derive_custom_props(parent_props, &groups);
+    let own_props = derive_own_custom_props(&groups);
+    // 链式来源：本元素声明优先，未声明回溯父链（PERF-4 零克隆继承）。
+    let source = CustomPropertySource::Chain {
+        own: &own_props,
+        parent: parent_source,
+    };
     let (cs, own_font_size) = compute_element_style(
         &groups,
         parent_style,
         parent_font_size,
         root_font_size,
         options,
-        &props,
+        &source,
     );
     styles.insert(addr, cs);
 
@@ -146,7 +151,7 @@ fn walk(
             child,
             sheets,
             options,
-            &props,
+            Some(&source),
             parent_cs.as_ref(),
             own_font_size,
             child_root_fs,
@@ -155,19 +160,24 @@ fn walk(
     }
 }
 
-/// 从 cascade 分组派生 `--*` 自定义属性表（继承父级后按本元素声明覆盖）。
+/// 从 cascade 分组派生本元素自己的 `--*` 表（不含继承）。
 ///
 /// 与 [`crate::collect_custom_properties`] 等价，但复用调用方已完成的
-/// `cascade_for_element` 结果，避免第二次级联（PERF-2）。
-fn derive_custom_props(
-    parent_props: &HashMap<String, Vec<ComponentValue>>,
+/// `cascade_for_element` 结果，避免第二次级联（PERF-2）；且不克隆父级表
+/// —— 继承由调用方构造 [`CustomPropertySource::Chain`] 链式回溯完成
+/// （PERF-4 零克隆）。
+fn derive_own_custom_props(
     groups: &HashMap<String, Vec<DeclaredValue>>,
 ) -> HashMap<String, Vec<ComponentValue>> {
-    let mut props = parent_props.clone();
+    let mut props = HashMap::new();
     for (name, group) in groups {
         if name.starts_with("--") {
             if let Some(winner) = cascade_winner(group) {
-                props.insert(name.clone(), winner.value.clone());
+                // P2-4：CSS-wide 关键字（initial/inherit/unset/revert）不写入，
+                // 避免 var() 替换出字面量关键字。
+                if !is_css_wide_keyword(&winner.value) {
+                    props.insert(name.clone(), winner.value.clone());
+                }
             }
         }
     }
@@ -179,20 +189,20 @@ fn derive_custom_props(
 /// 两步 font-size 算法：
 /// 1. 用父 font-size 作 em/百分比基准算本元素 font-size → px；
 /// 2. 用本元素 font-size 作 em 基准算其余属性（em 语义 = 自身 font-size）。
-fn compute_element_style(
+fn compute_element_style<'a>(
     groups: &HashMap<String, Vec<DeclaredValue>>,
     parent_style: Option<&ComputedStyle>,
     parent_font_size: f64,
     root_font_size: Option<f64>,
     options: &StyleTreeOptions,
-    props: &HashMap<String, Vec<ComponentValue>>,
+    source: &'a CustomPropertySource<'a>,
 ) -> (ComputedStyle, f64) {
     let root_fs = root_font_size.unwrap_or(DEFAULT_FONT_SIZE);
     let mut cs = ComputedStyle::new();
 
     // 步骤 1：font-size（em/百分比基准 = 父 font-size）。
-    let fs_ctx = ComputeContext::with_font_sizes(
-        props,
+    let fs_ctx = ComputeContext::with_source(
+        source,
         parent_font_size,
         root_fs,
         options.viewport_width,
@@ -205,8 +215,8 @@ fn compute_element_style(
     cs.set("font-size", normalize_font_size(font_size, own_font_size));
 
     // 步骤 2：其余属性（em 基准 = 自身 font-size）。
-    let ctx = ComputeContext::with_font_sizes(
-        props,
+    let ctx = ComputeContext::with_source(
+        source,
         own_font_size,
         root_fs,
         options.viewport_width,
@@ -233,7 +243,10 @@ fn compute_element_style(
 /// 对单个属性执行 defaulting + compute。
 ///
 /// cascade 胜者 → `apply_defaulting`（CSS-wide 关键字/继承/初始值）→
-/// 若是 `Raw` 中间态则 `compute_value` 解析相对单位与 var()。
+/// 若是 `Raw` 中间态则 `compute_value_with` 解析相对单位与 var()。
+/// 值含无效 var()（`Err`）时按 unset 处理（css-variables-1 §3.1：
+/// invalid at computed-value time）：继承属性取父值、非继承属性取初始值
+/// —— 与未声明的 `apply_defaulting(property, None, parent)` 等价（P2-5）。
 fn compute_one(
     property: &str,
     groups: &HashMap<String, Vec<DeclaredValue>>,
@@ -242,13 +255,13 @@ fn compute_one(
 ) -> ComputedValue {
     let winner = groups.get(property).and_then(|g| cascade_winner(g));
     let cascaded = winner.map(|w| w.value.as_slice());
-    let specified = apply_defaulting(
-        property,
-        cascaded,
-        parent_style.and_then(|ps| ps.get(property)),
-    );
+    let parent_value = parent_style.and_then(|ps| ps.get(property));
+    let specified = apply_defaulting(property, cascaded, parent_value);
     match &specified {
-        ComputedValue::Raw(cvs) => compute_value(property, cvs, ctx),
+        ComputedValue::Raw(cvs) => match compute_value_with(property, cvs, ctx) {
+            Ok(computed) => computed,
+            Err(()) => apply_defaulting(property, None, parent_value),
+        },
         _ => specified,
     }
 }

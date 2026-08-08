@@ -54,7 +54,7 @@ pub mod style;
 pub mod style_tree;
 
 pub use cascade::{cascade_for_element, cascade_winner};
-pub use compute::{compute_value, ComputeContext};
+pub use compute::{compute_value, compute_value_with, ComputeContext, CustomPropertySource};
 pub use custom_properties::collect_custom_properties;
 pub use defaulting::apply_defaulting;
 pub use filter::collect_declared_values;

@@ -12,15 +12,53 @@
 use crate::cascade::{cascade_for_element, cascade_winner};
 use crate::filter::collect_declared_values;
 use muskitty_css::parser::ComponentValue;
+use muskitty_css::tokenizer::Token;
 use muskitty_cssom::CssStyleSheet;
 use muskitty_selectors::matching::DomElement;
 use std::collections::HashMap;
+
+/// 是否为 CSS-wide 关键字值（`initial`/`inherit`/`unset`/`revert`）。
+///
+/// css-variables-1 §2：这些关键字不作为自定义属性值被保留，而是触发其在
+/// 自定义属性上的正常行为。收集时跳过（P2-4），避免 `var()` 替换出字面量
+/// 关键字：
+/// - `--x: inherit` → 继承父链同名属性（若不跳过会写入字面量 "inherit"）；
+/// - `--x: initial` → 不写入 props。注意规范要求 `initial` 使该属性为
+///   guaranteed-invalid 的**初始值**（不继承父链）；本 pipeline 为
+///   Author-only，简化为"不写入"，若父链已声明同名属性会继承之 —— 这是
+///   已知近似（见计划 B4 范围边界）。
+pub(crate) fn is_css_wide_keyword(value: &[ComponentValue]) -> bool {
+    let mut idents = 0;
+    let mut keyword: Option<&str> = None;
+    for cv in value {
+        match cv {
+            ComponentValue::PreservedToken(Token::Whitespace) => continue,
+            ComponentValue::PreservedToken(Token::Ident(s)) => {
+                idents += 1;
+                if keyword.is_none() {
+                    keyword = Some(s.as_str());
+                }
+            }
+            _ => return false,
+        }
+    }
+    idents == 1
+        && keyword.is_some_and(|k| {
+            k.eq_ignore_ascii_case("initial")
+                || k.eq_ignore_ascii_case("inherit")
+                || k.eq_ignore_ascii_case("unset")
+                || k.eq_ignore_ascii_case("revert")
+        })
+}
 
 /// §4.3: 收集元素的自定义属性（`--*`）表。
 ///
 /// 从父级继承（`parent_props`）开始，再将元素 cascade 胜出的 `--*`
 /// 声明覆盖到结果中。返回值用于构造 [`ComputeContext`]（供 var()
 /// 替换使用），并作为该元素子元素的 `parent_props` 传入（继承）。
+///
+/// 注意：本函数为原语路径（每元素单独级联）；整树路径应使用
+/// [`crate::style_tree::compute_styles`]（单次级联 + 零克隆链式继承）。
 ///
 /// [`ComputeContext`]: crate::compute::ComputeContext
 pub fn collect_custom_properties(
@@ -35,7 +73,11 @@ pub fn collect_custom_properties(
         // 仅收集自定义属性（`--*`），普通属性不进入 custom properties 表。
         if property.starts_with("--") {
             if let Some(winner) = cascade_winner(group) {
-                props.insert(property.clone(), winner.value.clone());
+                // P2-4：CSS-wide 关键字（initial/inherit/unset/revert）不写入，
+                // 避免 var() 替换出字面量关键字。
+                if !is_css_wide_keyword(&winner.value) {
+                    props.insert(property.clone(), winner.value.clone());
+                }
             }
         }
     }

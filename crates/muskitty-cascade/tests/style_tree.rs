@@ -149,6 +149,78 @@ fn root_font_size_defaults_to_16() {
     assert_eq!(style_px(styles.get(&addr(&a)).unwrap(), "margin-top"), 16.0);
 }
 
+/// 从 ComputedStyle 提取某属性的第一个 Ident（用于 color 等关键字断言）。
+fn style_ident(cs: &ComputedStyle, prop: &str) -> String {
+    let cv = cs
+        .get(prop)
+        .unwrap_or_else(|| panic!("{prop} not in style"));
+    match cv {
+        ComputedValue::Resolved(cvs) => {
+            for v in cvs {
+                if let ComponentValue::PreservedToken(Token::Ident(s)) = v {
+                    return s.clone();
+                }
+            }
+            panic!("{prop} has no Ident in {:?}", cvs);
+        }
+        other => panic!("expected Resolved for {prop}, got {:?}", other),
+    }
+}
+
+// —— P2-4: CSS-wide 关键字不写入 `--*` 表 ——
+
+#[test]
+fn var_references_initial_css_wide_keyword_as_undefined() {
+    // P2-4: :root { --x: initial } 不写入 props → var(--x, orange) 命中 fallback
+    let dom = parse_dom(
+        r#"<html><body><div id="a" style="color: var(--x, orange)"></div></body></html>"#,
+    );
+    let styles = run_from_dom(&dom, ":root { --x: initial; }");
+    let a = element_with_id(&dom, "a");
+    assert_eq!(
+        style_ident(styles.get(&addr(&a)).unwrap(), "color"),
+        "orange",
+        "initial 不写入 --x，var() 应回退到 fallback"
+    );
+}
+
+#[test]
+fn var_references_inherit_keyword_uses_parent_chain() {
+    // P2-4: .child { --x: inherit } 不覆盖 → var(--x) 回溯到根级 red
+    let dom = parse_dom(
+        r#"<html><body>
+            <div class="child" id="c" style="--x: inherit">
+                <span id="g" style="color: var(--x)"></span>
+            </div>
+        </body></html>"#,
+    );
+    let styles = run_from_dom(&dom, ":root { --x: red; }");
+    let g = element_with_id(&dom, "g");
+    assert_eq!(
+        style_ident(styles.get(&addr(&g)).unwrap(), "color"),
+        "red",
+        "inherit 关键字应沿用父链值"
+    );
+}
+
+// —— P2-5: invalid-at-computed-value（var() 首参非 --*）→ 属性按 unset ——
+
+#[test]
+fn invalid_var_treats_property_as_unset() {
+    // div { color: var(color) } 首参非 --* → invalid at computed-value time
+    // → 属性按 unset：继承属性取父值（html color: red）
+    let dom = parse_dom(
+        r#"<html style="color: red"><body><div id="a" style="color: var(color)"></div></body></html>"#,
+    );
+    let styles = run_from_dom(&dom, "");
+    let a = element_with_id(&dom, "a");
+    assert_eq!(
+        style_ident(styles.get(&addr(&a)).unwrap(), "color"),
+        "red",
+        "var(color) 无效 → color 回退到继承的父值"
+    );
+}
+
 /// 与 run 相同，但复用已解析的 DOM（避免重复解析）。
 fn run_from_dom(dom: &Rc<RefCell<Node>>, css: &str) -> HashMap<usize, ComputedStyle> {
     let sheet = author_sheet(css);
