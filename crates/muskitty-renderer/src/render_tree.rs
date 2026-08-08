@@ -1,46 +1,17 @@
-//! 渲染树（RenderTree）。
+//! 渲染样式提取工具。
 //!
-//! 渲染树是 DOM + ComputedStyle + LayoutResult 的「投影」：保留
-//! 需要绘制的元素节点（跳过 `display: none` 与非元素节点），携带
-//! 绘制所需的样式信息与布局结果。
+//! 从 [`ComputedStyle`] 提取绘制所需信息（background-color / border），
+//! 供 `paint` 生成 [`RenderCommand`] 时查询。
 //!
-//! 当前实现：`paint` 直接输出 `Vec<RenderCommand>`，RenderTree
-//! 作为中间结构保留供后续复杂场景（z-order / 层叠上下文 / transform
-//! 嵌套）使用。B-1 阶段 paint 直接生成命令，暂不构造 RenderTree。
+//! RenderTree / RenderNode 中间结构已移除（P2-17）：`paint` 直接输出
+//! `Vec<RenderCommand>`。z-order / 层叠上下文 / transform 嵌套等复杂
+//! 场景需要中间结构时再引入，当前无消费者。
 
 use crate::color::Color;
 use crate::command::{Border, BorderStyle};
 use muskitty_cascade::ComputedStyle;
 use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
-use muskitty_layout::NodeLayout;
-
-/// 渲染节点：一个需要绘制的元素 + 其样式与布局信息。
-#[derive(Debug, Clone)]
-pub struct RenderNode {
-    /// DOM 节点指针地址（与 LayoutResult 的 key 一致）。
-    pub node_addr: usize,
-    /// 元素的布局结果（位置与尺寸）。
-    pub layout: NodeLayout,
-    /// 元素的 computed style（用于查询 background-color 等）。
-    pub style: ComputedStyle,
-    /// 子渲染节点。
-    pub children: Vec<RenderNode>,
-}
-
-/// 渲染树（根节点）。
-#[derive(Debug, Clone, Default)]
-pub struct RenderTree {
-    /// 根渲染节点（可能为空）。
-    pub root: Option<RenderNode>,
-}
-
-impl RenderTree {
-    /// 创建空渲染树。
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
 
 /// 从 ComputedStyle 提取 background-color。
 ///
