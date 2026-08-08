@@ -409,6 +409,25 @@ pub static BUILTIN_PROPERTIES: &[PropertyDefinition] = &[
         inherited: false,
         percentages: PercentageBasis::None,
     },
+    // —— 边框组简写（renderer extract_border 直接读取，P2-21 需注册）——
+    PropertyDefinition {
+        name: "border-width",
+        initial_value: "medium",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "border-style",
+        initial_value: "none",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
+    PropertyDefinition {
+        name: "border-color",
+        initial_value: "currentcolor",
+        inherited: false,
+        percentages: PercentageBasis::None,
+    },
     PropertyDefinition {
         name: "outline-width",
         initial_value: "medium",

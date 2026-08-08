@@ -435,6 +435,49 @@ fn later_layer_wins_for_normal_in_pipeline() {
     }
 }
 
+// —— 属性名大小写 + 未知属性（P2-2/P2-21）——
+
+#[test]
+fn case_insensitive_property_name_collected() {
+    // P2-2: CSS 属性名大小写不敏感，COLOR 应参与 color 级联
+    let element = make_element("div", &[]);
+    let sheet = make_sheet("div { COLOR: red; }", Origin::Author);
+    let ctx = default_ctx();
+
+    let result = compute_property(&element, &[sheet], "color", None, &ctx);
+    match result {
+        ComputedValue::Resolved(cvs) => match &cvs[0] {
+            muskitty_css::parser::ComponentValue::PreservedToken(Token::Ident(s)) => {
+                assert_eq!(s, "red");
+            }
+            other => panic!("expected Ident 'red', got {:?}", other),
+        },
+        other => panic!("expected Resolved, got {:?}", other),
+    }
+}
+
+#[test]
+fn unknown_property_dropped() {
+    // P2-21: 未注册且非 --* 的属性不进入级联
+    let element = make_element("div", &[]);
+    let sheet = make_sheet("div { foo: 1; color: red; }", Origin::Author);
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    let props: Vec<&str> = declared.iter().map(|d| d.property.as_str()).collect();
+    assert!(!props.contains(&"foo"), "unknown prop should be dropped");
+    assert!(props.contains(&"color"));
+}
+
+#[test]
+fn custom_property_case_preserved() {
+    // P2-2: --* 自定义属性名大小写敏感，不归一化
+    let element = make_element("div", &[]);
+    let sheet = make_sheet("div { --Main: red; color: var(--Main); }", Origin::Author);
+    let declared = collect_declared_values(&element, &[sheet]);
+    let props: Vec<&str> = declared.iter().map(|d| d.property.as_str()).collect();
+    assert!(props.contains(&"--Main"));
+}
+
 // —— 非匹配选择器 → defaulting ——
 
 #[test]

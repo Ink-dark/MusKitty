@@ -16,6 +16,7 @@
 //! 便捷入口 [`collect_declared_values`] 每次调用内部 prepare + collect
 //! （保持旧 API，测试/单次场景使用）。
 
+use crate::registry::lookup_property;
 use crate::style::DeclaredValue;
 use muskitty_css::parser::{parse_a_blocks_contents, ComponentValue, Rule};
 use muskitty_cssom::{serialize_component_values, CssRule, CssStyleSheet, Origin};
@@ -230,9 +231,14 @@ pub fn collect_declared_values_prepared(
     for rule in &prepared.rules {
         if matches(&rule.selector_list, element) {
             for decl in &rule.declarations {
+                // P2-2/P2-21: 属性名归一化 + 未知属性过滤
+                let property = match normalize_property_name(&decl.name) {
+                    Some(p) => p,
+                    None => continue,
+                };
                 order += 1;
                 result.push(DeclaredValue {
-                    property: decl.name.clone(),
+                    property,
                     value: decl.value.clone(),
                     important: decl.important,
                     origin: rule.origin,
@@ -273,9 +279,14 @@ fn collect_from_style_attr(
     for rule in &block_contents.rules {
         if let Rule::Declarations(decls) = rule {
             for decl in decls {
+                // P2-2/P2-21: 属性名归一化 + 未知属性过滤（与 sheets 路径一致）
+                let property = match normalize_property_name(&decl.name) {
+                    Some(p) => p,
+                    None => continue,
+                };
                 *order += 1;
                 result.push(DeclaredValue {
-                    property: decl.name.clone(),
+                    property,
                     value: decl.value.clone(),
                     important: decl.important,
                     origin: Origin::Author,
@@ -287,5 +298,21 @@ fn collect_from_style_attr(
                 });
             }
         }
+    }
+}
+
+/// 归一化属性名并过滤未知属性（P2-2/P2-21）。
+///
+/// - 非 `--*` 属性名统一转小写（CSS 属性名大小写不敏感，§6.3.4）。
+/// - 未注册且非 `--*` 的属性丢弃（不进入 cascade；`--*` 是自定义属性，
+///   大小写敏感，原样保留）。
+/// 返回 `Some(归一化名)`；`None` 表示该声明应被丢弃。
+fn normalize_property_name(name: &str) -> Option<String> {
+    if name.starts_with("--") {
+        Some(name.to_string())
+    } else if lookup_property(name).is_some() {
+        Some(name.to_ascii_lowercase())
+    } else {
+        None
     }
 }
