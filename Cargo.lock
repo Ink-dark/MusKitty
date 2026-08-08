@@ -95,13 +95,12 @@ dependencies = [
  "muskitty-css",
  "muskitty-cssom",
  "muskitty-dom",
- "muskitty-html5-parser",
  "muskitty-selectors",
 ]
 
 [[package]]
 name = "muskitty-css"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "muskitty-css-parser",
  "muskitty-css-tokenizer",
@@ -109,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "muskitty-css-parser"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "muskitty-css-tokenizer",
 ]
@@ -127,11 +126,11 @@ dependencies = [
 
 [[package]]
 name = "muskitty-dom"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "muskitty-html5-parser"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "muskitty-dom",
  "muskitty-html5-tokenizer",
@@ -139,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "muskitty-html5-tokenizer"
-version = "0.1.2"
+version = "0.1.3"
 
 [[package]]
 name = "muskitty-layout"
@@ -167,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "muskitty-selectors"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "muskitty-css",
  "muskitty-dom",

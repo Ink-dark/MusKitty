@@ -20,5 +20,6 @@ crates/muskitty-css-parser/
 crates/muskitty-selectors/
 crates/muskitty-css/
 crates/muskitty-css-values/
-# 注意：muskitty-cascade / muskitty-cssom / muskitty-renderer 尚未剥离，
-# 作为主仓库 workspace member 直接版本控制。
+crates/muskitty-cascade/
+crates/muskitty-cssom/
+# 注意：muskitty-renderer 尚未剥离，作为主仓库 workspace member 直接版本控制。

@@ -5,8 +5,8 @@
 # 目录结构:
 #   ./fetch-crates.ps1       <-- 本脚本
 #   ./crates/
-#     ├── muskitty-cascade/            (主仓库 member，未剥离)
-#     ├── muskitty-cssom/              (主仓库 member，未剥离)
+#     ├── muskitty-cascade/            (独立仓库)
+#     ├── muskitty-cssom/              (独立仓库)
 #     ├── muskitty-renderer/           (主仓库 member，未剥离)
 #     ├── muskitty-layout/             (独立仓库)
 #     ├── muskitty-css/                (独立仓库)
@@ -47,6 +47,8 @@ $ErrorActionPreference = 'Continue'  # 单个失败不中断整体
 # 已独立拆分的 crate 仓库（需要从 GitHub 单独拉取）
 # ------------------------------------------------------------------------------
 $StandaloneCrates = @(
+    'muskitty-cascade',
+    'muskitty-cssom',
     'muskitty-layout',
     'muskitty-css',
     'muskitty-css-parser',
@@ -62,8 +64,6 @@ $StandaloneCrates = @(
 # 尚未独立拆分的 crate（作为主仓库 workspace member 直接版本控制，跳过）
 # ------------------------------------------------------------------------------
 $BundledCrates = @(
-    'muskitty-cascade',
-    'muskitty-cssom',
     'muskitty-renderer'
 )
 

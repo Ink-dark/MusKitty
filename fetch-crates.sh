@@ -6,8 +6,8 @@
 # 目录结构 (脚本放在项目根目录):
 #   ./fetch-crates.sh       <-- 本脚本
 #   ./crates/
-#     ├── muskitty-cascade/            (主仓库 member，未剥离)
-#     ├── muskitty-cssom/              (主仓库 member，未剥离)
+#     ├── muskitty-cascade/            (独立仓库)
+#     ├── muskitty-cssom/              (独立仓库)
 #     ├── muskitty-renderer/           (主仓库 member，未剥离)
 #     ├── muskitty-layout/             (独立仓库)
 #     ├── muskitty-css/                (独立仓库)
@@ -59,6 +59,8 @@ PROTOCOL="https"
 
 # 已独立拆分的 crate（需要单独拉取/推送）
 STANDALONE_CRATES=(
+    "muskitty-cascade"
+    "muskitty-cssom"
     "muskitty-layout"
     "muskitty-css"
     "muskitty-css-parser"
@@ -72,8 +74,6 @@ STANDALONE_CRATES=(
 
 # 尚未独立（作为主仓库 workspace member 直接版本控制，跳过）
 BUNDLED_CRATES=(
-    "muskitty-cascade"
-    "muskitty-cssom"
     "muskitty-renderer"
 )
 
