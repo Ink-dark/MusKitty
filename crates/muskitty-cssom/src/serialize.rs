@@ -319,7 +319,7 @@ impl ToCss for CssContainerRule {
 }
 
 impl ToCss for OtherRule {
-    /// `@name prelude;` 或 `@name prelude { ... }`
+    /// `@name prelude;` 或 `@name prelude { declarations; rules }`
     fn to_css_string(&self) -> String {
         let prelude = serialize_component_values(&self.prelude);
         if self.child_rules.is_empty() && self.declarations.is_none() {
@@ -333,7 +333,27 @@ impl ToCss for OtherRule {
             s
         } else {
             // block at-rule
-            serialize_block_at_rule(&self.name, &prelude, &self.child_rules)
+            let mut s = format!("@{}", serialize_identifier(&self.name));
+            if !prelude.trim().is_empty() {
+                s.push(' ');
+                s.push_str(&prelude);
+            }
+            s.push_str(" {");
+            // P1-5：block 形式输出 declarations（@font-face 等），否则
+            // roundtrip 会丢失块内声明。
+            if let Some(decls) = &self.declarations {
+                for d in decls {
+                    s.push(' ');
+                    s.push_str(&d.to_css_string());
+                    s.push(';');
+                }
+            }
+            for r in &self.child_rules {
+                s.push(' ');
+                s.push_str(&r.to_css_string());
+            }
+            s.push_str(" }");
+            s
         }
     }
 }

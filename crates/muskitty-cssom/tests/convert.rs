@@ -267,6 +267,26 @@ fn other_at_rule_statement() {
 }
 
 #[test]
+fn other_at_rule_block_has_declarations() {
+    // P1-5: @font-face 的声明应进入 OtherRule.declarations（不再丢失）
+    let ss = parse_stylesheet("@font-face { font-family: X; src: url(x); }");
+    let om = from_stylesheet(&ss);
+    match &om.css_rules[0] {
+        CssRule::Other(r) => {
+            assert_eq!(r.name, "font-face");
+            let decls = r
+                .declarations
+                .as_ref()
+                .expect("declarations should be Some");
+            assert_eq!(decls.len(), 2);
+            assert_eq!(decls[0].name, "font-family");
+            assert_eq!(decls[1].name, "src");
+        }
+        other => panic!("expected Other, got {:?}", other),
+    }
+}
+
+#[test]
 fn nested_rules() {
     let ss = parse_stylesheet("a { color: red; &:hover { color: blue; } }");
     let om = from_stylesheet(&ss);

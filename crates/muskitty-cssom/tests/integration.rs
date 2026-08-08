@@ -202,3 +202,15 @@ fn roundtrip_other_at_rule_statement() {
     assert!(out.contains("UTF-8"), "output: {}", out);
     assert!(out.ends_with(';'), "output: {}", out);
 }
+
+#[test]
+fn roundtrip_other_at_rule_block_with_decls() {
+    // P1-5: @font-face 块内声明的 roundtrip 必须保留
+    let css = "@font-face { font-family: X; src: url(\"x.woff2\"); }";
+    let ss = parse_stylesheet(css);
+    let om = from_stylesheet(&ss);
+    let out = om.to_css_string();
+    assert!(out.starts_with("@font-face"), "output: {}", out);
+    assert!(out.contains("font-family: X"), "output: {}", out);
+    assert!(out.contains("src: url(\"x.woff2\")"), "output: {}", out);
+}

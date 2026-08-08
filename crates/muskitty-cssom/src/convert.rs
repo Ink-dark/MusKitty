@@ -200,11 +200,17 @@ fn convert_container(ar: &AtRule) -> CssContainerRule {
 
 /// 未识别 at-rule → [`OtherRule`]。
 fn convert_other(ar: &AtRule) -> OtherRule {
-    let (child_rules, _) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]));
-    let declarations = ar
+    let (child_rules, extra_decls) = convert_child_rules(ar.child_rules.as_deref().unwrap_or(&[]));
+    // P1-5：@font-face 等块 at-rule 的声明经 B5 根因修复后已进入
+    // `ar.declarations`；若子规则里仍夹带裸声明（convert_child_rules
+    // 收集的 `Rule::Declarations`），并入末尾兜底，避免丢失。
+    let mut declarations: Option<Vec<CssDeclaration>> = ar
         .declarations
         .as_ref()
         .map(|decls| decls.iter().map(convert_declaration).collect());
+    if let Some(decls) = &mut declarations {
+        decls.extend(extra_decls);
+    }
     OtherRule {
         name: ar.name.clone(),
         prelude: ar.prelude.clone(),
