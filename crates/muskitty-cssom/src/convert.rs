@@ -179,11 +179,12 @@ fn convert_layer(ar: &AtRule) -> CssRule {
     if let Some(child_rules) = &ar.child_rules {
         // block 形式：@layer [name] { rules }
         let (css_rules, _) = convert_child_rules(child_rules);
-        let name = extract_first_ident(&ar.prelude);
+        // 层名取第一个点分隔名（P1-7）；空 → 匿名层
+        let name = extract_dotted_layer_names(&ar.prelude).into_iter().next();
         CssRule::LayerBlock(CssLayerBlockRule { name, css_rules })
     } else {
         // statement 形式：@layer name1, name2;
-        let names = extract_ident_list(&ar.prelude);
+        let names = extract_dotted_layer_names(&ar.prelude);
         CssRule::LayerStatement(CssLayerStatementRule { names })
     }
 }
@@ -248,25 +249,27 @@ fn extract_string_or_url(cv: &ComponentValue) -> Option<String> {
     }
 }
 
-/// 从 component value 列表中提取第一个 ident（跳过空白）。
-fn extract_first_ident(prelude: &[ComponentValue]) -> Option<String> {
+/// 从 prelude 提取点分隔的层名列表（P1-7）。
+///
+/// `@layer a.b.c, d;` → `["a.b.c", "d"]`。Ident 与 `Delim('.')` 拼成
+/// 一个名字，`Comma` 分隔多个名字，空白跳过（CSSOM §8.4 L1988-1994：
+/// CSSOMString 形式为 `<dotted-ident>#`）。
+fn extract_dotted_layer_names(prelude: &[ComponentValue]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut current = String::new();
     for cv in prelude {
         match cv {
-            ComponentValue::PreservedToken(Token::Whitespace) => continue,
-            ComponentValue::PreservedToken(Token::Ident(s)) => return Some(s.clone()),
-            _ => return None,
+            ComponentValue::PreservedToken(Token::Whitespace) => {}
+            ComponentValue::PreservedToken(Token::Comma) => {
+                names.push(std::mem::take(&mut current));
+            }
+            ComponentValue::PreservedToken(Token::Ident(s)) => current.push_str(s),
+            ComponentValue::PreservedToken(Token::Delim('.')) => current.push('.'),
+            _ => {}
         }
     }
-    None
-}
-
-/// 从 component value 列表中提取所有 ident（跳过空白和逗号）。
-fn extract_ident_list(prelude: &[ComponentValue]) -> Vec<String> {
-    prelude
-        .iter()
-        .filter_map(|cv| match cv {
-            ComponentValue::PreservedToken(Token::Ident(s)) => Some(s.clone()),
-            _ => None,
-        })
-        .collect()
+    if !current.is_empty() {
+        names.push(current);
+    }
+    names
 }

@@ -201,6 +201,33 @@ fn layer_block_anonymous() {
 }
 
 #[test]
+fn layer_block_dotted_name() {
+    // P1-7: @layer 名可为点分隔层级（a.b.c），block 形式取首层名
+    let ss = parse_stylesheet("@layer a.b.c { a { color: red; } }");
+    let om = from_stylesheet(&ss);
+    match &om.css_rules[0] {
+        CssRule::LayerBlock(r) => {
+            assert_eq!(r.name.as_deref(), Some("a.b.c"));
+            assert_eq!(r.css_rules.len(), 1);
+        }
+        other => panic!("expected LayerBlock, got {:?}", other),
+    }
+}
+
+#[test]
+fn layer_statement_dotted_names() {
+    // P1-7: statement 形式取全部点分隔层名
+    let ss = parse_stylesheet("@layer a.b, c.d;");
+    let om = from_stylesheet(&ss);
+    match &om.css_rules[0] {
+        CssRule::LayerStatement(r) => {
+            assert_eq!(r.names, vec!["a.b", "c.d"]);
+        }
+        other => panic!("expected LayerStatement, got {:?}", other),
+    }
+}
+
+#[test]
 fn layer_statement() {
     let ss = parse_stylesheet("@layer base, theme, utilities;");
     let om = from_stylesheet(&ss);
