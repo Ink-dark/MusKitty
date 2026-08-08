@@ -182,6 +182,39 @@ fn layer_block_rules_collected() {
 }
 
 #[test]
+fn keyframes_content_does_not_pollute_element_matching() {
+    // P2-14: @keyframes 的 from/to 块不是 style rule，不得参与元素匹配。
+    // 旧实现把 from 块转成 CssRule::Style，元素 <from> 会被
+    // `from { opacity: 0 }` 匹配并收集到 opacity 声明（数据污染）。
+    let element = make_element("from", &[]);
+    let sheet = make_sheet(
+        "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert!(
+        declared.is_empty(),
+        "keyframe blocks must not produce declared values, got {:?}",
+        declared
+    );
+}
+
+#[test]
+fn font_face_and_page_do_not_pollute_element_matching() {
+    // @font-face / @page 与元素匹配无关（P2-14 类型化后跳过）。
+    let element = make_element("div", &[]);
+    let sheet = make_sheet(
+        "@font-face { font-family: X; src: url(x); } @page { margin: 1cm; } div { color: red; }",
+        Origin::Author,
+    );
+
+    let declared = collect_declared_values(&element, &[sheet]);
+    assert_eq!(declared.len(), 1);
+    assert_eq!(declared[0].property, "color");
+}
+
+#[test]
 fn import_and_namespace_skipped() {
     let element = make_element("div", &[]);
     let sheet = make_sheet(

@@ -188,11 +188,24 @@ fn prepare_rules(
                     layers.declare(Some(name));
                 }
             }
+            CssRule::Scope(r) => {
+                // @scope 是作用域容器，子规则照常参与元素匹配
+                prepare_rules(&r.css_rules, origin, layers, out);
+            }
             CssRule::Other(r) => {
                 prepare_rules(&r.child_rules, origin, layers, out);
             }
-            // 非样式 rule 跳过
-            CssRule::Import(_) | CssRule::Namespace(_) => {}
+            // 非元素匹配 rule 跳过。P2-14：@keyframes 的 Keyframe 块不再
+            // 当普通 style rule 参与匹配（消除数据污染）；@font-face /
+            // @page / @counter-style / @property 同样与元素匹配无关。
+            CssRule::Import(_)
+            | CssRule::FontFace(_)
+            | CssRule::Page(_)
+            | CssRule::Keyframes(_)
+            | CssRule::Keyframe(_)
+            | CssRule::Namespace(_)
+            | CssRule::CounterStyle(_)
+            | CssRule::Property(_) => {}
         }
     }
 }
