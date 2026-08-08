@@ -75,6 +75,19 @@ fn media_rule() {
 }
 
 #[test]
+fn at_rule_name_case_insensitive() {
+    // P1-6: at-rule 名大小写不敏感（CSS Syntax §6.3.4）
+    let ss = parse_stylesheet("@MEDIA print { a { color: black; } }");
+    let om = from_stylesheet(&ss);
+    assert_eq!(om.len(), 1);
+    assert!(
+        matches!(&om.css_rules[0], CssRule::Media(_)),
+        "expected Media, got {:?}",
+        om.css_rules[0]
+    );
+}
+
+#[test]
 fn import_rule_with_string() {
     let ss = parse_stylesheet("@import \"style.css\";");
     let om = from_stylesheet(&ss);

@@ -87,8 +87,10 @@ fn convert_qualified_rule(qr: &QualifiedRule) -> CssStyleRule {
 }
 
 /// 转换 [`AtRule`] → 对应的 [`CssRule`] 变体。
+///
+/// P1-6: at-rule 名大小写不敏感（CSS Syntax §6.3.4），统一转小写再分发。
 fn convert_at_rule(ar: &AtRule) -> CssRule {
-    match ar.name.as_str() {
+    match ar.name.to_ascii_lowercase().as_str() {
         "import" => CssRule::Import(convert_import(ar)),
         "media" => CssRule::Media(convert_media(ar)),
         "namespace" => CssRule::Namespace(convert_namespace(ar)),
