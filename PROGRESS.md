@@ -383,7 +383,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 4. ~~**Cascade 收尾**（Phase 3 前置）~~ ✅ 已完成（2026-08-01）：inline `style` 属性收集已实现。
 5. ~~**Phase 3 — Layout**~~ ✅ 已完成（2026-08-01）：taffy 0.12 集成，46 个测试全绿，审计修复 7 个 bug。已剥离为独立仓库。
 6. ~~**Phase 4 — Renderer**~~ ✅ B-3/B-4 已完成（2026-08-02）：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，HTML+CSS → PNG demo 工作。
-7. ~~**全项目审计修复**~~ ✅ 已完成（2026-08-09）：B1-B14 全部完成，P0/P1/P2 清零，见 `docs/audit-2026-08-08-full-scan.md` 修复状态汇总。剩余 P2-1（绝对长度单位）/ P3-2（calc 求值）/ PERF-10 在下一轮收尾。
+7. ~~**全项目审计修复**~~ ✅ 已完成（2026-08-09）：B1-B14 全部完成，P0/P1/P2 清零，见 `docs/audit-2026-08-08-full-scan.md` 修复状态汇总。收尾：P2-1（绝对长度单位 ✅）/ P3-2（calc 求值 ✅）/ PERF-10（map_style 优化，见下轮）。
 8. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟。
 9. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug，**保持现状**。
 

@@ -154,7 +154,7 @@
 
 | # | 模块 | 位置 | 问题 | 状态 |
 |---|------|------|------|
-| P2-1 | cascade | compute.rs:118-129 | 绝对长度单位 pt/pc/in/cm/mm/q 未换算 px（css-values-4 规定 computed length 必须 px：1in=96px、1pt=96/72px…），与 em/rem 的 px 化策略不一致 | 🕓 未纳入本次计划（绝对长度单位换算） |
+| P2-1 | cascade | compute.rs:118-129 | 绝对长度单位 pt/pc/in/cm/mm/q 未换算 px（css-values-4 规定 computed length 必须 px：1in=96px、1pt=96/72px…），与 em/rem 的 px 化策略不一致 | ✅ 已修（2026-08-09，`d2c2f1c`） |
 | P2-2 | cascade | cascade.rs:25, filter.rs:104 | 属性名大小写敏感：`COLOR: red` 不参与 `color` 级联（css-syntax-3 §9.2 要求 ASCII case-insensitive），与 `lookup_property` 的 `eq_ignore_ascii_case` 自相矛盾，实测被静默丢弃 | ✅ 已修复 |
 | P2-3 | cascade | defaulting.rs:40-58 | `revert`/`revert-layer` 未实现，静默当普通值透传成字面量（css-cascade-5 §8） | ✅ 已修复 |
 | P2-4 | cascade | custom_properties.rs:34-41 | 自定义属性 CSS-wide 关键字被当字面量存：`--x: initial` 会被 var() 替换出 `initial`；`--x: inherit` 不继承（css-variables-1 §2 明确"不保留为 custom property 值"） | ✅ 已修复 |
@@ -183,7 +183,7 @@
 | # | 位置 | 问题 | 状态 |
 |---|------|------|
 | P3-1 | layout/src/style_map.rs:60-63 | `display: contents` / `list-item` 映射为 Block（TODO 已标注） | ✅ display:contents 已 splice；list-item 仍 TODO |
-| P3-2 | cascade/src/compute.rs:92-102 | calc()/min()/max() 不数值计算（PROGRESS.md:511 明确推迟到布局阶段，属已知推迟项非回归） | 🕓 推迟（calc 长期求值，已知简化） |
+| P3-2 | cascade/src/compute.rs:92-102 | calc()/min()/max() 不数值计算（PROGRESS.md:511 明确推迟到布局阶段，属已知推迟项非回归） | ✅ 已修（2026-08-09，`89b9e49`，可求值折叠为单值，不可求值保留） |
 | P3-3 | layout/src/convert.rs:104, renderer/src/paint.rs:70,104,110 | DOM 遍历每次 `child_nodes().to_vec()` 新分配 Vec<Rc<Node>> | 🕓 部分（renderer paint 已复用 scratch；layout convert.rs 未动） |
 | P3-4 | renderer/src/tiny_skia.rs:156-162 | 边框 Dashed/Dotted 静默按 solid 渲染，但命令层保留样式（API 误导，WPT 比对必失败） | ✅ 降级：solid fallback + 注释，真虚线推迟 Phase 4 |
 | P3-5 | renderer/src/tiny_skia.rs:81-82 | 画布默认全透明，无浏览器白底（UA 层缺口，`html { background: white }` + 根元素背景传播） | ✅ 画布默认填白（根元素背景传播仍推迟） |
@@ -216,7 +216,7 @@
 | # | 位置 | 问题 | 优化 | 状态 |
 |---|------|------|------|
 | PERF-9 | layout/src/convert.rs:35-46, 67-129 | 每帧重建整棵 taffy 树，无增量更新路径 | 复用 `TaffyTree` + `set_style`/局部标记 | ✅ 降级：仅暴露 set_style，无消费方 |
-| PERF-10 | layout/src/style_map.rs:57,109,118,129,139,144,150 | `map_style` 每属性 clone + lowercase（get_keyword 的 kw.clone/s.clone + 7 处 to_ascii_lowercase） | 返回 `&str` + `eq_ignore_ascii_case` 内联比较 | 🕓 未纳入本次计划 |
+| PERF-10 | layout/src/style_map.rs:57,109,118,129,139,144,150 | `map_style` 每属性 clone + lowercase（get_keyword 的 kw.clone/s.clone + 7 处 to_ascii_lowercase） | 返回 `&str` + `eq_ignore_ascii_case` 内联比较 | ✅ |
 | PERF-11 | renderer/src/color.rs:113 + paint.rs:70,104,110 | `parse_rgb` 每颜色 `Vec<f64>` 堆分配；paint 每节点 `to_vec()` 克隆子节点 | 固定数组 `[f64;4]` + 计数；复用 scratch Vec | ✅ |
 
 **存储/数据模型（性能 + 正确性）**
@@ -262,8 +262,8 @@
 | B14 | P2-6 media/supports 条件评估 | `91d9fa0` |
 
 **未纳入本次计划（明确遗留）**：
-- **P2-1** 绝对长度单位 pt/pc/in/cm/mm/q 未换算 px —— 未修，待后续（低频；css-values-4 强制 px）。
-- **PERF-10** `map_style` 每属性 clone + lowercase —— 未修，纯优化无语义影响。
+- **P2-1** 绝对长度单位 pt/pc/in/cm/mm/q 未换算 px —— ✅ 已修（2026-08-09，cascade `d2c2f1c`）。
+- **PERF-10** `map_style` 每属性 clone + lowercase —— ✅ 已修（2026-08-09，layout `5c9d48f`）。
 - **P3-3** layout/convert.rs `child_nodes().to_vec()` —— renderer paint 侧已随 PERF-11 复用 scratch buffer，layout 侧未动。
 - **P3-2** calc() 长期数值求值 —— 已知简化，推迟布局阶段。
 - **@container** 条件恒 true —— 容器查询依赖布局反馈，推迟。
