@@ -22,7 +22,7 @@
 | **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 | 71 测试全绿 | 本地 v0.1.0 (未发布) | muskitty-dev/muskitty-cascade (已剥离) |
 | **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 集成 | 46 测试全绿 | 本地 v0.1.0 (未发布) | 🔗 muskitty-dev/muskitty-layout (已剥离) |
 | **muskitty-renderer** | ✅ Phase 4 B-3/B-4 | tiny-skia 后端：DOM→CSS→Layout→Render 全链路 + HTML+CSS→PNG demo | — | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
-| DOM 完整 API (Events/Style/innerHTML) | ⬜ 推迟 | — | — | — | — |
+| DOM 完整 API (Events/Style/innerHTML) | ✅ 完成 (2026-08-09) | Events → dom `event.rs` · element.style → cssom `element_style.rs` · innerHTML/outerHTML → html5-parser `serialize.rs`+`parse_fragment` | dom/cssom 全绿 + html5-parser WPT 99.0% (1889/1908) | — | — |
 | **muskitty-network** | 🚧 Phase 5 启动 | NetworkFetcher trait 抽象 + reqwest 后端（远期自研 HTTP/1.1+2+3 栈，见 [plan](docs/plans/2026-08-09-phase5-network.md)） | 7 测试全绿 (wiremock 离线) | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 
 **14 个 html5lib tokenizer 失败说明**：3 个 xmlViolation（infoset 强制转换，规范范围外）+ 11 个 `<?...>` PI 边界（test2/test3，html5lib 测试套件过时，期望 `Comment` 但现行 WHATWG §13.2.5.72-76 规定产生 `ProcessingInstruction`）。代码遵循现行 WHATWG 规范，测试套件过时。对浏览器级应用无影响（真实网页几乎不会触发这些边界）。
@@ -78,9 +78,13 @@
 - **通过率：100% (1716/1716)**，204 skipped（document-fragment 192 + script-on 12）
 - gap report：`crates/muskitty-html5-parser/tests/tree_construction_gap_report.md`
 
-### Phase 6 — DOM 完整 API 扩展 ⬜ 推迟
+### Phase 6 — DOM 完整 API 扩展 ✅ 已完成 (2026-08-09)
 
-Events / Selectors / Style / innerHTML 推迟到 Phase 2 (CSS) 之后。理由：tree construction 只需要 DOM Core 子集；Selectors/Style 依赖 muskitty-css，提前做会返工。
+- **Events**（DOM §4.4/4.5/4.6）→ muskitty-dom `src/event.rs`：`add/remove_event_listener` + `dispatch_event`（捕获/目标/冒泡三阶段，`Event` 状态机，零依赖纯 leaf）。
+- **element.style**（CSSOM §4）→ muskitty-cssom `src/element_style.rs`：扩展 trait（dom 为 source of truth，parse→mutate→serialize→写回 attribute，无缓存对象）。
+- **innerHTML/outerHTML**（HTML §13.4.2 / §13.6.4-5）→ muskitty-html5-parser `src/serialize.rs` + `parse_fragment`：fragment parsing（context 重建、reset 替换、tokenizer 初态、unwrap）+ 序列化（Normal/RawText/EscapableRawText 转义、void、template content）；harness 解锁 document-fragment 用例，WPT 99.0% (1889/1908)，12 script-on 跳过。已知遗留：18 个 foreign-context fragment + tests_innerHTML_1 #76（select-context，WPT 夹具早于 2016 reset 删除 select 分支，现行 WHATWG reset 无 select 分支 → InBody 按规范插入 input）。
+
+三个子任务各自独立 commit + push（dom/cssom/html5-parser 独立仓库）。
 
 ## Phase 2 (CSS 解析层) — 子阶段 1-5 已完成
 
@@ -384,7 +388,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 5. ~~**Phase 3 — Layout**~~ ✅ 已完成（2026-08-01）：taffy 0.12 集成，46 个测试全绿，审计修复 7 个 bug。已剥离为独立仓库。
 6. ~~**Phase 4 — Renderer**~~ ✅ B-3/B-4 已完成（2026-08-02）：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，HTML+CSS → PNG demo 工作。
 7. ~~**全项目审计修复**~~ ✅ 已完成（2026-08-09）：B1-B14 全部完成，P0/P1/P2 清零，见 `docs/audit-2026-08-08-full-scan.md` 修复状态汇总。收尾：P2-1（绝对长度单位 ✅）/ P3-2（calc 求值 ✅）/ PERF-10（map_style 优化 ✅）/ 简写展开（margin/padding/flex/background/font ✅，cascade `d6d7208`）/ 布局 B6 flex 简写端到端解锁（layout `44b9b1d`）。
-8. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟。
+8. ~~**DOM 完整 API 扩展**~~ ✅ 已完成（2026-08-09）：Events → muskitty-dom `event.rs`；element.style → muskitty-cssom `element_style.rs`；innerHTML/outerHTML → muskitty-html5-parser `serialize.rs` + `parse_fragment`（WPT harness 解锁 fragment 用例，99.0%）。
 9. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug，**保持现状**。
 
 ## Phase 3 (Layout 层) — 已完成
