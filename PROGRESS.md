@@ -383,7 +383,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 4. ~~**Cascade 收尾**（Phase 3 前置）~~ ✅ 已完成（2026-08-01）：inline `style` 属性收集已实现。
 5. ~~**Phase 3 — Layout**~~ ✅ 已完成（2026-08-01）：taffy 0.12 集成，46 个测试全绿，审计修复 7 个 bug。已剥离为独立仓库。
 6. ~~**Phase 4 — Renderer**~~ ✅ B-3/B-4 已完成（2026-08-02）：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，HTML+CSS → PNG demo 工作。
-7. ~~**全项目审计修复**~~ ✅ 已完成（2026-08-09）：B1-B14 全部完成，P0/P1/P2 清零，见 `docs/audit-2026-08-08-full-scan.md` 修复状态汇总。收尾：P2-1（绝对长度单位 ✅）/ P3-2（calc 求值 ✅）/ PERF-10（map_style 优化 ✅）/ 简写展开（margin/padding/flex/background/font ✅，cascade `d6d7208`）。
+7. ~~**全项目审计修复**~~ ✅ 已完成（2026-08-09）：B1-B14 全部完成，P0/P1/P2 清零，见 `docs/audit-2026-08-08-full-scan.md` 修复状态汇总。收尾：P2-1（绝对长度单位 ✅）/ P3-2（calc 求值 ✅）/ PERF-10（map_style 优化 ✅）/ 简写展开（margin/padding/flex/background/font ✅，cascade `d6d7208`）/ 布局 B6 flex 简写端到端解锁（layout `44b9b1d`）。
 8. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟。
 9. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug，**保持现状**。
 
@@ -418,7 +418,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 | B8 | 集成测试 margin 断言过松（x >= 19.0） | P3 | 收紧为 x == 20.0 ± 1.0 |
 | B5 | `flex-grow`/`flex-shrink` 接受负值 | P3 | 添加 >= 0.0 检查 |
 
-**未修复**：B6（`flex` 简写未实现）需 CSSOM 层 shorthand 展开支持，推迟到后续批次。
+**B6（`flex` 简写未实现）**：✅ 已修复（2026-08-09）——cascade 在 collect 阶段展开 `flex` 简写为 grow/shrink/basis（cascade `d6d7208`），布局端到端测试验证（layout `44b9b1d`）。
 
 ## Phase 2 子阶段 2 — Selectors Level 4 ✅
 
