@@ -266,6 +266,7 @@
 - **PERF-10** `map_style` 每属性 clone + lowercase —— ✅ 已修（2026-08-09，layout `5c9d48f`）。
 - **P3-3** layout/convert.rs `child_nodes().to_vec()` —— renderer paint 侧已随 PERF-11 复用 scratch buffer，layout 侧未动。
 - **P3-2** calc() 长期数值求值 —— 已知简化，推迟布局阶段。
+- **简写展开** margin/padding/flex/background/font/gap 简写在 collect 阶段展开为长属性（gap 已在 B8 处理，此处统一收纳 margin/padding/flex/background/font）—— ✅ 已修（2026-08-09，cascade `d6d7208`），解锁 layout 侧 flex 简写（C2 端到端）。
 - **@container** 条件恒 true —— 容器查询依赖布局反馈，推迟。
 
 ---
