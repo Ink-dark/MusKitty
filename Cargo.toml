@@ -3,10 +3,9 @@
 # 未剥离的 crate（renderer）作为 member 直接编译。
 # 已剥离的 crate（cascade/cssom/layout/css/css-parser/...）作为独立 git 仓库存在，
 # 各自有自己的 [workspace] 根，列在下方 exclude 中以防误吸入。
-# 未来成员预留:
-# "crates/muskitty-network",
 members = [
     "crates/muskitty-renderer",
+    "crates/muskitty-network",
 ]
 # 以下 crate 都作为独立 git 仓库剥离，各自有自己的 [workspace] 根。
 # exclude 防止父 workspace 误吸入并报 "multiple workspace roots" 错误。

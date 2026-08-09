@@ -1,0 +1,38 @@
+[package]
+name = "muskitty-network"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "MusKitty Phase 5 网络层 — NetworkFetcher trait 抽象 + reqwest 后端（远期自研 HTTP 栈）"
+repository = "https://github.com/Ink-dark/MusKitty"
+homepage = "https://github.com/Ink-dark/MusKitty"
+documentation = "https://docs.rs/muskitty-network"
+keywords = ["http", "network", "browser", "web", "fetch"]
+categories = ["network-programming", "web-programming::http-client"]
+authors = ["MusCat / MusKitty Bit-Torch Community"]
+
+[features]
+# reqwest 后端实现（默认开启）。关闭后仅保留 trait 抽象，
+# 上层自行实现 NetworkFetcher 或选用其他后端（如未来自研栈）。
+default = ["reqwest-backend"]
+reqwest-backend = ["dep:reqwest"]
+
+[dependencies]
+# reqwest: HTTP 客户端，作为 NetworkFetcher 的一个可选实现。
+# rustls-tls 满足 AGENTS.md "零 C/C++ 依赖" 硬约束（不用 native-tls / OpenSSL）。
+# http2 启用 HTTP/2，charset 启用响应编码处理。
+# default-features = false 去掉 macOS 系统配置等无关特性。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset"], optional = true }
+
+[dev-dependencies]
+# wiremock: 离线 mock HTTP server（基于 hyper，纯 Rust，零 C 依赖），
+# 单元测试用，避免 CI 依赖外网。
+wiremock = "0.6"
+# tokio: 异步运行时，仅测试与 example 需要（lib 的 async fn 由调用方提供运行时）。
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[[example]]
+name = "fetch_demo"
+path = "examples/fetch_demo.rs"
+required-features = ["reqwest-backend"]

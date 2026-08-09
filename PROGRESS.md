@@ -23,7 +23,7 @@
 | **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 集成 | 46 测试全绿 | 本地 v0.1.0 (未发布) | 🔗 muskitty-dev/muskitty-layout (已剥离) |
 | **muskitty-renderer** | ✅ Phase 4 B-3/B-4 | tiny-skia 后端：DOM→CSS→Layout→Render 全链路 + HTML+CSS→PNG demo | — | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | DOM 完整 API (Events/Style/innerHTML) | ⬜ 推迟 | — | — | — | — |
-| muskitty-network | ⬜ 远期 | — | — | — | — |
+| **muskitty-network** | 🚧 Phase 5 启动 | NetworkFetcher trait 抽象 + reqwest 后端（远期自研 HTTP/1.1+2+3 栈，见 [plan](docs/plans/2026-08-09-phase5-network.md)） | 7 测试全绿 (wiremock 离线) | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 
 **14 个 html5lib tokenizer 失败说明**：3 个 xmlViolation（infoset 强制转换，规范范围外）+ 11 个 `<?...>` PI 边界（test2/test3，html5lib 测试套件过时，期望 `Comment` 但现行 WHATWG §13.2.5.72-76 规定产生 `ProcessingInstruction`）。代码遵循现行 WHATWG 规范，测试套件过时。对浏览器级应用无影响（真实网页几乎不会触发这些边界）。
 
