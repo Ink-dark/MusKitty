@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 从零用 Rust 重写浏览器核心模块。独立实现，不 fork Chromium。Chromium 源码仅作参考，WHATWG 规范和 WPT 测试套件是行为 ground truth。
 
-当前阶段：Phase 4（Renderer）B-3 / B-4 已完成，DOM→CSS→Layout→Render 全链路打通，最小可运行 demo 工作（HTML+CSS → PNG）。HTML 解析层（tokenizer + tree construction + DOM）、CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配 + CSS Values + CSSOM + Cascade + Layout + tiny-skia Renderer 均已完成。Phase 5（Network）已启动基础搭建：`muskitty-network` crate（`NetworkFetcher` trait 抽象 + reqwest 后端，远期自研 HTTP 栈路线见 [docs/plans/2026-08-09-phase5-network.md](docs/plans/2026-08-09-phase5-network.md)），暂不与现有链路接轨。当前焦点：清掉全工作区审计发现的 P0/P1/P2 问题（见 [docs/audit-2026-08-08-full-scan.md](docs/audit-2026-08-08-full-scan.md)）。
+当前阶段：Phase 4（Renderer）B-3 / B-4 已完成，DOM→CSS→Layout→Render 全链路打通，最小可运行 demo 工作（HTML+CSS → PNG）。HTML 解析层（tokenizer + tree construction + DOM）、CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配 + CSS Values + CSSOM + Cascade + Layout + tiny-skia Renderer 均已完成。Phase 5（Network）已启动基础搭建：`muskitty-network` crate（`NetworkFetcher` trait 抽象 + reqwest 后端，远期自研 HTTP 栈路线见 [docs/plans/2026-08-09-phase5-network.md](docs/plans/2026-08-09-phase5-network.md)），暂不与现有链路接轨。全项目审计（[docs/audit-2026-08-08-full-scan.md](docs/audit-2026-08-08-full-scan.md)）B1-B14 已全部完成、P0/P1/P2 清零；当前焦点：审计遗留收尾（P2-1 绝对长度单位换算、P3-2 calc() 求值、PERF-10）+ cascade shorthand→longhand 展开。
 
-本主仓库 (`Ink-dark/MusKitty`) 作 workspace 协调中心：`members = ["crates/muskitty-renderer", "crates/muskitty-cascade", "crates/muskitty-cssom"]`，9 个已剥离 crate 列在 `exclude` 中并各自独立 git 仓库于 `muskitty-dev/` org 下，新设备 clone 主仓库后通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
+本主仓库 (`Ink-dark/MusKitty`) 作 workspace 协调中心：`members = ["crates/muskitty-renderer", "crates/muskitty-network"]`，11 个已剥离 crate 列在 `exclude` 中并各自独立 git 仓库于 `muskitty-dev/` org 下，新设备 clone 主仓库后通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
 
 ## Build & Test Commands
 
-主仓库 `members = ["crates/muskitty-renderer", "crates/muskitty-cascade", "crates/muskitty-cssom"]`，可直接 `cargo check --workspace` 一次性检查/测试所有 in-tree crate。其他独立 crate 在各自目录里构建。
+主仓库 `members = ["crates/muskitty-renderer", "crates/muskitty-network"]`，可直接 `cargo check --workspace` 一次性检查/测试所有 in-tree crate。其他独立 crate 在各自目录里构建。
 
 ```bash
 # 在某个独立 crate 目录下（例如 crates/muskitty-css-parser/）
@@ -33,16 +33,17 @@ cd D:\Muskitty\crates\muskitty-selectors && cargo test
 
 ```
 MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，workspace 协调中心
-├── Cargo.toml                          # members = [renderer, cascade, cssom], exclude = [9 个已剥离 crate]
+├── Cargo.toml                          # members = [renderer, network], exclude = [11 个已剥离 crate]
 ├── PROGRESS.md                         # 项目进度面板
 ├── CLAUDE.md / AGENTS.md               # 硬约束指南（本文件）
 ├── goal.md                             # 当轮任务清单与退出条件
 ├── README.md                           # 项目 README
-├── fetch-crates.ps1 / .sh              # 一次性拉取 9 个独立 crate 的脚本
+├── fetch-crates.ps1 / .sh              # 一次性拉取 11 个独立 crate 的脚本
 ├── crates/                             # workspace member + 独立 git 仓库
 │   ├── muskitty-renderer/              # 📦 workspace member (tiny-skia backend, 未剥离)
-│   ├── muskitty-cascade/               # 📦 workspace member (CSS Cascade L5, 未剥离)
-│   ├── muskitty-cssom/                 # 📦 workspace member (CSSOM, 未剥离)
+│   ├── muskitty-network/               # 📦 workspace member (NetworkFetcher trait + reqwest 后端, 远期自研 HTTP 栈)
+│   ├── muskitty-cascade/               # 🔗 已剥离 (CSS Cascade L5)
+│   ├── muskitty-cssom/                 # 🔗 已剥离 (CSSOM)
 │   ├── muskitty-layout/                # 🔗 已剥离 (taffy 0.12 layout)
 │   ├── muskitty-dom/                   # 🔗 已剥离 (DOM Core)
 │   ├── muskitty-html5-tokenizer/        # 🔗 已剥离 (WHATWG §13.2.5 tokenizer)
@@ -52,7 +53,6 @@ MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，worksp
 │   ├── muskitty-css/                   # 🔗 已剥离 (Facade: tokenizer + parser)
 │   ├── muskitty-selectors/             # 🔗 已剥离 (Selectors Level 4)
 │   ├── muskitty-css-values/            # 🔗 已剥离 (CSS Values L4)
-│   ├── muskitty-network/               # 📦 workspace member (NetworkFetcher trait + reqwest 后端, 远期自研 HTTP 栈)
 └── docs/
     ├── spec/                           # 规范源文件（CSS Syntax Overview.bs 等）
     ├── plans/                          # 当前阶段计划文档
@@ -66,7 +66,7 @@ MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，worksp
 muskitty-dom ────────────────────────────────────────────┐
                                                          ├─→ muskitty-selectors ──┐
 muskitty-css-tokenizer ─→ muskitty-css-parser ─→ muskitty-css ──────────────────────┤
-                                                         ├─→ muskitty-css-values  ├─→ muskitty-cascade (in-tree) ─→ muskitty-layout (已剥离)
+                                                         ├─→ muskitty-css-values  ├─→ muskitty-cascade (已剥离) ─→ muskitty-layout (已剥离)
 muskitty-html5-tokenizer ─→ muskitty-html5-parser        │                         │
                                                          └─→ muskitty-cssom ──────┘                         └─→ muskitty-renderer (in-tree)
 ```
