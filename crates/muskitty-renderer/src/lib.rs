@@ -40,8 +40,8 @@ pub mod render_tree;
 
 #[cfg(feature = "backend-tiny-skia")]
 pub use backend::tiny_skia::TinySkiaBackend;
-pub use backend::{mock::MockBackend, Backend};
+pub use backend::{mock::MockBackend, Backend, RenderOutput};
 pub use color::Color;
 pub use command::{Border, BorderStyle, RenderCommand};
 pub use paint::{paint, PaintInput};
-pub use render_tree::{extract_background_color, extract_border, RenderNode, RenderTree};
+pub use render_tree::{extract_background_color, extract_border};

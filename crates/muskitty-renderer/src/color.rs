@@ -109,8 +109,10 @@ fn parse_color_function(name: &str, args: &[ComponentValue]) -> Option<Color> {
 
 /// 解析 rgb/rgba 参数列表。
 fn parse_rgb(args: &[ComponentValue]) -> Option<Color> {
-    // 提取所有数值 token（跳过逗号、空格、斜杠分隔符）
-    let mut numbers: Vec<f64> = Vec::new();
+    // PERF-11：固定大小数组代替 Vec 堆分配。`count` 记录已收通道数；
+    // alpha 单独跟踪（slash 分隔或 legacy 第 4 参）。
+    let mut channels = [0.0f64; 4];
+    let mut count = 0usize;
     let mut alpha: Option<f64> = None;
     let mut slash_seen = false;
 
@@ -119,16 +121,23 @@ fn parse_rgb(args: &[ComponentValue]) -> Option<Color> {
             ComponentValue::PreservedToken(Token::Number(n)) => {
                 if slash_seen {
                     alpha = Some(n.value);
-                } else {
-                    numbers.push(n.value);
+                } else if count < channels.len() {
+                    channels[count] = n.value;
+                    count += 1;
                 }
             }
             ComponentValue::PreservedToken(Token::Percentage(p)) => {
                 if slash_seen {
                     alpha = Some(p.value / 100.0);
-                } else if numbers.len() < 3 {
+                } else if count < 3 {
                     // 0%-100% → 0-255
-                    numbers.push(p.value / 100.0 * 255.0);
+                    channels[count] = p.value / 100.0 * 255.0;
+                    count += 1;
+                } else if alpha.is_none() {
+                    // P1-11：legacy 逗号语法第 4 参百分比 alpha
+                    // （`rgba(255, 0, 0, 50%)`）。三通道已收满后出现的
+                    // 百分比即 alpha，与 `, 0.5` 数值形式等价。
+                    alpha = Some(p.value / 100.0);
                 }
             }
             ComponentValue::PreservedToken(Token::Comma)
@@ -143,19 +152,19 @@ fn parse_rgb(args: &[ComponentValue]) -> Option<Color> {
         }
     }
 
-    if numbers.len() < 3 {
+    if count < 3 {
         return None;
     }
 
-    let r = clamp_channel(numbers[0]);
-    let g = clamp_channel(numbers[1]);
-    let b = clamp_channel(numbers[2]);
+    let r = clamp_channel(channels[0]);
+    let g = clamp_channel(channels[1]);
+    let b = clamp_channel(channels[2]);
     let a = match alpha {
         Some(a) => clamp_alpha(a),
         None => {
             // rgba legacy 语法：第 4 个数值参数为 alpha
-            if numbers.len() >= 4 {
-                clamp_alpha(numbers[3])
+            if count >= 4 {
+                clamp_alpha(channels[3])
             } else {
                 255
             }
@@ -222,6 +231,12 @@ pub fn parse_named_color(name: &str) -> Option<Color> {
 /// 长度 8 时后两字节为 alpha。
 pub fn parse_hex_color(hex: &str) -> Option<Color> {
     let hex = hex.trim_start_matches('#');
+    // P1-10：非 ASCII（如 `#aä`，`ä` 为多字节 UTF-8）或含非十六进制字符时
+    // 直接返回 None。下方 `&hex[a..b]` 是字节切片，若输入含多字节字符会
+    // 在非 char boundary 处 panic；此处先行校验全部字符为 ASCII 十六进制。
+    if !hex.is_ascii() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
     match hex.len() {
         3 => {
             // #rgb → #rrggbb
@@ -340,6 +355,16 @@ mod tests {
     }
 
     #[test]
+    fn hex_non_ascii_does_not_panic() {
+        // P1-10：`#aä`（ä 为 2 字节 UTF-8）若走字节切片会 panic
+        // "byte index is not a char boundary"。非 ASCII / 非十六进制必须
+        // 返回 None，绝不 panic。
+        assert_eq!(parse_hex_color("#aä"), None);
+        assert_eq!(parse_hex_color("#aaä"), None);
+        assert_eq!(parse_hex_color("#äa"), None);
+    }
+
+    #[test]
     fn color_constants() {
         assert_eq!(Color::BLACK, Color::rgb(0, 0, 0));
         assert_eq!(Color::WHITE, Color::rgb(255, 255, 255));
@@ -411,6 +436,22 @@ mod tests {
     #[test]
     fn rgb_alpha_percentage() {
         let c = parse_color_str("rgb(255 0 0 / 50%)").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.a, 128);
+    }
+
+    #[test]
+    fn rgba_legacy_percentage_alpha() {
+        // P1-11：legacy 逗号语法第 4 参为百分比 alpha（`rgba(255,0,0,50%)`）
+        // 此前被丢弃 → 渲染为不透明。50% → a == 128。
+        let c = parse_color_str("rgba(255, 0, 0, 50%)").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+        assert_eq!(c.a, 128);
+
+        // 三通道同为百分比 + 第 4 参百分比 alpha
+        let c = parse_color_str("rgba(100%, 0%, 0%, 50%)").unwrap();
         assert_eq!(c.r, 255);
         assert_eq!(c.a, 128);
     }

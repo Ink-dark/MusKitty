@@ -18,7 +18,7 @@
 //! - dashed / dotted 样式当前按 solid 渲染（推迟到 tiny-skia 的 dash
 //!   支持接入）。
 
-use crate::backend::Backend;
+use crate::backend::{Backend, RenderOutput};
 use crate::command::{Border, BorderStyle, RenderCommand};
 use tiny_skia::{Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
@@ -75,11 +75,19 @@ impl TinySkiaBackend {
 }
 
 impl Backend for TinySkiaBackend {
-    fn render(&mut self, commands: &[RenderCommand], width: u32, height: u32) {
+    fn render(&mut self, commands: &[RenderCommand], width: u32, height: u32) -> RenderOutput {
         // Pixmap::new 返回 None 当 width/height 为 0 或超过 i32::MAX/4。
         // 回退到 1x1 像素以避免 panic（这种情况下命令通常也无法绘制）。
         let mut pixmap = Pixmap::new(width, height)
             .unwrap_or_else(|| Pixmap::new(1, 1).expect("1x1 pixmap always succeeds"));
+
+        // P3-5: 画布默认填白（根元素背景传播的简化近似，见审计文档）。
+        // 元素指令按序覆盖其上；未覆盖区域呈现白色而非透明。
+        if let Some(canvas) = Rect::from_xywh(0.0, 0.0, width as f32, height as f32) {
+            let mut white = Paint::default();
+            white.set_color_rgba8(255, 255, 255, 255);
+            pixmap.fill_rect(canvas, &white, Transform::identity(), None);
+        }
 
         for cmd in commands {
             match cmd {
@@ -117,6 +125,15 @@ impl Backend for TinySkiaBackend {
         }
 
         self.pixmap = Some(pixmap);
+
+        // P2-18：返回像素数据（RGBA，行长 = width*4）。`pixmap.data()` 保持
+        // 引用有效直到赋值前，故先取引用再 move。
+        let p = self.pixmap.as_ref().expect("pixmap just set");
+        RenderOutput::Pixels {
+            width,
+            height,
+            data: p.data().to_vec(),
+        }
     }
 }
 
@@ -193,13 +210,16 @@ mod tests {
     }
 
     #[test]
-    fn render_empty_commands_produces_transparent_pixmap() {
+    fn render_empty_commands_produces_white_canvas() {
+        // P3-5：画布默认填白，空指令也产出白底而非透明。
         let mut backend = TinySkiaBackend::new();
         backend.render(&[], 10, 10);
         let pixmap = backend.pixmap().expect("pixmap allocated");
-        // 默认透明
         let pixel = pixmap.pixel(0, 0).expect("in range");
-        assert_eq!(pixel.alpha(), 0);
+        assert_eq!(pixel.red(), 255);
+        assert_eq!(pixel.green(), 255);
+        assert_eq!(pixel.blue(), 255);
+        assert_eq!(pixel.alpha(), 255);
     }
 
     #[test]
@@ -224,10 +244,11 @@ mod tests {
             },
         ];
         backend.render(&cmds, 10, 10);
-        // 零尺寸矩形不应绘制
+        // 零尺寸矩形不应绘制 → 画布保持白色（P3-5）
         let pixmap = backend.pixmap().expect("pixmap allocated");
         let pixel = pixmap.pixel(0, 0).expect("in range");
-        assert_eq!(pixel.alpha(), 0, "transparent — zero-size rects skipped");
+        assert_eq!(pixel.alpha(), 255, "white canvas — zero-size rects skipped");
+        assert_eq!(pixel.red(), 255);
     }
 
     #[test]
@@ -248,9 +269,14 @@ mod tests {
         backend.render(&cmds, 100, 100);
 
         let pixmap = backend.pixmap().expect("pixmap allocated");
-        // 边框外（左上角）应为透明
+        // 边框外（左上角）应为白底画布（P3-5）
         let outside = pixmap.pixel(0, 0).expect("in range");
-        assert_eq!(outside.alpha(), 0, "outside border should be transparent");
+        assert_eq!(
+            outside.alpha(),
+            255,
+            "outside border should be white canvas"
+        );
+        assert_eq!(outside.red(), 255, "white canvas");
 
         // 边框中心像素 (y=10) 应为蓝色
         // stroke 中心对齐到 (x+1, y+1)，所以 (50, 10) 应在边框顶部
@@ -316,8 +342,18 @@ mod tests {
         backend.render(&cmds, 10, 10);
         let pixmap = backend.pixmap().expect("pixmap allocated");
         let pixel = pixmap.pixel(5, 5).expect("in range");
-        // 半透明红色预乘后：(r=128, g=0, b=0, a=128)（近似）
-        assert!(pixel.alpha() > 100 && pixel.alpha() < 156, "alpha ~128");
-        assert!(pixel.red() > 100, "red should be > 100 (premultiplied)");
+        // P3-5 白画布下，半透明红 source-over 混合到白底 →
+        // (≈255, 127, 127) 粉色，alpha 变为不透明。
+        assert_eq!(pixel.alpha(), 255, "white canvas behind is opaque");
+        assert!(
+            pixel.red() > 200,
+            "red should dominate, got {}",
+            pixel.red()
+        );
+        assert!(
+            pixel.green() > 100 && pixel.green() < 160,
+            "green ~127 from white canvas, got {}",
+            pixel.green()
+        );
     }
 }

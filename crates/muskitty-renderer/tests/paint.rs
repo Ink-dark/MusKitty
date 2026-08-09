@@ -5,18 +5,15 @@
 //! HTML + CSS → parse → cascade → compute → layout → paint → RenderCommand[]
 //! ```
 
-use muskitty_cascade::{
-    apply_defaulting, cascade_for_element, cascade_winner, collect_declared_values, compute_value,
-    ComputeContext, ComputedStyle, ComputedValue, BUILTIN_PROPERTIES,
-};
+use muskitty_cascade::{compute_styles, ComputedStyle, StyleTreeOptions};
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
-use muskitty_dom::{Node, NodeKind};
+use muskitty_dom::Node;
 use muskitty_layout::{build_layout_tree, compute_layout, LayoutResult};
 use muskitty_renderer::{
     paint, Backend, Border, BorderStyle, Color, MockBackend, PaintInput, RenderCommand,
+    RenderOutput,
 };
-use muskitty_selectors::matching::DomElement;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -40,13 +37,10 @@ fn full_pipeline(html: &str, css: &str, viewport_w: f32, viewport_h: f32) -> Pip
         s
     };
 
-    let empty_props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
-    let ctx = ComputeContext::new(&empty_props);
-    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
-    compute_styles_recursive(&dom, &[sheet], &ctx, None, &mut styles);
+    let styles = compute_styles(&dom, &[sheet], &StyleTreeOptions::default());
 
     let mut tree = build_layout_tree(&dom, &styles);
-    let layout = compute_layout(&mut tree, viewport_w, viewport_h);
+    let layout = compute_layout(&mut tree, viewport_w, viewport_h).expect("layout should succeed");
 
     PipelineResult {
         dom,
@@ -55,61 +49,19 @@ fn full_pipeline(html: &str, css: &str, viewport_w: f32, viewport_h: f32) -> Pip
     }
 }
 
-/// 递归计算每个元素的 ComputedStyle（复制自 muskitty-layout 集成测试）。
-fn compute_styles_recursive(
-    node: &Rc<RefCell<Node>>,
-    sheets: &[muskitty_cssom::CssStyleSheet],
-    ctx: &ComputeContext,
-    parent_style: Option<&ComputedStyle>,
-    styles: &mut HashMap<usize, ComputedStyle>,
-) {
-    let is_element = matches!(node.borrow().kind, NodeKind::Element(_));
-    let addr = Rc::as_ptr(node) as usize;
-    if is_element {
-        let element = DomElement::new(Rc::clone(node));
-        let declared = collect_declared_values(&element, sheets);
-        let groups = cascade_for_element(declared);
-        let mut cs = ComputedStyle::new();
-        for (property, group) in &groups {
-            let winner = cascade_winner(group);
-            let cascaded = winner.map(|w| w.value.as_slice());
-            let specified = apply_defaulting(
-                property,
-                cascaded,
-                parent_style.and_then(|ps| ps.get(property)),
-            );
-            let computed = match &specified {
-                ComputedValue::Raw(cvs) => compute_value(property, cvs, ctx),
-                _ => specified,
-            };
-            cs.set(property.clone(), computed);
-        }
-        for prop_def in BUILTIN_PROPERTIES.iter() {
-            if !cs.properties.contains_key(prop_def.name) {
-                let specified = apply_defaulting(
-                    prop_def.name,
-                    None,
-                    parent_style.and_then(|ps| ps.get(prop_def.name)),
-                );
-                let computed = match &specified {
-                    ComputedValue::Raw(cvs) => compute_value(prop_def.name, cvs, ctx),
-                    _ => specified,
-                };
-                cs.set(prop_def.name.to_string(), computed);
-            }
-        }
-        styles.insert(addr, cs);
-    }
-
-    let children: Vec<Rc<RefCell<Node>>> = node.borrow().child_nodes().to_vec();
-    let parent_cs = styles.get(&addr).cloned();
-    for child in &children {
-        compute_styles_recursive(child, sheets, ctx, parent_cs.as_ref(), styles);
-    }
+/// 运行 paint 并返回指令列表（不剔除，viewport = None）。
+fn paint_pipeline(html: &str, css: &str, vw: f32, vh: f32) -> Vec<RenderCommand> {
+    paint_pipeline_with_viewport(html, css, vw, vh, None)
 }
 
-/// 运行 paint 并返回指令列表。
-fn paint_pipeline(html: &str, css: &str, vw: f32, vh: f32) -> Vec<RenderCommand> {
+/// 运行 paint 并返回指令列表（可指定 viewport 剔除）。
+fn paint_pipeline_with_viewport(
+    html: &str,
+    css: &str,
+    vw: f32,
+    vh: f32,
+    viewport: Option<(f32, f32, f32, f32)>,
+) -> Vec<RenderCommand> {
     let PipelineResult {
         dom,
         styles,
@@ -119,6 +71,7 @@ fn paint_pipeline(html: &str, css: &str, vw: f32, vh: f32) -> Vec<RenderCommand>
         dom: &dom,
         styles: &styles,
         layout: &layout,
+        viewport,
     };
     paint(&input)
 }
@@ -261,6 +214,60 @@ fn paint_nested_divs_both_with_background() {
 }
 
 #[test]
+fn paint_contents_splice_absolute_coords() {
+    // P2-19: paint 读 NodeLayout::abs_x/abs_y（画布绝对坐标），不再沿 DOM
+    // 祖先累加偏移。display:contents 把 span 的后代 splice 为 flex 容器的
+    // 直接子盒，DOM 祖先链 div>span>div ≠ taffy 父链 div>inner。
+    // inner 绝对坐标 = (padding-left 10 + margin-left 5, padding-top 10) = (15, 10)。
+    let cmds = paint_pipeline(
+        "<div style='display: flex; padding-left: 10px; padding-top: 10px; background-color: red;'>\
+           <span style='display: contents'>\
+             <div style='width: 50px; height: 50px; background-color: blue; margin-left: 5px;'></div>\
+           </span>\
+         </div>",
+        "",
+        800.0,
+        600.0,
+    );
+    // 父 flex 容器先绘制（red，abs 0,0），随后 inner（blue，abs 15,10）。
+    assert_eq!(cmds.len(), 2, "flex container + inner should both paint");
+    match (&cmds[0], &cmds[1]) {
+        (
+            RenderCommand::Rect {
+                background: bg1,
+                x: x1,
+                y: y1,
+                ..
+            },
+            RenderCommand::Rect {
+                background: bg2,
+                x: x2,
+                y: y2,
+                ..
+            },
+        ) => {
+            assert_eq!(
+                *bg1,
+                Some(Color::rgb(255, 0, 0)),
+                "flex container red first"
+            );
+            assert!((*x1 - 0.0).abs() < 1.0, "flex container x ~0, got {x1}");
+            assert!((*y1 - 0.0).abs() < 1.0, "flex container y ~0, got {y1}");
+            assert_eq!(*bg2, Some(Color::rgb(0, 0, 255)), "inner blue second");
+            assert!(
+                (*x2 - 15.0).abs() < 1.0,
+                "inner x ~15 (padding 10 + margin 5), got {x2}"
+            );
+            assert!(
+                (*y2 - 10.0).abs() < 1.0,
+                "inner y ~10 (padding-top), got {y2}"
+            );
+        }
+        _ => panic!("expected two Rect commands"),
+    }
+}
+
+#[test]
 fn paint_display_none_skipped() {
     let cmds = paint_pipeline(
         "<div style=\"background-color: red; display: none; width: 100px; height: 100px\"></div>",
@@ -284,7 +291,9 @@ fn paint_mock_backend_consumes_commands() {
         600.0,
     );
     let mut backend = MockBackend::new();
-    backend.render(&cmds, 800, 600);
+    // P2-18：Mock 返回 Commands 输出。
+    let output = backend.render(&cmds, 800, 600);
+    assert_eq!(output, RenderOutput::Commands(cmds));
     assert_eq!(backend.len(), 1);
     assert_eq!(backend.width, 800);
     assert_eq!(backend.height, 600);
@@ -457,4 +466,88 @@ fn paint_background_rgb_fully_transparent() {
     );
     // alpha=0 → 完全透明 → 跳过
     assert!(cmds.is_empty(), "alpha=0 should be transparent");
+}
+
+// —— H-4: var() 端到端（cascade 收集自定义属性 → paint）——
+
+#[test]
+fn paint_var_custom_property_background_color() {
+    // :root 定义 --brand，div 用 var(--brand) 作为 background-color
+    let cmds = paint_pipeline(
+        "<div></div>",
+        ":root { --brand: red; } div { background-color: var(--brand); width: 80px; height: 60px; }",
+        800.0,
+        600.0,
+    );
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect { background, .. } => {
+            assert_eq!(*background, Some(Color::rgb(255, 0, 0)));
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
+#[test]
+fn paint_var_inherited_from_parent() {
+    // 父 div 声明 --brand，子 div 通过 var() 继承
+    let cmds = paint_pipeline(
+        "<div class=\"parent\"><div></div></div>",
+        ".parent { --brand: #00ff00; } div div { background-color: var(--brand); width: 40px; height: 40px; }",
+        800.0,
+        600.0,
+    );
+    // 父 div 无 background，子 div 有 → 恰好 1 条 Rect
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect { background, .. } => {
+            assert_eq!(*background, Some(Color::rgb(0, 255, 0)));
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
+// —— P3-6: viewport culling ——
+
+#[test]
+fn paint_viewport_culling_skips_out_of_viewport() {
+    // 元素完全位于视口外 → 不生成绘制指令。
+    let cmds = paint_pipeline_with_viewport(
+        "<div style=\"background-color: red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+        // viewport 从 (200, 200) 起，元素 (0,0)-(100,50) 完全在外
+        Some((200.0, 200.0, 100.0, 100.0)),
+    );
+    assert!(
+        cmds.is_empty(),
+        "element fully outside viewport should be culled, got {:?}",
+        cmds
+    );
+
+    // 元素与视口相交 → 保留。
+    let cmds = paint_pipeline_with_viewport(
+        "<div style=\"background-color: red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+        // viewport (50,25)-(150,125) 与元素 (0,0)-(100,50) 相交
+        Some((50.0, 25.0, 100.0, 100.0)),
+    );
+    assert_eq!(
+        cmds.len(),
+        1,
+        "element intersecting viewport should still paint"
+    );
+
+    // 无 viewport（None）→ 不剔除。
+    let cmds = paint_pipeline_with_viewport(
+        "<div style=\"background-color: red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+        None,
+    );
+    assert_eq!(cmds.len(), 1, "None viewport disables culling");
 }

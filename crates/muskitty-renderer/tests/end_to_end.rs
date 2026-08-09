@@ -9,72 +9,16 @@
 //!
 //! 这是 muskitty-renderer 的「smoke test」：证明 DOM→CSS→Layout→Render 全链路打通。
 
-use muskitty_cascade::{
-    apply_defaulting, cascade_for_element, cascade_winner, collect_declared_values, compute_value,
-    ComputeContext, ComputedStyle, ComputedValue, BUILTIN_PROPERTIES,
-};
+use muskitty_cascade::{compute_styles as compute_styles_tree, ComputedStyle, StyleTreeOptions};
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::{Node, NodeKind};
 use muskitty_layout::{build_layout_tree, compute_layout};
-use muskitty_renderer::{paint, Backend, PaintInput, TinySkiaBackend};
-use muskitty_selectors::matching::DomElement;
+use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
+use muskitty_selectors::matching::{DomElement, Element as _};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-
-/// 递归计算每个元素的 ComputedStyle。
-fn compute_styles_recursive(
-    node: &Rc<RefCell<Node>>,
-    sheets: &[muskitty_cssom::CssStyleSheet],
-    ctx: &ComputeContext,
-    parent_style: Option<&ComputedStyle>,
-    styles: &mut HashMap<usize, ComputedStyle>,
-) {
-    let is_element = matches!(node.borrow().kind, NodeKind::Element(_));
-    let addr = Rc::as_ptr(node) as usize;
-    if is_element {
-        let element = DomElement::new(Rc::clone(node));
-        let declared = collect_declared_values(&element, sheets);
-        let groups = cascade_for_element(declared);
-        let mut cs = ComputedStyle::new();
-        for (property, group) in &groups {
-            let winner = cascade_winner(group);
-            let cascaded = winner.map(|w| w.value.as_slice());
-            let specified = apply_defaulting(
-                property,
-                cascaded,
-                parent_style.and_then(|ps| ps.get(property)),
-            );
-            let computed = match &specified {
-                ComputedValue::Raw(cvs) => compute_value(property, cvs, ctx),
-                _ => specified,
-            };
-            cs.set(property.clone(), computed);
-        }
-        for prop_def in BUILTIN_PROPERTIES.iter() {
-            if !cs.properties.contains_key(prop_def.name) {
-                let specified = apply_defaulting(
-                    prop_def.name,
-                    None,
-                    parent_style.and_then(|ps| ps.get(prop_def.name)),
-                );
-                let computed = match &specified {
-                    ComputedValue::Raw(cvs) => compute_value(prop_def.name, cvs, ctx),
-                    _ => specified,
-                };
-                cs.set(prop_def.name.to_string(), computed);
-            }
-        }
-        styles.insert(addr, cs);
-    }
-
-    let children: Vec<Rc<RefCell<Node>>> = node.borrow().child_nodes().to_vec();
-    let parent_cs = styles.get(&addr).cloned();
-    for child in &children {
-        compute_styles_recursive(child, sheets, ctx, parent_cs.as_ref(), styles);
-    }
-}
 
 /// 运行完整 pipeline 并编码为 PNG。
 fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
@@ -85,23 +29,38 @@ fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
         s.origin = Origin::Author;
         s
     };
-    let empty_props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
-    let ctx = ComputeContext::new(&empty_props);
-    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
-    compute_styles_recursive(&dom, &[sheet], &ctx, None, &mut styles);
+    let styles = compute_styles_tree(&dom, &[sheet], &StyleTreeOptions::default());
 
     let mut tree = build_layout_tree(&dom, &styles);
-    let layout = compute_layout(&mut tree, vw, vh);
+    let layout = compute_layout(&mut tree, vw, vh).expect("layout should succeed");
 
     let input = PaintInput {
         dom: &dom,
         styles: &styles,
         layout: &layout,
+        viewport: None,
     };
     let commands = paint(&input);
 
     let mut backend = TinySkiaBackend::new();
-    backend.render(&commands, vw as u32, vh as u32);
+    // P2-18：render 返回像素输出，测试消费返回值确认尺寸与数据长度。
+    let output = backend.render(&commands, vw as u32, vh as u32);
+    match output {
+        RenderOutput::Pixels {
+            width,
+            height,
+            data,
+        } => {
+            assert_eq!(width, vw as u32, "pixel buffer width");
+            assert_eq!(height, vh as u32, "pixel buffer height");
+            assert_eq!(
+                data.len(),
+                vw as usize * vh as usize * 4,
+                "RGBA buffer length"
+            );
+        }
+        other => panic!("expected Pixels from tiny-skia, got {:?}", other),
+    }
     backend
         .encode_png()
         .expect("PNG encoding should succeed after render")
@@ -148,4 +107,98 @@ fn end_to_end_empty_document_produces_valid_png() {
         &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
     );
     assert!(png.len() > 64);
+}
+
+// —— H-4: var() 端到端（cascade 收集自定义属性 → computed value）——
+
+/// 运行 HTML+CSS 全链路（不含 layout/paint），返回每元素 ComputedStyle。
+fn compute_styles(html: &str, css: &str) -> (Rc<RefCell<Node>>, HashMap<usize, ComputedStyle>) {
+    let dom = muskitty_html5_parser::parse(html);
+    let parsed = parse_stylesheet(css);
+    let sheet = {
+        let mut s = from_stylesheet(&parsed);
+        s.origin = Origin::Author;
+        s
+    };
+    let styles = compute_styles_tree(&dom, &[sheet], &StyleTreeOptions::default());
+    (dom, styles)
+}
+
+/// 按 id 查找元素。
+fn find_element_by_id(node: &Rc<RefCell<Node>>, id: &str) -> Option<DomElement> {
+    if matches!(&node.borrow().kind, NodeKind::Element(_)) {
+        let el = DomElement::new(Rc::clone(node));
+        if el.get_attribute("id").as_deref() == Some(id) {
+            return Some(el);
+        }
+    }
+    for child in node.borrow().child_nodes() {
+        if let Some(found) = find_element_by_id(child, id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// 断言某元素的 color 计算值为指定 ident。
+fn assert_color_ident(
+    dom: &Rc<RefCell<Node>>,
+    styles: &HashMap<usize, ComputedStyle>,
+    id: &str,
+    expected: &str,
+) {
+    let el = find_element_by_id(dom, id).unwrap_or_else(|| panic!("element #{id} not found"));
+    let addr = Rc::as_ptr(el.inner()) as usize;
+    let cs = &styles[&addr];
+    // 单态化（P2-20）：关键字/解析值统一为 token 序列，直接取首个 token。
+    let cvs = cs.get("color").expect("color not in style").tokens();
+    match &cvs[0] {
+        muskitty_css::parser::ComponentValue::PreservedToken(
+            muskitty_css::tokenizer::Token::Ident(s),
+        ) => assert_eq!(s, expected),
+        other => panic!("expected Ident, got {:?}", other),
+    }
+}
+
+#[test]
+fn end_to_end_var_root_custom_property_colors_div() {
+    // :root { --brand: red } div { color: var(--brand) } → div 的 color = red
+    let (dom, styles) = compute_styles(
+        r#"<html><body><div id="a"></div></body></html>"#,
+        ":root { --brand: red; } div { color: var(--brand); }",
+    );
+    assert_color_ident(&dom, &styles, "a", "red");
+}
+
+#[test]
+fn end_to_end_var_inherits_and_overrides() {
+    // :root { --brand: red } .child { --brand: blue } .child .grand { color: var(--brand) }
+    // → grand 继承 child 的 blue
+    let (dom, styles) = compute_styles(
+        r#"<html><body>
+            <div class="child" id="c"><span class="grand" id="g"></span></div>
+        </body></html>"#,
+        ":root { --brand: red; } .child { --brand: blue; } .child .grand { color: var(--brand); }",
+    );
+    assert_color_ident(&dom, &styles, "g", "blue");
+}
+
+#[test]
+fn end_to_end_var_chained_resolves() {
+    // :root { --x: var(--y); --y: green } p { color: var(--x) } → green
+    let (dom, styles) = compute_styles(
+        r#"<html><body><p id="p"></p></body></html>"#,
+        ":root { --x: var(--y); --y: green; } p { color: var(--x); }",
+    );
+    assert_color_ident(&dom, &styles, "p", "green");
+}
+
+#[test]
+fn end_to_end_var_missing_uses_fallback_or_empty() {
+    // 父级未声明 → var(--missing, orange) 命中 fallback → orange
+    let (dom, styles) = compute_styles(
+        r#"<html><body><p id="p"></p></body></html>"#,
+        "p { color: var(--missing, orange); }",
+    );
+    assert_color_ident(&dom, &styles, "p", "orange");
 }

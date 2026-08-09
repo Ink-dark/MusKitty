@@ -2,7 +2,7 @@
 //!
 //! 验证 paint 产出的 `RenderCommand` 序列是否符合预期。
 
-use crate::backend::Backend;
+use crate::backend::{Backend, RenderOutput};
 use crate::command::RenderCommand;
 
 /// 记录所有传入的绘制指令与画布尺寸。
@@ -34,10 +34,12 @@ impl MockBackend {
 }
 
 impl Backend for MockBackend {
-    fn render(&mut self, commands: &[RenderCommand], width: u32, height: u32) {
+    fn render(&mut self, commands: &[RenderCommand], width: u32, height: u32) -> RenderOutput {
         self.width = width;
         self.height = height;
         self.commands = commands.to_vec();
+        // P2-18：返回指令本身（mock 不栅格化）。
+        RenderOutput::Commands(commands.to_vec())
     }
 }
 
@@ -53,7 +55,9 @@ mod tests {
             RenderCommand::rect(0.0, 0.0, 10.0, 10.0, Color::rgb(255, 0, 0)),
             RenderCommand::rect(20.0, 20.0, 30.0, 30.0, Color::rgb(0, 255, 0)),
         ];
-        backend.render(&cmds, 800, 600);
+        // P2-18：render 返回 RenderOutput::Commands
+        let output = backend.render(&cmds, 800, 600);
+        assert_eq!(output, RenderOutput::Commands(cmds.clone()));
         assert_eq!(backend.width, 800);
         assert_eq!(backend.height, 600);
         assert_eq!(backend.len(), 2);
@@ -63,7 +67,8 @@ mod tests {
     #[test]
     fn mock_empty() {
         let mut backend = MockBackend::new();
-        backend.render(&[], 100, 100);
+        let output = backend.render(&[], 100, 100);
+        assert_eq!(output, RenderOutput::Commands(vec![]));
         assert!(backend.is_empty());
         assert_eq!(backend.width, 100);
     }

@@ -1,6 +1,7 @@
 /target
 crates/*/target
 *.lock
+!Cargo.lock
 .zcode/
 
 # --- 示例输出（避免二进制文件污染版本库）---
@@ -10,7 +11,6 @@ render_demo.png
 # --- 已剥离的独立 crate（各自有 .git 仓库，在 Cargo.toml exclude 列表中）---
 # 这些目录不在主仓库版本控制中。新设备 clone 后需通过 fetch-crates.ps1 / fetch-crates.sh
 # 拉取到 crates/ 下，workspace member 的 path 依赖才能解析。
-crates/muskitty-cascade/
 crates/muskitty-layout/
 crates/muskitty-html5-parser/
 crates/muskitty-html5-tokenizer/
@@ -20,4 +20,6 @@ crates/muskitty-css-parser/
 crates/muskitty-selectors/
 crates/muskitty-css/
 crates/muskitty-css-values/
+crates/muskitty-cascade/
 crates/muskitty-cssom/
+# 注意：muskitty-renderer 尚未剥离，作为主仓库 workspace member 直接版本控制。

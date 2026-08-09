@@ -1,10 +1,10 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-08-01 | 基于 Phase 3 Layout 完成 + 审计修复
+> 最后更新: 2026-08-09 | 全项目审计修复完成（B1-B14，P0/P1/P2 清零）+ Phase 5 Network 启动 + workspace 重构（cascade/cssom 剥离，members=[renderer, network]）
 >
-> Phase 3（Layout 层）已完成：`muskitty-layout` v0.1.0 在主仓库内开发（未剥离），46 个测试全绿。
-> `muskitty-cascade` v0.1.0 仍在主仓库内（71 测试全绿），待与 layout 一同剥离。
-> Phase 4（Renderer）即将启动，目标：HTML + CSS → 布局 → 渲染到窗口/图片。
+> Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
+> Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
+> 主仓库 workspace `members = ["crates/muskitty-renderer", "crates/muskitty-network"]`；renderer/network 在主仓库内（未剥离），其余 11 个 crate 已剥离为独立 git 仓库（muskitty-dev org），由 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
 
 ## 总览
 
@@ -19,11 +19,11 @@
 | **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 145 测试全绿 | v0.1.0 | muskitty-dev/muskitty-selectors |
 | **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 148 测试全绿 | v0.1.0 | muskitty-dev/muskitty-css-values |
 | **muskitty-cssom** | ✅ 完成 | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | 81 测试全绿 | v0.1.0 | muskitty-dev/muskitty-cssom |
-| **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 | 71 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
-| **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 集成 | 46 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
-| muskitty-renderer | ⬜ Phase 4 启动 | — | — | — | — |
+| **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 | 71 测试全绿 | 本地 v0.1.0 (未发布) | muskitty-dev/muskitty-cascade (已剥离) |
+| **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 集成 | 46 测试全绿 | 本地 v0.1.0 (未发布) | 🔗 muskitty-dev/muskitty-layout (已剥离) |
+| **muskitty-renderer** | ✅ Phase 4 B-3/B-4 | tiny-skia 后端：DOM→CSS→Layout→Render 全链路 + HTML+CSS→PNG demo | — | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | DOM 完整 API (Events/Style/innerHTML) | ⬜ 推迟 | — | — | — | — |
-| muskitty-network | ⬜ 远期 | — | — | — | — |
+| **muskitty-network** | 🚧 Phase 5 启动 | NetworkFetcher trait 抽象 + reqwest 后端（远期自研 HTTP/1.1+2+3 栈，见 [plan](docs/plans/2026-08-09-phase5-network.md)） | 7 测试全绿 (wiremock 离线) | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 
 **14 个 html5lib tokenizer 失败说明**：3 个 xmlViolation（infoset 强制转换，规范范围外）+ 11 个 `<?...>` PI 边界（test2/test3，html5lib 测试套件过时，期望 `Comment` 但现行 WHATWG §13.2.5.72-76 规定产生 `ProcessingInstruction`）。代码遵循现行 WHATWG 规范，测试套件过时。对浏览器级应用无影响（真实网页几乎不会触发这些边界）。
 
@@ -214,21 +214,23 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 仓库策略
 
-**9 个已成熟 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下），并通过 GitHub Actions 自动发布到 crates.io。`muskitty-cascade` 和 `muskitty-layout` 仍在主仓库内作为 workspace member 开发（未剥离、未发布），待 Phase 3 收尾后一同剥离。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-cascade", "crates/muskitty-layout"]`，`exclude` 列表排除 9 个已剥离 crate。
+**11 个 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下，含 cascade/cssom，2026-08-09 剥离），并通过 GitHub Actions 自动发布到 crates.io（发布状态见下表）。`muskitty-renderer`、`muskitty-network` 作为主仓库 workspace member 开发（未剥离、未发布）。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-renderer", "crates/muskitty-network"]`，`exclude` 列表排除 11 个已剥离 crate。新设备 clone 主仓库后通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
 
-### crates.io 发布状态（截至 2026-07-24）
+### crates.io 发布状态（截至 2026-08-09）
 
 | crate | 版本 | crates.io 发布时间 | 仓库 |
 |-------|------|-------------------|------|
-| muskitty-dom | 0.1.0 | — | [muskitty-dev/muskitty-dom](https://github.com/muskitty-dev/muskitty-dom) |
-| muskitty-html5-tokenizer | 0.1.2 | — | [muskitty-dev/muskitty-html5-tokenizer](https://github.com/muskitty-dev/muskitty-html5-tokenizer) |
-| muskitty-html5-parser | 0.1.2 | — | [muskitty-dev/muskitty-html5-parser](https://github.com/muskitty-dev/muskitty-html5-parser) |
+| muskitty-dom | 0.2.0 | — | [muskitty-dev/muskitty-dom](https://github.com/muskitty-dev/muskitty-dom) |
+| muskitty-html5-tokenizer | 0.1.3 | — | [muskitty-dev/muskitty-html5-tokenizer](https://github.com/muskitty-dev/muskitty-html5-tokenizer) |
+| muskitty-html5-parser | 0.2.0 | — | [muskitty-dev/muskitty-html5-parser](https://github.com/muskitty-dev/muskitty-html5-parser) |
 | muskitty-css-tokenizer | 0.2.0 | 2026-07-24 | [muskitty-dev/muskitty-css-tokenizer](https://github.com/muskitty-dev/muskitty-css-tokenizer) |
-| muskitty-css-parser | 0.2.0 | 2026-07-24 | [muskitty-dev/muskitty-css-parser](https://github.com/muskitty-dev/muskitty-css-parser) |
-| muskitty-css | 0.5.0 | 2026-07-24 | [muskitty-dev/muskitty-css](https://github.com/muskitty-dev/muskitty-css) |
-| muskitty-selectors | 0.1.0 | 2026-07-19T12:11:16Z | [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors) |
+| muskitty-css-parser | 0.3.0 | 2026-07-24 | [muskitty-dev/muskitty-css-parser](https://github.com/muskitty-dev/muskitty-css-parser) |
+| muskitty-css | 0.6.0 | 2026-07-24 | [muskitty-dev/muskitty-css](https://github.com/muskitty-dev/muskitty-css) |
+| muskitty-selectors | 0.2.0 | 2026-07-19T12:11:16Z | [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors) |
 | muskitty-css-values | 0.1.0 | 2026-07-24 | [muskitty-dev/muskitty-css-values](https://github.com/muskitty-dev/muskitty-css-values) |
 | muskitty-cssom | 0.1.0 | 2026-07-24 | [muskitty-dev/muskitty-cssom](https://github.com/muskitty-dev/muskitty-cssom) |
+| muskitty-layout | 0.1.0 | — | [muskitty-dev/muskitty-layout](https://github.com/muskitty-dev/muskitty-layout) |
+| muskitty-cascade | 0.1.0 (未发布) | — | [muskitty-dev/muskitty-cascade](https://github.com/muskitty-dev/muskitty-cascade) |
 
 ### CI/CD 模式
 
@@ -240,9 +242,9 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ### 主仓库职责
 
-- **workspace 协调中心**：保留 `d:\Muskitty\Cargo.toml` 作为 workspace 根（`members = ["crates/muskitty-cascade"]` + `exclude = [9 个已剥离 crate]`），便于本地开发时一次性构建所有 crate。
-- **新 crate 孵化器**：`muskitty-cascade` 当前在主仓库内开发；`muskitty-layout` / `muskitty-network` / `muskitty-renderer` 未来也将在主仓库内开发，成熟后再剥离。
-- **文档中心**：保留 `PROGRESS.md` / `CLAUDE.md` / `.trae/archive/` / `docs/plans/` 作为项目级文档。
+- **workspace 协调中心**：保留 `d:\Muskitty\Cargo.toml` 作为 workspace 根（`members = ["crates/muskitty-renderer", "crates/muskitty-network"]` + `exclude = [11 个已剥离 crate]`），便于本地开发时一次性构建所有 crate。
+- **新 crate 孵化器**：`muskitty-renderer` / `muskitty-network` 作为 workspace member 在主仓库内开发（未剥离）；已剥离 crate 各自独立维护。
+- **文档中心**：保留 `PROGRESS.md` / `CLAUDE.md` / `AGENTS.md` / `goal.md` / `docs/plans/` 作为项目级文档。
 
 ## Phase 2 规划：muskitty-css (CSS 解析层)
 
@@ -300,30 +302,35 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 源代码结构
 
-主仓库作为 workspace 协调中心；9 个已成熟 crate 各自独立 git 仓库（在 `exclude` 列表中），`muskitty-cascade` 作为 workspace member 在主仓库内开发（成熟后再剥离）。具体每个独立 crate 的内部结构见各自仓库的 README。
+主仓库作为 workspace 协调中心；11 个 crate 各自独立 git 仓库（在 `exclude` 列表中），`muskitty-renderer` / `muskitty-network` 作为 workspace member 在主仓库内开发（未剥离）。具体每个独立 crate 的内部结构见各自仓库的 README。
 
 ```
 d:\Muskitty\                              # 主仓库 (Ink-dark/MusKitty)
-├── Cargo.toml                           # workspace 根：members = [muskitty-cascade], exclude = [9 个已剥离 crate]
+├── Cargo.toml                           # workspace 根：members = [renderer, network], exclude = [11 个已剥离 crate]
 ├── .gitignore                           # 排除已剥离 crate 目录
+├── fetch-crates.ps1 / .sh              # 一次性拉取 11 个独立 crate 的脚本
 ├── PROGRESS.md                          # 本文件
-├── CLAUDE.md                            # 硬约束
-├── docs/                                # 项目级文档
+├── CLAUDE.md / AGENTS.md                # 硬约束
+├── goal.md                              # 当轮任务清单与退出条件
+├── docs/                                # 项目级文档（plans/ audit/ archive/）
 ├── .trae/archive/                     # 阶段规划文档
 └── crates/                              # 子 crate
-    ├── muskitty-dom/                    # → muskitty-dev/muskitty-dom (v0.1.0, 独立仓库)
-    ├── muskitty-html5-tokenizer/        # → muskitty-dev/muskitty-html5-tokenizer (v0.1.2, 独立仓库)
-    ├── muskitty-html5-parser/           # → muskitty-dev/muskitty-html5-parser (v0.1.2, 独立仓库)
+    ├── muskitty-renderer/              # 主仓库成员 (v0.1.0, 未剥离, tiny-skia 后端)
+    ├── muskitty-network/               # 主仓库成员 (v0.1.0, 未剥离, NetworkFetcher + reqwest)
+    ├── muskitty-cascade/               # → muskitty-dev/muskitty-cascade (v0.1.0, 已剥离)
+    ├── muskitty-cssom/                 # → muskitty-dev/muskitty-cssom (v0.1.0, 已剥离)
+    ├── muskitty-layout/                # → muskitty-dev/muskitty-layout (v0.1.0, 独立仓库)
+    ├── muskitty-dom/                    # → muskitty-dev/muskitty-dom (v0.2.0, 独立仓库)
+    ├── muskitty-html5-tokenizer/        # → muskitty-dev/muskitty-html5-tokenizer (v0.1.3, 独立仓库)
+    ├── muskitty-html5-parser/           # → muskitty-dev/muskitty-html5-parser (v0.2.0, 独立仓库)
     ├── muskitty-css-tokenizer/          # → muskitty-dev/muskitty-css-tokenizer (v0.2.0, 独立仓库)
-    ├── muskitty-css-parser/             # → muskitty-dev/muskitty-css-parser (v0.2.0, 独立仓库)
-    ├── muskitty-css/                    # → muskitty-dev/muskitty-css (v0.5.0, 独立仓库)
-    ├── muskitty-selectors/              # → muskitty-dev/muskitty-selectors (v0.1.0, 独立仓库)
-    ├── muskitty-css-values/             # → muskitty-dev/muskitty-css-values (v0.1.0, 独立仓库)
-    ├── muskitty-cssom/                  # → muskitty-dev/muskitty-cssom (v0.1.0, 独立仓库)
-    └── muskitty-cascade/               # 主仓库成员 (v0.1.0, 未剥离)
+    ├── muskitty-css-parser/             # → muskitty-dev/muskitty-css-parser (v0.3.0, 独立仓库)
+    ├── muskitty-css/                    # → muskitty-dev/muskitty-css (v0.6.0, 独立仓库)
+    ├── muskitty-selectors/              # → muskitty-dev/muskitty-selectors (v0.2.0, 独立仓库)
+    └── muskitty-css-values/             # → muskitty-dev/muskitty-css-values (v0.1.0, 独立仓库)
 ```
 
-未来 crate 预留（在主仓库内开发，成熟后再剥离）：`crates/muskitty-layout`、`crates/muskitty-network`、`crates/muskitty-renderer`。
+未来 crate 预留：`crates/muskitty-network`（Layer 5）。
 
 ## Git 提交历史（近期）
 
@@ -374,9 +381,9 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 2. ~~**Phase 2 子阶段 4 — CSSOM**~~ ✅ 已完成（2026-07-22）并已提取发布（2026-07-24）到 crates.io。
 3. ~~**Phase 2 子阶段 5 — Cascade + Computed values**~~ ✅ 已完成（2026-07-23）。
 4. ~~**Cascade 收尾**（Phase 3 前置）~~ ✅ 已完成（2026-08-01）：inline `style` 属性收集已实现。
-5. ~~**Phase 3 — Layout**~~ ✅ 已完成（2026-08-01）：taffy 0.12 集成，46 个测试全绿，审计修复 7 个 bug。
-6. **Phase 3 收尾**：将 `muskitty-cascade` 和 `muskitty-layout` 剥离为独立仓库并发布到 crates.io。
-7. **Phase 4 — Renderer**：新建 `muskitty-renderer` crate，目标把浏览器跑起来（HTML+CSS → 布局 → 渲染到窗口/图片）。后端优先 GPUI，备选 tiny-skia。
+5. ~~**Phase 3 — Layout**~~ ✅ 已完成（2026-08-01）：taffy 0.12 集成，46 个测试全绿，审计修复 7 个 bug。已剥离为独立仓库。
+6. ~~**Phase 4 — Renderer**~~ ✅ B-3/B-4 已完成（2026-08-02）：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，HTML+CSS → PNG demo 工作。
+7. ~~**全项目审计修复**~~ ✅ 已完成（2026-08-09）：B1-B14 全部完成，P0/P1/P2 清零，见 `docs/audit-2026-08-08-full-scan.md` 修复状态汇总。收尾：P2-1（绝对长度单位 ✅）/ P3-2（calc 求值 ✅）/ PERF-10（map_style 优化 ✅）/ 简写展开（margin/padding/flex/background/font ✅，cascade `d6d7208`）/ 布局 B6 flex 简写端到端解锁（layout `44b9b1d`）。
 8. **DOM 完整 API 扩展**：Events / Style / innerHTML — 推迟。
 9. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug，**保持现状**。
 
@@ -411,7 +418,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 | B8 | 集成测试 margin 断言过松（x >= 19.0） | P3 | 收紧为 x == 20.0 ± 1.0 |
 | B5 | `flex-grow`/`flex-shrink` 接受负值 | P3 | 添加 >= 0.0 检查 |
 
-**未修复**：B6（`flex` 简写未实现）需 CSSOM 层 shorthand 展开支持，推迟到后续批次。
+**B6（`flex` 简写未实现）**：✅ 已修复（2026-08-09）——cascade 在 collect 阶段展开 `flex` 简写为 grow/shrink/basis（cascade `d6d7208`），布局端到端测试验证（layout `44b9b1d`）。
 
 ## Phase 2 子阶段 2 — Selectors Level 4 ✅
 
@@ -664,15 +671,15 @@ DOM (DomElement) + CssStyleSheet[]
 
 ### 延后项
 
-- **Inline `style` 属性收集**：`DeclaredValue.from_style_attr` 字段和 cascade 排序键已就绪，但 `filter.rs` 始终设为 `false`，未从 DOM `style` 属性收集声明。§6.1 准则 4 在真实 pipeline 中为死代码，需在 filter 层补充 style 属性解析。
-- **`muskitty-css-values` 死依赖**：`Cargo.toml` 声明依赖但源码中无任何 `use`，设计改为直接用 `muskitty-css` 的 `ComponentValue`/`Token`。可清理。
+- ~~**Inline `style` 属性收集**~~ ✅ 已完成（2026-08-01）：`filter.rs::collect_from_style_attr` 从 DOM `style` 属性解析声明，`from_style_attr = true`，specificity 归零、由准则 4 单独排序。§6.1 准则 4 在真实 pipeline 中生效。
+- ~~**`muskitty-css-values` 死依赖**~~ ✅ 已清理：cascade `Cargo.toml` 不再声明 `muskitty-css-values`，直接用 `muskitty-css` 的 `ComponentValue`/`Token`。
 - **§6.1 准则 2 Context（Shadow DOM）**：无 Shadow DOM 支持，推迟。
 - **§6.1 准则 3 Scope**：`@scope` 规则未实现，推迟。
-- **§6.1 准则 5 Layers**：`@layer` 排序优先级未实现（仅作为容器透传规则），推迟。
-- **§7.3.4 `revert` / §7.3.5 `revert-layer`**：依赖 Origin/Layer 完整支持，推迟。
+- **§6.1 准则 5 Layers**：`@layer` 排序优先级未实现（仅作为容器透传规则）。已在 `docs/audit-2026-08-08-full-scan.md` 修复计划 B8（层号跟踪 + 5 元排序键）中，待实施。
+- **§7.3.4 `revert` / §7.3.5 `revert-layer`**：依赖 Origin/Layer 完整支持。已在 audit 修复计划 B7（当"无 cascaded value"处理）中，待实施。
 - **§4.2 Specified Value 阶段**（自定义属性 inheritance + var() substitution 全局解析）：CC-6 简化为 context 传入，完整实现需要 DOM 树遍历 + 自定义属性 cascade。
 - **§4.5 Used Value / §4.6 Actual Value**：依赖 layout（containing block、viewport），推迟到 Phase 3。
 - **Animation origin**（§6.1 准则外的 animation declarations）：未实现。
 - **Shorthand 展开为 longhand**：未实现（如 `background: red` 不展开为 `background-color: red`）。需要属性数据库。
 
-crate 在主仓库内开发（`members = ["crates/muskitty-cascade"]`），未剥离为独立 git 仓库，未发布到 crates.io。待 Phase 3 Layout 启动后评估剥离时机（cascade + layout 需要紧密协作，过早剥离会反复跨仓库改）。
+crate 已剥离为独立 git 仓库（[muskitty-dev/muskitty-cascade](https://github.com/muskitty-dev/muskitty-cascade)），未发布到 crates.io。
