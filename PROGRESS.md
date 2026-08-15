@@ -1,6 +1,6 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-08-09 | 全项目审计修复完成（B1-B14，P0/P1/P2 清零）+ Phase 5 Network 启动 + workspace 重构（cascade/cssom 剥离，members=[renderer, network]）
+> 最后更新: 2026-08-16 | 文本渲染（cosmic-text）+ 布局增强（position/overflow/grid）+ 窗口化（winit+softbuffer）完成并推送；T-3 换行 + 外部依赖解耦待后续
 >
 > Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
 > Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
@@ -390,6 +390,9 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 7. ~~**全项目审计修复**~~ ✅ 已完成（2026-08-09）：B1-B14 全部完成，P0/P1/P2 清零，见 `docs/audit-2026-08-08-full-scan.md` 修复状态汇总。收尾：P2-1（绝对长度单位 ✅）/ P3-2（calc 求值 ✅）/ PERF-10（map_style 优化 ✅）/ 简写展开（margin/padding/flex/background/font ✅，cascade `d6d7208`）/ 布局 B6 flex 简写端到端解锁（layout `44b9b1d`）。
 8. ~~**DOM 完整 API 扩展**~~ ✅ 已完成（2026-08-09）：Events → muskitty-dom `event.rs`；element.style → muskitty-cssom `element_style.rs`；innerHTML/outerHTML → muskitty-html5-parser `serialize.rs` + `parse_fragment`（WPT harness 解锁 fragment 用例，99.0%）。
 9. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug，**保持现状**。
+10. ~~**文本渲染 + 布局增强 + 窗口化**~~ ✅ 已完成（2026-08-16）：文本渲染（layout 测量 `3d18bf4` + renderer glyph 渲染 `50bc822`）、position 定位（`d721a0b`）、overflow 裁剪（`d09bc78`）、grid 布局（cascade `2c27d7d` + layout `e690d4e`）、winit 窗口化（`07eb0b8`）。均已推送远端。
+11. **T-3 换行 + 字体属性**（待后续）：文本按容器宽度换行需 taffy measure function（`TaffyTree` context 化 + `compute_layout_with_measure`），font-family/font-weight/text-align 生效。
+12. **外部依赖解耦**（下一轮）：把 taffy/cosmic-text 等外部依赖从本体 crate 公共 API 解耦，上层可抽离。
 
 ## Phase 3 (Layout 层) — 已完成
 
