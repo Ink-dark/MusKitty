@@ -18,9 +18,12 @@
 //! - dashed / dotted 样式当前按 solid 渲染（推迟到 tiny-skia 的 dash
 //!   支持接入）。
 
+use cosmic_text::{Attrs, Buffer, Command, FontSystem, Metrics, Shaping, SwashCache};
+use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
+
 use crate::backend::{Backend, RenderOutput};
+use crate::color::Color;
 use crate::command::{Border, BorderStyle, RenderCommand};
-use tiny_skia::{Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 /// tiny-skia CPU 渲染后端。
 ///
@@ -89,6 +92,11 @@ impl Backend for TinySkiaBackend {
             pixmap.fill_rect(canvas, &white, Transform::identity(), None);
         }
 
+        // 文本光栅化上下文（懒创建：仅在遇首个 Text 命令时初始化，避免
+        // 纯色块场景下扫描系统字体）。
+        let mut font_system: Option<FontSystem> = None;
+        let mut swash_cache: Option<SwashCache> = None;
+
         for cmd in commands {
             match cmd {
                 RenderCommand::Rect {
@@ -120,6 +128,28 @@ impl Backend for TinySkiaBackend {
                             draw_border(&mut pixmap, *x, *y, *width, *height, b);
                         }
                     }
+                }
+                RenderCommand::Text {
+                    x,
+                    y,
+                    text,
+                    font_size,
+                    color,
+                } => {
+                    if font_system.is_none() {
+                        font_system = Some(FontSystem::new());
+                        swash_cache = Some(SwashCache::new());
+                    }
+                    draw_text(
+                        &mut pixmap,
+                        *x,
+                        *y,
+                        text,
+                        *font_size,
+                        *color,
+                        font_system.as_mut().expect("font_system just initialized"),
+                        swash_cache.as_mut().expect("swash_cache just initialized"),
+                    );
                 }
             }
         }
@@ -179,11 +209,99 @@ fn draw_border(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, bor
     }
 }
 
+/// 绘制文本（T-2）。
+///
+/// 用 cosmic-text 整形文本，swash 提取每个 glyph 的矢量 outline，
+/// 转为 tiny-skia 路径填充。`x`/`y` 为 Text 命令的布局盒左上角
+/// （画布坐标系）。
+#[allow(clippy::too_many_arguments)]
+fn draw_text(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    text: &str,
+    font_size: f32,
+    color: Color,
+    font_system: &mut FontSystem,
+    swash_cache: &mut SwashCache,
+) {
+    let line_height = font_size * 1.2;
+    let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
+    // 单行（不换行）。
+    buffer.set_size(font_system, None, None);
+    buffer.set_text(font_system, text, Attrs::new(), Shaping::Advanced);
+
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+    paint.anti_alias = true;
+
+    // glyph 物理坐标相对 buffer 原点，经 Transform 平移到 Text 命令位置。
+    let transform = Transform::from_translate(x, y);
+
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            // physical() 返回像素对齐的物理坐标（含 baseline）+ cache key。
+            let physical = glyph.physical((0.0, 0.0), 1.0);
+            let gx = physical.x as f32;
+            let gy = physical.y as f32;
+            let cache_key = physical.cache_key;
+            if let Some(commands) = swash_cache.get_outline_commands(font_system, cache_key) {
+                let mut pb = PathBuilder::new();
+                for cmd in commands {
+                    match *cmd {
+                        Command::MoveTo(p) => pb.move_to(gx + p.x, gy + p.y),
+                        Command::LineTo(p) => pb.line_to(gx + p.x, gy + p.y),
+                        Command::QuadTo(c, p) => pb.quad_to(gx + c.x, gy + c.y, gx + p.x, gy + p.y),
+                        Command::CurveTo(c1, c2, p) => pb.cubic_to(
+                            gx + c1.x,
+                            gy + c1.y,
+                            gx + c2.x,
+                            gy + c2.y,
+                            gx + p.x,
+                            gy + p.y,
+                        ),
+                        Command::Close => pb.close(),
+                    }
+                }
+                if let Some(path) = pb.finish() {
+                    pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::command::RenderCommand;
     use crate::Color;
+
+    #[test]
+    fn render_text_produces_ink() {
+        let mut backend = TinySkiaBackend::new();
+        let cmds = vec![RenderCommand::Text {
+            x: 10.0,
+            y: 10.0,
+            text: "Hello".to_string(),
+            font_size: 24.0,
+            color: Color::rgb(0, 0, 0),
+        }];
+        backend.render(&cmds, 200, 50);
+        let pixmap = backend.pixmap().expect("pixmap allocated");
+
+        // 统计非白像素（文字墨迹）；白画布（P3-5）下文字应为黑色像素。
+        let mut ink = 0usize;
+        for py in 0..pixmap.height() {
+            for px in 0..pixmap.width() {
+                let p = pixmap.pixel(px, py).expect("pixel in range");
+                if p.red() < 200 || p.green() < 200 || p.blue() < 200 {
+                    ink += 1;
+                }
+            }
+        }
+        assert!(ink > 0, "text should produce non-white (ink) pixels");
+    }
 
     #[test]
     fn render_single_red_rect() {

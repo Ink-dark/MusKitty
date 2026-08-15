@@ -202,3 +202,43 @@ fn end_to_end_var_missing_uses_fallback_or_empty() {
     );
     assert_color_ident(&dom, &styles, "p", "orange");
 }
+
+#[test]
+fn end_to_end_text_produces_ink_pixels() {
+    // T-2 完整链路：HTML 文本 → layout 测量 → paint Text 命令 → tiny-skia
+    // 光栅化。验证 (a) 生成了 Text 命令，(b) 渲染像素中有文字墨迹。
+    let dom = muskitty_html5_parser::parse(r#"<p style="font-size: 24px; color: black">Hi</p>"#);
+    let parsed = parse_stylesheet("p { color: black; font-size: 24px; }");
+    let sheet = {
+        let mut s = from_stylesheet(&parsed);
+        s.origin = Origin::Author;
+        s
+    };
+    let styles = compute_styles_tree(&dom, &[sheet], &StyleTreeOptions::default());
+    let mut tree = build_layout_tree(&dom, &styles);
+    let layout = compute_layout(&mut tree, 200.0, 100.0).expect("layout ok");
+    let input = PaintInput {
+        dom: &dom,
+        styles: &styles,
+        layout: &layout,
+        viewport: None,
+    };
+    let commands = paint(&input);
+    assert!(
+        commands
+            .iter()
+            .any(|c| matches!(c, muskitty_renderer::RenderCommand::Text { .. })),
+        "paint 应为文本节点生成 Text 命令"
+    );
+
+    let mut backend = TinySkiaBackend::new();
+    let data = match backend.render(&commands, 200, 100) {
+        RenderOutput::Pixels { data, .. } => data,
+        other => panic!("expected Pixels, got {:?}", other),
+    };
+    let ink = data
+        .chunks_exact(4)
+        .filter(|px| px[0] < 200 || px[1] < 200 || px[2] < 200)
+        .count();
+    assert!(ink > 0, "文字应产生非白（墨迹）像素");
+}

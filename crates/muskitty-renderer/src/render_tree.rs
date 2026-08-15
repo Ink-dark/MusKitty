@@ -23,6 +23,34 @@ pub fn extract_background_color(style: &ComputedStyle) -> Option<Color> {
     crate::color::parse_color(cv.tokens())
 }
 
+/// 从 ComputedStyle 提取文字颜色（`color` 属性）。
+///
+/// 未设置或无法解析时回退到默认黑色（CSS `color` 初始值 `canvastext`，
+/// 当前按黑色近似）。
+pub fn extract_text_color(style: &ComputedStyle) -> Color {
+    style
+        .get("color")
+        .and_then(|cv| crate::color::parse_color(cv.tokens()))
+        .unwrap_or(Color::BLACK)
+}
+
+/// 从 ComputedStyle 提取 font-size 的 px 值。
+///
+/// cascade 已把 font-size 归一化为 px Dimension（`normalize_font_size`），
+/// 此处直接解析 `Token::Dimension(_, "px")`。无法解析时返回 `None`
+/// （调用方回退到继承的 font-size 或默认 16px）。
+pub fn resolve_font_size(style: &ComputedStyle) -> Option<f32> {
+    let cv = style.get("font-size")?;
+    for v in cv.tokens() {
+        if let ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) = v {
+            if unit.eq_ignore_ascii_case("px") {
+                return Some(numeric.value as f32);
+            }
+        }
+    }
+    None
+}
+
 /// 从 ComputedStyle 提取边框。
 ///
 /// 读取 `border-width` / `border-style` / `border-color` 三个 longhand

@@ -31,6 +31,22 @@ pub enum RenderCommand {
         /// 供后续 Phase 4 扩展。
         border: Option<Border>,
     },
+    /// 文本绘制（T-2）。
+    ///
+    /// glyph 细节（整形/光栅化）由后端用 cosmic-text 现算；此处只承载
+    /// 文本串 + 字号 + 颜色，位置为 text 布局盒左上角（画布坐标系）。
+    Text {
+        /// 左上角 X（px，画布坐标系）。
+        x: f32,
+        /// 左上角 Y（px，画布坐标系）。
+        y: f32,
+        /// 文本内容。
+        text: String,
+        /// 字号（px）。
+        font_size: f32,
+        /// 文字颜色。
+        color: Color,
+    },
 }
 
 /// 边框描述。
@@ -97,6 +113,7 @@ mod tests {
                 assert_eq!(background, Some(Color::rgb(255, 0, 0)));
                 assert_eq!(border, None);
             }
+            _ => panic!("expected Rect"),
         }
     }
 
