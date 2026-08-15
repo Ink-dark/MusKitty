@@ -29,3 +29,5 @@ cosmic-text = "0.13"
 muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.2.0" }
 muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
 muskitty-selectors = { path = "../muskitty-selectors", version = "0.2.0", features = ["dom"] }
+winit = "0.30"
+softbuffer = "0.4"
