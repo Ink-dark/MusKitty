@@ -100,6 +100,20 @@ fn paint_recursive(
         }
     };
 
+    // 本元素是否 overflow 裁剪（非 visible → 子内容裁剪到本元素 box，L-2）。
+    let clips = {
+        let node_ref = node.borrow();
+        match &node_ref.kind {
+            NodeKind::Element(_) => styles
+                .get(&addr)
+                .and_then(|cs| cs.get("overflow"))
+                .and_then(|cv| cv.keyword())
+                .map(|k| !k.eq_ignore_ascii_case("visible"))
+                .unwrap_or(false),
+            _ => false,
+        }
+    };
+
     // 按节点类型生成绘制指令。
     {
         let node_ref = node.borrow();
@@ -148,6 +162,18 @@ fn paint_recursive(
         }
     }
 
+    // overflow 裁剪：本元素背景/边框已绘制，其子内容裁剪到本元素 box（L-2）。
+    if clips {
+        if let Some(node_layout) = layout.get(addr) {
+            commands.push(RenderCommand::Clip {
+                x: node_layout.abs_x,
+                y: node_layout.abs_y,
+                width: node_layout.width,
+                height: node_layout.height,
+            });
+        }
+    }
+
     // 递归子节点（无论本节点是否绘制；display:contents 等无盒元素的后代
     // 仍需在 DOM 先序中遍历到）。PERF-11：子节点收集进复用缓冲，`take`
     // 为本次局部分片（递归期间缓冲保持空给子层复用）；递归结束后归还，
@@ -168,6 +194,10 @@ fn paint_recursive(
         );
     }
     *children_scratch = children;
+
+    if clips {
+        commands.push(RenderCommand::EndClip);
+    }
 }
 
 /// P3-6: viewport culling —— 完全位于视口外的盒跳过绘制。

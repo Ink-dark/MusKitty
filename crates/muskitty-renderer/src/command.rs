@@ -47,6 +47,19 @@ pub enum RenderCommand {
         /// 文字颜色。
         color: Color,
     },
+    /// 开始裁剪（L-2）：后续指令裁剪到该矩形内，直到 [`RenderCommand::EndClip`]。
+    Clip {
+        /// 裁剪矩形左上角 X（px，画布坐标系）。
+        x: f32,
+        /// 裁剪矩形左上角 Y（px，画布坐标系）。
+        y: f32,
+        /// 裁剪矩形宽度（px）。
+        width: f32,
+        /// 裁剪矩形高度（px）。
+        height: f32,
+    },
+    /// 结束裁剪（L-2）：恢复到最近 [`RenderCommand::Clip`] 之前的状态。
+    EndClip,
 }
 
 /// 边框描述。

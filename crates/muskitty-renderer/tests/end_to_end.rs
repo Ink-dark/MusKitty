@@ -242,3 +242,39 @@ fn end_to_end_text_produces_ink_pixels() {
         .count();
     assert!(ink > 0, "文字应产生非白（墨迹）像素");
 }
+
+#[test]
+fn end_to_end_overflow_hidden_emits_clip() {
+    // L-2：overflow: hidden 的元素为子内容生成 Clip/EndClip 命令。
+    let dom = muskitty_html5_parser::parse(
+        r#"<div style="overflow: hidden; width: 50px; height: 50px"><div style="width: 100px; height: 100px; background-color: red"></div></div>"#,
+    );
+    let parsed = parse_stylesheet("div { display: block; } body { margin: 0; }");
+    let sheet = {
+        let mut s = from_stylesheet(&parsed);
+        s.origin = Origin::Author;
+        s
+    };
+    let styles = compute_styles_tree(&dom, &[sheet], &StyleTreeOptions::default());
+    let mut tree = build_layout_tree(&dom, &styles);
+    let layout = compute_layout(&mut tree, 200.0, 200.0).expect("layout ok");
+    let input = PaintInput {
+        dom: &dom,
+        styles: &styles,
+        layout: &layout,
+        viewport: None,
+    };
+    let commands = paint(&input);
+    assert!(
+        commands
+            .iter()
+            .any(|c| matches!(c, muskitty_renderer::RenderCommand::Clip { .. })),
+        "overflow:hidden 应生成 Clip 命令"
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|c| matches!(c, muskitty_renderer::RenderCommand::EndClip)),
+        "overflow:hidden 应生成 EndClip 命令"
+    );
+}

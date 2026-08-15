@@ -19,7 +19,7 @@
 //!   支持接入）。
 
 use cosmic_text::{Attrs, Buffer, Command, FontSystem, Metrics, Shaping, SwashCache};
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{FillRule, Mask, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use crate::backend::{Backend, RenderOutput};
 use crate::color::Color;
@@ -97,7 +97,13 @@ impl Backend for TinySkiaBackend {
         let mut font_system: Option<FontSystem> = None;
         let mut swash_cache: Option<SwashCache> = None;
 
+        // 裁剪栈（L-2）：Clip/EndClip 维护，栈顶作为后续绘制的 clip_mask。
+        let canvas_w = width;
+        let canvas_h = height;
+        let mut clip_stack: Vec<Mask> = Vec::new();
+
         for cmd in commands {
+            let clip = clip_stack.last();
             match cmd {
                 RenderCommand::Rect {
                     x,
@@ -118,14 +124,14 @@ impl Backend for TinySkiaBackend {
                             let mut paint = Paint::default();
                             paint.set_color_rgba8(bg.r, bg.g, bg.b, bg.a);
                             paint.anti_alias = false;
-                            pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+                            pixmap.fill_rect(rect, &paint, Transform::identity(), clip);
                         }
                     }
 
                     // 绘制边框
                     if let Some(b) = border {
                         if b.width > 0.0 {
-                            draw_border(&mut pixmap, *x, *y, *width, *height, b);
+                            draw_border(&mut pixmap, *x, *y, *width, *height, b, clip);
                         }
                     }
                 }
@@ -149,7 +155,42 @@ impl Backend for TinySkiaBackend {
                         *color,
                         font_system.as_mut().expect("font_system just initialized"),
                         swash_cache.as_mut().expect("swash_cache just initialized"),
+                        clip,
                     );
+                }
+                RenderCommand::Clip {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    // 用矩形 path 裁剪：有栈顶则与栈顶相交，否则新建 mask 填充。
+                    let rect = match Rect::from_xywh(*x, *y, *width, *height) {
+                        Some(r) => r,
+                        None => continue,
+                    };
+                    let path = PathBuilder::from_rect(rect);
+                    let mask = match clip {
+                        Some(top) => {
+                            let mut m = top.clone();
+                            m.intersect_path(
+                                &path,
+                                FillRule::Winding,
+                                false,
+                                Transform::identity(),
+                            );
+                            m
+                        }
+                        None => {
+                            let mut m = Mask::new(canvas_w, canvas_h).expect("mask alloc");
+                            m.fill_path(&path, FillRule::Winding, false, Transform::identity());
+                            m
+                        }
+                    };
+                    clip_stack.push(mask);
+                }
+                RenderCommand::EndClip => {
+                    clip_stack.pop();
                 }
             }
         }
@@ -168,7 +209,15 @@ impl Backend for TinySkiaBackend {
 }
 
 /// 绘制矩形边框（沿 border-box 内边缘描边）。
-fn draw_border(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, border: &Border) {
+fn draw_border(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    border: &Border,
+    clip_mask: Option<&Mask>,
+) {
     let half = border.width / 2.0;
 
     // 内缩半个边框宽度，使 stroke 完全位于 border-box 内
@@ -203,7 +252,7 @@ fn draw_border(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, bor
     // dashed / dotted 当前按 solid 渲染（推迟 dash 模式接入）
     match border.style {
         BorderStyle::Solid | BorderStyle::Dashed | BorderStyle::Dotted => {
-            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), clip_mask);
         }
         BorderStyle::None => {} // 已在外层过滤
     }
@@ -224,6 +273,7 @@ fn draw_text(
     color: Color,
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
+    clip_mask: Option<&Mask>,
 ) {
     let line_height = font_size * 1.2;
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
@@ -264,7 +314,7 @@ fn draw_text(
                     }
                 }
                 if let Some(path) = pb.finish() {
-                    pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+                    pixmap.fill_path(&path, &paint, FillRule::Winding, transform, clip_mask);
                 }
             }
         }
@@ -301,6 +351,34 @@ mod tests {
             }
         }
         assert!(ink > 0, "text should produce non-white (ink) pixels");
+    }
+
+    #[test]
+    fn clip_crops_subsequent_rect() {
+        let mut backend = TinySkiaBackend::new();
+        let cmds = vec![
+            RenderCommand::Clip {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            },
+            RenderCommand::rect(0.0, 0.0, 100.0, 100.0, Color::rgb(255, 0, 0)),
+            RenderCommand::EndClip,
+        ];
+        backend.render(&cmds, 100, 100);
+        let pixmap = backend.pixmap().expect("pixmap allocated");
+
+        // clip 内（10,10）应为红色。
+        let inside = pixmap.pixel(10, 10).expect("in range");
+        assert_eq!(inside.red(), 255, "inside clip should be red");
+        // clip 外（60,60）应保持白底（裁剪生效）。
+        let outside = pixmap.pixel(60, 60).expect("in range");
+        assert_eq!(
+            (outside.red(), outside.green(), outside.blue()),
+            (255, 255, 255),
+            "outside clip should remain white canvas"
+        );
     }
 
     #[test]
