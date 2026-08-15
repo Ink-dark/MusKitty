@@ -701,6 +701,7 @@ name = "muskitty-cssom"
 version = "0.1.0"
 dependencies = [
  "muskitty-css",
+ "muskitty-dom",
 ]
 
 [[package]]
