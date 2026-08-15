@@ -22,7 +22,7 @@ use muskitty_cascade::{compute_styles, StyleTreeOptions};
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_layout::{build_layout_tree, compute_layout};
-use muskitty_renderer::{paint, Backend, PaintInput, TinySkiaBackend};
+use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
 
 const VIEWPORT_W: u32 = 800;
 const VIEWPORT_H: u32 = 600;
@@ -65,12 +65,14 @@ fn render_page(width: u32, height: u32) -> Vec<u32> {
     };
     let commands = paint(&input);
     let mut backend = TinySkiaBackend::new();
-    backend.render(&commands, width, height);
-    let pixmap = backend.take_pixmap().expect("pixmap after render");
+    let data = match backend.render(&commands, width, height) {
+        RenderOutput::Pixels { data, .. } => data,
+        _ => panic!("expected Pixels"),
+    };
 
     // RGBA8 → softbuffer 0RGB u32。
     let mut out = Vec::with_capacity((width * height) as usize);
-    for px in pixmap.data().chunks_exact(4) {
+    for px in data.chunks_exact(4) {
         out.push(((px[2] as u32) << 16) | ((px[1] as u32) << 8) | (px[0] as u32));
     }
     out

@@ -27,8 +27,9 @@ use crate::command::{Border, BorderStyle, RenderCommand};
 
 /// tiny-skia CPU 渲染后端。
 ///
-/// `render` 后渲染结果保存在内部 [`Pixmap`]，可通过 [`pixmap`](Self::pixmap) /
-/// [`encode_png`](Self::encode_png) / [`save_png`](Self::save_png) 取出。
+/// `render` 后渲染结果通过 [`RenderOutput::Pixels`] 返回，PNG 编码走
+/// [`encode_png`](Self::encode_png) / [`save_png`](Self::save_png)。
+/// 内部 [`Pixmap`] 为私有实现，不暴露 tiny-skia 类型。
 #[derive(Debug, Default)]
 pub struct TinySkiaBackend {
     pixmap: Option<Pixmap>,
@@ -38,16 +39,6 @@ impl TinySkiaBackend {
     /// 创建空后端（尚未渲染）。
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// 获取最后一次渲染产出的像素图（不可变引用）。
-    pub fn pixmap(&self) -> Option<&Pixmap> {
-        self.pixmap.as_ref()
-    }
-
-    /// 取出内部 Pixmap 的所有权。
-    pub fn take_pixmap(&mut self) -> Option<Pixmap> {
-        self.pixmap.take()
     }
 
     /// 将渲染结果编码为 PNG 字节流。
@@ -327,6 +318,29 @@ mod tests {
     use crate::command::RenderCommand;
     use crate::Color;
 
+    /// 渲染并取出 RGBA 像素数据（width, height, data）。
+    fn render_pixels(
+        backend: &mut TinySkiaBackend,
+        cmds: &[RenderCommand],
+        w: u32,
+        h: u32,
+    ) -> (u32, u32, Vec<u8>) {
+        match backend.render(cmds, w, h) {
+            RenderOutput::Pixels {
+                width,
+                height,
+                data,
+            } => (width, height, data),
+            _ => panic!("expected Pixels"),
+        }
+    }
+
+    /// 读取 (x, y) 处的 RGBA 像素（8-bit per channel）。
+    fn pixel(data: &[u8], width: u32, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let i = ((y * width + x) * 4) as usize;
+        (data[i], data[i + 1], data[i + 2], data[i + 3])
+    }
+
     #[test]
     fn render_text_produces_ink() {
         let mut backend = TinySkiaBackend::new();
@@ -337,15 +351,14 @@ mod tests {
             font_size: 24.0,
             color: Color::rgb(0, 0, 0),
         }];
-        backend.render(&cmds, 200, 50);
-        let pixmap = backend.pixmap().expect("pixmap allocated");
+        let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 50);
 
         // 统计非白像素（文字墨迹）；白画布（P3-5）下文字应为黑色像素。
         let mut ink = 0usize;
-        for py in 0..pixmap.height() {
-            for px in 0..pixmap.width() {
-                let p = pixmap.pixel(px, py).expect("pixel in range");
-                if p.red() < 200 || p.green() < 200 || p.blue() < 200 {
+        for py in 0..height {
+            for px in 0..width {
+                let (r, g, b, _) = pixel(&data, width, px, py);
+                if r < 200 || g < 200 || b < 200 {
                     ink += 1;
                 }
             }
@@ -366,16 +379,15 @@ mod tests {
             RenderCommand::rect(0.0, 0.0, 100.0, 100.0, Color::rgb(255, 0, 0)),
             RenderCommand::EndClip,
         ];
-        backend.render(&cmds, 100, 100);
-        let pixmap = backend.pixmap().expect("pixmap allocated");
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 100, 100);
 
         // clip 内（10,10）应为红色。
-        let inside = pixmap.pixel(10, 10).expect("in range");
-        assert_eq!(inside.red(), 255, "inside clip should be red");
+        let (r, _, _, _) = pixel(&data, width, 10, 10);
+        assert_eq!(r, 255, "inside clip should be red");
         // clip 外（60,60）应保持白底（裁剪生效）。
-        let outside = pixmap.pixel(60, 60).expect("in range");
+        let (r, g, b, _) = pixel(&data, width, 60, 60);
         assert_eq!(
-            (outside.red(), outside.green(), outside.blue()),
+            (r, g, b),
             (255, 255, 255),
             "outside clip should remain white canvas"
         );
@@ -391,31 +403,28 @@ mod tests {
             50.0,
             Color::rgb(255, 0, 0),
         )];
-        backend.render(&cmds, 100, 50);
-
-        let pixmap = backend.pixmap().expect("pixmap should be allocated");
-        assert_eq!(pixmap.width(), 100);
-        assert_eq!(pixmap.height(), 50);
+        let (width, height, data) = render_pixels(&mut backend, &cmds, 100, 50);
+        assert_eq!(width, 100);
+        assert_eq!(height, 50);
 
         // 左上角像素应为红色（不透明）
-        let pixel = pixmap.pixel(0, 0).expect("pixel in range");
-        assert_eq!(pixel.red(), 255);
-        assert_eq!(pixel.green(), 0);
-        assert_eq!(pixel.blue(), 0);
-        assert_eq!(pixel.alpha(), 255);
+        let (r, g, b, a) = pixel(&data, width, 0, 0);
+        assert_eq!(r, 255);
+        assert_eq!(g, 0);
+        assert_eq!(b, 0);
+        assert_eq!(a, 255);
     }
 
     #[test]
     fn render_empty_commands_produces_white_canvas() {
         // P3-5：画布默认填白，空指令也产出白底而非透明。
         let mut backend = TinySkiaBackend::new();
-        backend.render(&[], 10, 10);
-        let pixmap = backend.pixmap().expect("pixmap allocated");
-        let pixel = pixmap.pixel(0, 0).expect("in range");
-        assert_eq!(pixel.red(), 255);
-        assert_eq!(pixel.green(), 255);
-        assert_eq!(pixel.blue(), 255);
-        assert_eq!(pixel.alpha(), 255);
+        let (width, _, data) = render_pixels(&mut backend, &[], 10, 10);
+        let (r, g, b, a) = pixel(&data, width, 0, 0);
+        assert_eq!(r, 255);
+        assert_eq!(g, 255);
+        assert_eq!(b, 255);
+        assert_eq!(a, 255);
     }
 
     #[test]
@@ -439,12 +448,11 @@ mod tests {
                 border: None,
             },
         ];
-        backend.render(&cmds, 10, 10);
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10);
         // 零尺寸矩形不应绘制 → 画布保持白色（P3-5）
-        let pixmap = backend.pixmap().expect("pixmap allocated");
-        let pixel = pixmap.pixel(0, 0).expect("in range");
-        assert_eq!(pixel.alpha(), 255, "white canvas — zero-size rects skipped");
-        assert_eq!(pixel.red(), 255);
+        let (r, _, _, a) = pixel(&data, width, 0, 0);
+        assert_eq!(a, 255, "white canvas — zero-size rects skipped");
+        assert_eq!(r, 255);
     }
 
     #[test]
@@ -462,23 +470,18 @@ mod tests {
                 style: BorderStyle::Solid,
             }),
         }];
-        backend.render(&cmds, 100, 100);
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 100, 100);
 
-        let pixmap = backend.pixmap().expect("pixmap allocated");
         // 边框外（左上角）应为白底画布（P3-5）
-        let outside = pixmap.pixel(0, 0).expect("in range");
-        assert_eq!(
-            outside.alpha(),
-            255,
-            "outside border should be white canvas"
-        );
-        assert_eq!(outside.red(), 255, "white canvas");
+        let (r, _, _, a) = pixel(&data, width, 0, 0);
+        assert_eq!(a, 255, "outside border should be white canvas");
+        assert_eq!(r, 255, "white canvas");
 
         // 边框中心像素 (y=10) 应为蓝色
         // stroke 中心对齐到 (x+1, y+1)，所以 (50, 10) 应在边框顶部
-        let border_pixel = pixmap.pixel(50, 10).expect("in range");
-        assert_eq!(border_pixel.alpha(), 255, "border should be opaque");
-        assert_eq!(border_pixel.blue(), 255, "border should be blue");
+        let (_, _, b, a) = pixel(&data, width, 50, 10);
+        assert_eq!(a, 255, "border should be opaque");
+        assert_eq!(b, 255, "border should be blue");
     }
 
     #[test]
@@ -535,21 +538,16 @@ mod tests {
             10.0,
             Color::rgba(255, 0, 0, 128),
         )];
-        backend.render(&cmds, 10, 10);
-        let pixmap = backend.pixmap().expect("pixmap allocated");
-        let pixel = pixmap.pixel(5, 5).expect("in range");
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10);
+        let (r, g, _, a) = pixel(&data, width, 5, 5);
         // P3-5 白画布下，半透明红 source-over 混合到白底 →
         // (≈255, 127, 127) 粉色，alpha 变为不透明。
-        assert_eq!(pixel.alpha(), 255, "white canvas behind is opaque");
+        assert_eq!(a, 255, "white canvas behind is opaque");
+        assert!(r > 200, "red should dominate, got {}", r);
         assert!(
-            pixel.red() > 200,
-            "red should dominate, got {}",
-            pixel.red()
-        );
-        assert!(
-            pixel.green() > 100 && pixel.green() < 160,
+            g > 100 && g < 160,
             "green ~127 from white canvas, got {}",
-            pixel.green()
+            g
         );
     }
 }
