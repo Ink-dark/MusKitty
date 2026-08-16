@@ -139,6 +139,7 @@ fn paint_recursive(
                     commands.push(RenderCommand::Text {
                         x: node_layout.abs_x,
                         y: node_layout.abs_y,
+                        width: node_layout.width,
                         text: text.data.clone(),
                         font_size,
                         font_family: font_family.clone(),

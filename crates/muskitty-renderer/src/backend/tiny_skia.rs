@@ -131,6 +131,7 @@ impl Backend for TinySkiaBackend {
                 RenderCommand::Text {
                     x,
                     y,
+                    width,
                     text,
                     font_size,
                     font_family,
@@ -145,6 +146,7 @@ impl Backend for TinySkiaBackend {
                         &mut pixmap,
                         *x,
                         *y,
+                        *width,
                         text,
                         *font_size,
                         font_family,
@@ -265,6 +267,7 @@ fn draw_text(
     pixmap: &mut Pixmap,
     x: f32,
     y: f32,
+    width: f32,
     text: &str,
     font_size: f32,
     font_family: &str,
@@ -276,8 +279,8 @@ fn draw_text(
 ) {
     let line_height = font_size * 1.2;
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
-    // 单行（不换行）。
-    buffer.set_size(font_system, None, None);
+    // 按布局宽度换行（T-3）。
+    buffer.set_size(font_system, Some(width), None);
     let attrs = Attrs::new()
         .family(family_from_css(font_family))
         .weight(Weight(font_weight));
@@ -371,6 +374,7 @@ mod tests {
         let cmds = vec![RenderCommand::Text {
             x: 10.0,
             y: 10.0,
+            width: 200.0,
             text: "Hello".to_string(),
             font_size: 24.0,
             font_family: "serif".to_string(),

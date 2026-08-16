@@ -40,6 +40,8 @@ pub enum RenderCommand {
         x: f32,
         /// 左上角 Y（px，画布坐标系）。
         y: f32,
+        /// 布局宽度（px），用于换行（T-3），与 layout 层 measure 的容器宽一致。
+        width: f32,
         /// 文本内容。
         text: String,
         /// 字号（px）。
