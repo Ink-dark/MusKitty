@@ -5,6 +5,18 @@
 
 use crate::color::Color;
 
+/// CSS `text-align` 的水平对齐（T-3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    /// 左对齐（`left` / `start` / 默认）。
+    #[default]
+    Left,
+    /// 居中（`center`）。
+    Center,
+    /// 右对齐（`right` / `end`）。
+    Right,
+}
+
 /// 单条绘制指令。
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -50,6 +62,8 @@ pub enum RenderCommand {
         font_family: String,
         /// 字重（CSS `font-weight`，100-900）。
         font_weight: u16,
+        /// 水平对齐（CSS `text-align`）。
+        text_align: TextAlign,
         /// 文字颜色。
         color: Color,
     },

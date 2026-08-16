@@ -8,7 +8,7 @@
 //! 场景需要中间结构时再引入，当前无消费者。
 
 use crate::color::Color;
-use crate::command::{Border, BorderStyle};
+use crate::command::{Border, BorderStyle, TextAlign};
 use muskitty_cascade::ComputedStyle;
 use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
@@ -80,6 +80,21 @@ pub fn resolve_font_weight(style: &ComputedStyle) -> Option<u16> {
         }
     }
     None
+}
+
+/// 从 ComputedStyle 提取 text-align 水平对齐（T-3）。
+///
+/// `center` → Center，`right`/`end` → Right，其余（`left`/`start`/`justify`/未知）→ Left。
+pub fn resolve_text_align(style: &ComputedStyle) -> TextAlign {
+    style
+        .get("text-align")
+        .and_then(|cv| cv.keyword())
+        .map(|k| match k.to_ascii_lowercase().as_str() {
+            "center" => TextAlign::Center,
+            "right" | "end" => TextAlign::Right,
+            _ => TextAlign::Left,
+        })
+        .unwrap_or(TextAlign::Left)
 }
 
 /// 从 ComputedStyle 提取边框。

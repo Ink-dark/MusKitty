@@ -278,3 +278,38 @@ fn end_to_end_overflow_hidden_emits_clip() {
         "overflow:hidden 应生成 EndClip 命令"
     );
 }
+
+#[test]
+fn end_to_end_text_align_center() {
+    // T-3：text-align 继承传递，Text 命令携带正确对齐。
+    let dom =
+        muskitty_html5_parser::parse(r#"<div style="text-align: center; width: 200px">Hi</div>"#);
+    let parsed = parse_stylesheet("div { display: block; } body { margin: 0; }");
+    let sheet = {
+        let mut s = from_stylesheet(&parsed);
+        s.origin = Origin::Author;
+        s
+    };
+    let styles = compute_styles_tree(&dom, &[sheet], &StyleTreeOptions::default());
+    let mut tree = build_layout_tree(&dom, &styles);
+    let layout = compute_layout(&mut tree, 200.0, 100.0).expect("layout ok");
+    let input = PaintInput {
+        dom: &dom,
+        styles: &styles,
+        layout: &layout,
+        viewport: None,
+    };
+    let commands = paint(&input);
+    let align = commands
+        .iter()
+        .find_map(|c| match c {
+            muskitty_renderer::RenderCommand::Text { text_align, .. } => Some(*text_align),
+            _ => None,
+        })
+        .expect("text command should exist");
+    assert_eq!(
+        align,
+        muskitty_renderer::TextAlign::Center,
+        "text-align: center 应传递为 Center"
+    );
+}

@@ -25,7 +25,7 @@ use tiny_skia::{FillRule, Mask, Paint, PathBuilder, Pixmap, Rect, Stroke, Transf
 
 use crate::backend::{Backend, RenderOutput};
 use crate::color::Color;
-use crate::command::{Border, BorderStyle, RenderCommand};
+use crate::command::{Border, BorderStyle, RenderCommand, TextAlign};
 
 /// tiny-skia CPU 渲染后端。
 ///
@@ -136,6 +136,7 @@ impl Backend for TinySkiaBackend {
                     font_size,
                     font_family,
                     font_weight,
+                    text_align,
                     color,
                 } => {
                     if font_system.is_none() {
@@ -151,6 +152,7 @@ impl Backend for TinySkiaBackend {
                         *font_size,
                         font_family,
                         *font_weight,
+                        *text_align,
                         *color,
                         font_system.as_mut().expect("font_system just initialized"),
                         swash_cache.as_mut().expect("swash_cache just initialized"),
@@ -272,6 +274,7 @@ fn draw_text(
     font_size: f32,
     font_family: &str,
     font_weight: u16,
+    text_align: TextAlign,
     color: Color,
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
@@ -294,10 +297,16 @@ fn draw_text(
     let transform = Transform::from_translate(x, y);
 
     for run in buffer.layout_runs() {
+        // 行水平偏移（text-align，T-3）。
+        let line_offset = match text_align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => (width - run.line_w) / 2.0,
+            TextAlign::Right => width - run.line_w,
+        };
         for glyph in run.glyphs {
             // physical() 返回像素对齐的物理坐标（含 baseline）+ cache key。
             let physical = glyph.physical((0.0, 0.0), 1.0);
-            let gx = physical.x as f32;
+            let gx = physical.x as f32 + line_offset;
             let gy = physical.y as f32;
             let cache_key = physical.cache_key;
             if let Some(commands) = swash_cache.get_outline_commands(font_system, cache_key) {
@@ -379,6 +388,7 @@ mod tests {
             font_size: 24.0,
             font_family: "serif".to_string(),
             font_weight: 400,
+            text_align: TextAlign::Left,
             color: Color::rgb(0, 0, 0),
         }];
         let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 50);
