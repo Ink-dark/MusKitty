@@ -31,10 +31,10 @@ pub enum RenderCommand {
         /// 供后续 Phase 4 扩展。
         border: Option<Border>,
     },
-    /// 文本绘制（T-2）。
+    /// 文本绘制（T-2 / T-3）。
     ///
-    /// glyph 细节（整形/光栅化）由后端用 cosmic-text 现算；此处只承载
-    /// 文本串 + 字号 + 颜色，位置为 text 布局盒左上角（画布坐标系）。
+    /// glyph 细节（整形/光栅化）由后端用 cosmic-text 现算；此处承载
+    /// 文本串 + 字体样式 + 颜色，位置为 text 布局盒左上角（画布坐标系）。
     Text {
         /// 左上角 X（px，画布坐标系）。
         x: f32,
@@ -44,6 +44,10 @@ pub enum RenderCommand {
         text: String,
         /// 字号（px）。
         font_size: f32,
+        /// 字体族名（CSS `font-family` 首个族名）。
+        font_family: String,
+        /// 字重（CSS `font-weight`，100-900）。
+        font_weight: u16,
         /// 文字颜色。
         color: Color,
     },

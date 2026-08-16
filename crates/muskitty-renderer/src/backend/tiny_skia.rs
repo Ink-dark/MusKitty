@@ -18,7 +18,9 @@
 //! - dashed / dotted 样式当前按 solid 渲染（推迟到 tiny-skia 的 dash
 //!   支持接入）。
 
-use cosmic_text::{Attrs, Buffer, Command, FontSystem, Metrics, Shaping, SwashCache};
+use cosmic_text::{
+    Attrs, Buffer, Command, Family, FontSystem, Metrics, Shaping, SwashCache, Weight,
+};
 use tiny_skia::{FillRule, Mask, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use crate::backend::{Backend, RenderOutput};
@@ -131,6 +133,8 @@ impl Backend for TinySkiaBackend {
                     y,
                     text,
                     font_size,
+                    font_family,
+                    font_weight,
                     color,
                 } => {
                     if font_system.is_none() {
@@ -143,6 +147,8 @@ impl Backend for TinySkiaBackend {
                         *y,
                         text,
                         *font_size,
+                        font_family,
+                        *font_weight,
                         *color,
                         font_system.as_mut().expect("font_system just initialized"),
                         swash_cache.as_mut().expect("swash_cache just initialized"),
@@ -261,6 +267,8 @@ fn draw_text(
     y: f32,
     text: &str,
     font_size: f32,
+    font_family: &str,
+    font_weight: u16,
     color: Color,
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
@@ -270,7 +278,10 @@ fn draw_text(
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     // 单行（不换行）。
     buffer.set_size(font_system, None, None);
-    buffer.set_text(font_system, text, Attrs::new(), Shaping::Advanced);
+    let attrs = Attrs::new()
+        .family(family_from_css(font_family))
+        .weight(Weight(font_weight));
+    buffer.set_text(font_system, text, attrs, Shaping::Advanced);
 
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, color.a);
@@ -312,6 +323,19 @@ fn draw_text(
     }
 }
 
+/// CSS 字体族名 → cosmic-text [`Family`]（与 layout 侧 text.rs 保持一致）。
+fn family_from_css(name: &str) -> Family<'_> {
+    let trimmed = name.trim();
+    match trimmed.to_ascii_lowercase().as_str() {
+        "serif" => Family::Serif,
+        "sans-serif" => Family::SansSerif,
+        "monospace" => Family::Monospace,
+        "cursive" => Family::Cursive,
+        "fantasy" => Family::Fantasy,
+        _ => Family::Name(trimmed),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +373,8 @@ mod tests {
             y: 10.0,
             text: "Hello".to_string(),
             font_size: 24.0,
+            font_family: "serif".to_string(),
+            font_weight: 400,
             color: Color::rgb(0, 0, 0),
         }];
         let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 50);

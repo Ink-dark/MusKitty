@@ -51,6 +51,37 @@ pub fn resolve_font_size(style: &ComputedStyle) -> Option<f32> {
     None
 }
 
+/// 从 ComputedStyle 提取 font-family（取首个字体族名，T-3）。
+pub fn resolve_font_family(style: &ComputedStyle) -> Option<String> {
+    let cv = style.get("font-family")?;
+    cv.tokens().iter().find_map(|t| match t {
+        ComponentValue::PreservedToken(Token::Ident(s)) => Some(s.clone()),
+        ComponentValue::PreservedToken(Token::String(s)) => Some(s.clone()),
+        _ => None,
+    })
+}
+
+/// 从 ComputedStyle 提取 font-weight（`normal`=400、`bold`=700、数值直接，T-3）。
+pub fn resolve_font_weight(style: &ComputedStyle) -> Option<u16> {
+    let cv = style.get("font-weight")?;
+    for t in cv.tokens() {
+        match t {
+            ComponentValue::PreservedToken(Token::Ident(s)) => {
+                return Some(if s.eq_ignore_ascii_case("bold") {
+                    700
+                } else {
+                    400
+                });
+            }
+            ComponentValue::PreservedToken(Token::Number(n)) => {
+                return Some(n.value.clamp(1.0, 1000.0) as u16);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// 从 ComputedStyle 提取边框。
 ///
 /// 读取 `border-width` / `border-style` / `border-color` 三个 longhand

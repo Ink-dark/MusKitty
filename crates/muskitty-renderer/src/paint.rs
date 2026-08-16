@@ -13,7 +13,8 @@
 use crate::color::Color;
 use crate::command::RenderCommand;
 use crate::render_tree::{
-    extract_background_color, extract_border, extract_text_color, resolve_font_size,
+    extract_background_color, extract_border, extract_text_color, resolve_font_family,
+    resolve_font_size, resolve_font_weight,
 };
 use muskitty_cascade::ComputedStyle;
 use muskitty_dom::{Node, NodeKind};
@@ -57,7 +58,9 @@ pub fn paint(input: &PaintInput) -> Vec<RenderCommand> {
         input.viewport,
         &mut commands,
         &mut children,
-        16.0, // 默认 font-size（medium = 16px）
+        16.0,    // 默认 font-size（medium = 16px）
+        "serif", // 默认 font-family
+        400,     // 默认 font-weight（normal）
         Color::BLACK,
     );
     commands
@@ -76,27 +79,37 @@ fn paint_recursive(
     commands: &mut Vec<RenderCommand>,
     children_scratch: &mut Vec<Rc<RefCell<Node>>>,
     inherited_font_size: f32,
+    inherited_font_family: &str,
+    inherited_font_weight: u16,
     inherited_color: Color,
 ) {
     let addr = Rc::as_ptr(node) as usize;
 
-    // 本节点的继承上下文：Element 从自身 style 解析 color/font-size，
+    // 本节点的继承上下文：Element 从自身 style 解析字体样式/color，
     // 其余节点（Text/Comment/...）沿用继承值。
-    let (font_size, color) = {
+    let (font_size, font_family, font_weight, color) = {
         let node_ref = node.borrow();
         match &node_ref.kind {
             NodeKind::Element(_) => {
-                let fs = styles
-                    .get(&addr)
+                let style = styles.get(&addr);
+                let fs = style
                     .and_then(resolve_font_size)
                     .unwrap_or(inherited_font_size);
-                let c = styles
-                    .get(&addr)
-                    .map(extract_text_color)
-                    .unwrap_or(inherited_color);
-                (fs, c)
+                let ff = style
+                    .and_then(resolve_font_family)
+                    .unwrap_or_else(|| inherited_font_family.to_string());
+                let fw = style
+                    .and_then(resolve_font_weight)
+                    .unwrap_or(inherited_font_weight);
+                let c = style.map(extract_text_color).unwrap_or(inherited_color);
+                (fs, ff, fw, c)
             }
-            _ => (inherited_font_size, inherited_color),
+            _ => (
+                inherited_font_size,
+                inherited_font_family.to_string(),
+                inherited_font_weight,
+                inherited_color,
+            ),
         }
     };
 
@@ -128,6 +141,8 @@ fn paint_recursive(
                         y: node_layout.abs_y,
                         text: text.data.clone(),
                         font_size,
+                        font_family: font_family.clone(),
+                        font_weight,
                         color,
                     });
                 }
@@ -190,6 +205,8 @@ fn paint_recursive(
             commands,
             children_scratch,
             font_size,
+            &font_family,
+            font_weight,
             color,
         );
     }
