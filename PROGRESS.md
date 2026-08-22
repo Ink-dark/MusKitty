@@ -1,6 +1,6 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-08-16 | 文本渲染 + 布局增强 + 窗口化 + 外部依赖解耦（layout/renderer/network）完成并推送；T-3 换行待后续
+> 最后更新: 2026-08-22 | T-3 换行 + 字体属性完成并推送（含多行叠行渲染修复）；下一里程碑 M-3 CSS 补全
 >
 > Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
 > Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
@@ -391,7 +391,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 8. ~~**DOM 完整 API 扩展**~~ ✅ 已完成（2026-08-09）：Events → muskitty-dom `event.rs`；element.style → muskitty-cssom `element_style.rs`；innerHTML/outerHTML → muskitty-html5-parser `serialize.rs` + `parse_fragment`（WPT harness 解锁 fragment 用例，99.0%）。
 9. **Tokenizer 遗留**：14 个 html5lib 失败已确认非 bug，**保持现状**。
 10. ~~**文本渲染 + 布局增强 + 窗口化**~~ ✅ 已完成（2026-08-16）：文本渲染（layout 测量 `3d18bf4` + renderer glyph 渲染 `50bc822`）、position 定位（`d721a0b`）、overflow 裁剪（`d09bc78`）、grid 布局（cascade `2c27d7d` + layout `e690d4e`）、winit 窗口化（`07eb0b8`）。均已推送远端。
-11. **T-3 换行 + 字体属性**（待后续）：文本按容器宽度换行需 taffy measure function（`TaffyTree` context 化 + `compute_layout_with_measure`），font-family/font-weight/text-align 生效。
+11. ~~**T-3 换行 + 字体属性**~~ ✅ 已完成（2026-08-22）：taffy measure function 换行（layout `8f18108`）、font-family/font-weight 测量（layout `056ec23`）、renderer 换行/字重/对齐（renderer `8a28bc8`/`fc6f971`/`20606b8`）。补齐端到端用例时发现并修复多行叠行 bug（`draw_text` 漏加 `run.line_y`，glyph 行内局部坐标需加行顶偏移）。line-height 仍为 `font_size * 1.2` 近似，精确解析推迟。
 12. ~~**外部依赖解耦**~~ ✅ 已完成（2026-08-16）：layout（taffy/cosmic-text `bf52557`）、renderer（tiny-skia Pixmap `98af15d`）、network（reqwest Error `8cfbdfd`）公共 API 均不再暴露外部依赖类型，上层可抽离。
 
 ## Phase 3 (Layout 层) — 已完成
