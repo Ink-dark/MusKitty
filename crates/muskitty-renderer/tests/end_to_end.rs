@@ -313,3 +313,111 @@ fn end_to_end_text_align_center() {
         "text-align: center 应传递为 Center"
     );
 }
+
+// —— T-3: 换行 + 字体属性端到端 ——
+
+/// 全链路（HTML → cascade → layout → paint → render），返回绘制指令与
+/// 含墨迹的扫描行数（该行内存在非白像素）。
+fn render_text_case(
+    html: &str,
+    vw: f32,
+    vh: f32,
+) -> (Vec<muskitty_renderer::RenderCommand>, usize) {
+    let dom = muskitty_html5_parser::parse(html);
+    let parsed = parse_stylesheet("div { display: block; } body { margin: 0; }");
+    let sheet = {
+        let mut s = from_stylesheet(&parsed);
+        s.origin = Origin::Author;
+        s
+    };
+    let styles = compute_styles_tree(&dom, &[sheet], &StyleTreeOptions::default());
+    let mut tree = build_layout_tree(&dom, &styles);
+    let layout = compute_layout(&mut tree, vw, vh).expect("layout ok");
+    let commands = paint(&PaintInput {
+        dom: &dom,
+        styles: &styles,
+        layout: &layout,
+        viewport: None,
+    });
+
+    let mut backend = TinySkiaBackend::new();
+    let data = match backend.render(&commands, vw as u32, vh as u32) {
+        RenderOutput::Pixels { data, .. } => data,
+        other => panic!("expected Pixels, got {:?}", other),
+    };
+    let ink_rows = (0..vh as usize)
+        .filter(|&y| {
+            (0..vw as usize).any(|x| {
+                let i = (y * vw as usize + x) * 4;
+                data[i] < 200 || data[i + 1] < 200 || data[i + 2] < 200
+            })
+        })
+        .count();
+    (commands, ink_rows)
+}
+
+#[test]
+fn end_to_end_wrapped_text_renders_multiple_lines() {
+    // T-3：窄容器长文本换行 —— Text 命令宽度 = 容器宽，墨迹扫描行数
+    // 明显多于单行文本（多行渲染）。
+    let (long_cmds, long_ink) = render_text_case(
+        r#"<div style="width: 100px">The quick brown fox jumps over the lazy dog again and again</div>"#,
+        100.0,
+        200.0,
+    );
+    let (_single_cmds, single_ink) =
+        render_text_case(r#"<div style="width: 100px">Hi</div>"#, 100.0, 200.0);
+
+    let long_width = long_cmds
+        .iter()
+        .find_map(|c| match c {
+            muskitty_renderer::RenderCommand::Text { width, .. } => Some(*width),
+            _ => None,
+        })
+        .expect("long text command should exist");
+    assert!(
+        (long_width - 100.0).abs() < 1.0,
+        "wrapped text command width should fill container, got {long_width}"
+    );
+    assert!(
+        long_ink > single_ink * 2,
+        "wrapped text should ink more scanlines than single line, long={long_ink} single={single_ink}"
+    );
+}
+
+#[test]
+fn end_to_end_font_weight_and_size_reach_text_command() {
+    // T-3：font-weight: bold / font-size: 32px 经继承传入 Text 命令，
+    // 且 32px 的墨迹行数多于 16px（字号影响渲染）。
+    let (bold_cmds, bold_ink) = render_text_case(
+        r#"<p style="font-weight: bold; font-size: 32px; color: black">Hi</p>"#,
+        200.0,
+        120.0,
+    );
+    let (_normal_cmds, normal_ink) = render_text_case(
+        r#"<p style="font-weight: normal; font-size: 16px; color: black">Hi</p>"#,
+        200.0,
+        120.0,
+    );
+
+    let (weight, size) = bold_cmds
+        .iter()
+        .find_map(|c| match c {
+            muskitty_renderer::RenderCommand::Text {
+                font_weight,
+                font_size,
+                ..
+            } => Some((*font_weight, *font_size)),
+            _ => None,
+        })
+        .expect("bold text command should exist");
+    assert_eq!(weight, 700, "font-weight: bold 应传递为 700");
+    assert!(
+        (size - 32.0).abs() < f32::EPSILON,
+        "font-size: 32px 应传递为 32.0, got {size}"
+    );
+    assert!(
+        bold_ink > normal_ink,
+        "32px text should ink more scanlines than 16px, bold={bold_ink} normal={normal_ink}"
+    );
+}

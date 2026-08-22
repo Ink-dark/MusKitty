@@ -304,10 +304,11 @@ fn draw_text(
             TextAlign::Right => width - run.line_w,
         };
         for glyph in run.glyphs {
-            // physical() 返回像素对齐的物理坐标（含 baseline）+ cache key。
+            // physical() 返回行内局部物理坐标（含 baseline）；多行时需加
+            // run.line_y（行顶偏移），否则各行叠在首行位置（T-3）。
             let physical = glyph.physical((0.0, 0.0), 1.0);
             let gx = physical.x as f32 + line_offset;
-            let gy = physical.y as f32;
+            let gy = physical.y as f32 + run.line_y;
             let cache_key = physical.cache_key;
             if let Some(commands) = swash_cache.get_outline_commands(font_system, cache_key) {
                 let mut pb = PathBuilder::new();
