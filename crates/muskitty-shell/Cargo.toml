@@ -1,0 +1,29 @@
+[package]
+name = "muskitty-shell"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "Browser shell: PlatformWindow abstraction + winit/softbuffer window + headless render"
+repository = "https://github.com/Ink-dark/MusKitty"
+homepage = "https://github.com/Ink-dark/MusKitty"
+keywords = ["browser", "window", "shell", "rendering", "web"]
+categories = ["rendering", "gui"]
+authors = ["MusCat / MusKitty Bit-Torch Community"]
+
+[features]
+# winit + softbuffer 真窗口后端（默认开启）。关闭后仅保留无头渲染
+# （HeadlessWindow / render_to_png），可用于无窗口环境的 CI 测试。
+default = ["winit-backend"]
+winit-backend = ["dep:winit", "dep:softbuffer"]
+
+[dependencies]
+muskitty-dom = { path = "../muskitty-dom", version = "0.2.0" }
+muskitty-cascade = { path = "../muskitty-cascade", version = "0.1.0" }
+muskitty-layout = { path = "../muskitty-layout", version = "0.1.0" }
+muskitty-css = { path = "../muskitty-css", version = "0.6.0" }
+muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
+muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.2.0" }
+muskitty-renderer = { path = "../muskitty-renderer", version = "0.1.0" }
+winit = { version = "0.30", optional = true }
+softbuffer = { version = "0.4", optional = true }
