@@ -313,17 +313,21 @@ fn draw_text(
             if let Some(commands) = swash_cache.get_outline_commands(font_system, cache_key) {
                 let mut pb = PathBuilder::new();
                 for cmd in commands {
+                    // swash outline 是 y-up（baseline 原点，见 cosmic-text
+                    // `with_pixels` 中 `y = -placement.top` 的取反），而画布
+                    // y 向下：outline 的 +y 应落在 baseline 上方，故取 `gy - p.y`。
+                    // 误加 `p.y` 会让每个字形垂直翻转（W-1 真窗口发现的 bug）。
                     match *cmd {
-                        Command::MoveTo(p) => pb.move_to(gx + p.x, gy + p.y),
-                        Command::LineTo(p) => pb.line_to(gx + p.x, gy + p.y),
-                        Command::QuadTo(c, p) => pb.quad_to(gx + c.x, gy + c.y, gx + p.x, gy + p.y),
+                        Command::MoveTo(p) => pb.move_to(gx + p.x, gy - p.y),
+                        Command::LineTo(p) => pb.line_to(gx + p.x, gy - p.y),
+                        Command::QuadTo(c, p) => pb.quad_to(gx + c.x, gy - c.y, gx + p.x, gy - p.y),
                         Command::CurveTo(c1, c2, p) => pb.cubic_to(
                             gx + c1.x,
-                            gy + c1.y,
+                            gy - c1.y,
                             gx + c2.x,
-                            gy + c2.y,
+                            gy - c2.y,
                             gx + p.x,
-                            gy + p.y,
+                            gy - p.y,
                         ),
                         Command::Close => pb.close(),
                     }
@@ -376,6 +380,73 @@ mod tests {
     fn pixel(data: &[u8], width: u32, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let i = ((y * width + x) * 4) as usize;
         (data[i], data[i + 1], data[i + 2], data[i + 3])
+    }
+
+    #[test]
+    fn glyph_is_not_vertically_flipped() {
+        // 回归测试（W-1 真窗口发现"文字全部反翻"）：swash outline 是 y-up
+        // （baseline 原点），绘制须 `baseline_y - p.y`；若误加 `p.y` 则每个
+        // 字形垂直翻转。用大写 "T" 判别：横杠在 cap 顶部、竖干伸到 baseline。
+        // 正确渲染 → 顶部墨迹行平均宽度 > 底部；翻转后横杠落到底部 → 反之。
+        let mut backend = TinySkiaBackend::new();
+        let cmds = vec![RenderCommand::Text {
+            x: 10.0,
+            y: 20.0,
+            width: 200.0,
+            text: "T".to_string(),
+            font_size: 64.0,
+            font_family: "serif".to_string(),
+            font_weight: 400,
+            text_align: TextAlign::Left,
+            color: Color::rgb(0, 0, 0),
+        }];
+        // 画布足够高，让翻转后的字形（横杠落到 baseline 之下）完整可见。
+        let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 160);
+
+        // 每行墨迹的像素数与水平范围。
+        let mut counts = vec![0usize; height as usize];
+        let mut min_x = vec![i32::MAX; height as usize];
+        let mut max_x = vec![i32::MIN; height as usize];
+        for py in 0..height {
+            for px in 0..width {
+                let (r, g, b, _) = pixel(&data, width, px, py);
+                if r < 200 || g < 200 || b < 200 {
+                    let i = py as usize;
+                    counts[i] += 1;
+                    min_x[i] = min_x[i].min(px as i32);
+                    max_x[i] = max_x[i].max(px as i32);
+                }
+            }
+        }
+
+        // 墨迹行的垂直范围。
+        let ink_rows: Vec<usize> = counts
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c > 0)
+            .map(|(i, _)| i)
+            .collect();
+        let top = *ink_rows.first().expect("glyph has ink");
+        let bottom = *ink_rows.last().expect("glyph has ink");
+        assert!(
+            bottom - top > 4,
+            "glyph should span several rows, got top={top} bottom={bottom}"
+        );
+
+        // 顶部四分之一 vs 底部四分之一墨迹行的平均宽度。
+        let avg_width = |rows: &[usize]| -> f32 {
+            rows.iter()
+                .map(|&i| (max_x[i] - min_x[i]) as f32)
+                .sum::<f32>()
+                / rows.len() as f32
+        };
+        let top_w = avg_width(&ink_rows[..ink_rows.len() / 4]);
+        let bottom_w = avg_width(&ink_rows[ink_rows.len() * 3 / 4..]);
+        assert!(
+            top_w > bottom_w,
+            "capital T's horizontal bar must sit at the TOP: top-quarter avg width {top_w:.1} \
+             > bottom-quarter {bottom_w:.1}; glyph is vertically flipped"
+        );
     }
 
     #[test]
