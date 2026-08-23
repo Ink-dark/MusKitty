@@ -1275,9 +1275,7 @@ dependencies = [
  "muskitty-html5-parser",
  "muskitty-layout",
  "muskitty-selectors",
- "softbuffer",
  "tiny-skia 0.12.0",
- "winit",
 ]
 
 [[package]]
