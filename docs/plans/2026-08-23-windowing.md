@@ -3,8 +3,8 @@
 > **创建时间**：2026-08-23
 > **依据**：`docs/research/2026-08-23-servo-window-layer-analysis.md`（Servo 窗口层分析）
 > **用户决策**：① 新建 `muskitty-shell` workspace member 承载窗口抽象（按研究文档 §5）；② 窗口化作为独立轨道与 M-3（CSS 补全收尾）**并行穿插**推进
-> **当前状态**：W-1 待启动。`muskitty-renderer` 已有 winit+softbuffer 真窗口 demo（`examples/window_demo.rs`，167 行，硬编码），本规划将其抽象化并迁移
-> **关联文件**：`crates/muskitty-renderer/examples/window_demo.rs`、`crates/muskitty-renderer/src/backend/{mod,tiny_skia}.rs`
+> **当前状态**：W-1 **已完成**。`muskitty-shell` workspace member 落地：`PlatformWindow` trait + `WinitWindow`（pub(crate)，构造参数含 winit 类型不外泄）+ `page::render_page` 管线 + `App::run` 便捷入口 + 迁入的 `examples/window_demo.rs`。renderer 已回归纯净（删除 window_demo、移除 winit/softbuffer dev-deps）
+> **关联文件**：`crates/muskitty-shell/`（本 crate）、`crates/muskitty-renderer/Cargo.toml`（已清理）
 
 ---
 
@@ -115,9 +115,11 @@ M-3（CSS 补全）与窗口化触碰**不同 crate**，无文件冲突：
 | 1 | `[shell] crate skeleton + workspace member` | 新建 crate，`Cargo.toml`（feature gate 如上），根 `Cargo.toml` members 加 `"crates/muskitty-shell"`，`lib.rs` 骨架 + crate doc |
 | 2 | `[shell] PlatformWindow trait + Cursor/WindowGeometry` | `window.rs`：trait 最小集 + 枚举，无外部依赖类型泄漏 |
 | 3 | `[shell] page.rs render pipeline` | `render_page(html, css, w, h) -> RenderOutput`：从 window_demo 的 `render_page` 抽出（parse→cascade→layout→paint→render），调用 renderer 公共 API |
-| 4 | `[shell] WinitWindow: PlatformWindow + app/main` | `winit_window.rs`（winit 事件循环 + softbuffer 表面，RGBA→0RGB 在 `present` 内）+ `app.rs` + `main.rs`，功能对齐 window_demo（可缩放、可关闭、Esc 关闭） |
-| 5 | `[shell] move window_demo to shell examples` | 示例改用 `PlatformWindow` 构造窗口；删除 renderer 的 `window_demo.rs` |
+| 4 | `[shell] WinitWindow: PlatformWindow + app/main` | `winit_window.rs`（winit 事件循环 + softbuffer 表面，RGBA→0RGB 在 `present` 内）+ `app.rs` + `main.rs`，功能对齐 window_demo（可缩放、可关闭） |
+| 5 | `[shell] move window_demo to shell examples` | 示例迁入 shell（后续经用户决策改为 `App::run` 入口，`WinitWindow` 降 `pub(crate)`）；删除 renderer 的 `window_demo.rs` |
 | 6 | `[renderer] drop winit/softbuffer dev-deps` | renderer `Cargo.toml` 清理，验证 `cargo check -p muskitty-renderer` 零 warning |
+
+**设计修订（W-1 收尾）**：winit 窗口必须经事件循环创建，无法像 `ReqwestFetcher` 那样内部自建资源，故 `WinitWindow::new(id, Rc<Window>)` 的构造参数天然含 winit 类型。用户决策：**严格合规**——`winit_window` 模块降 `pub(crate)`（`WinitWindow`/`new`/`rgba_to_0rgb` 均不外泄），窗口创建由 `App::run` 封装；示例改为 `App::run(HTML, CSS)`。直接构造 `PlatformWindow` 的演示价值迁移到 W-4 的 `HeadlessWindow`（可无参构造）。pub API 仅剩 `PlatformWindow` / `App::run` / `page::render_page`，grep 零 winit/softbuffer 类型。
 
 **技术要点**：
 - RGBA→0RGB 转换抽成**纯函数**（如 `WinitWindow::rgba_to_0rgb` 或 `window.rs` 顶层函数）以便无窗口单测
@@ -235,9 +237,10 @@ cargo run -p muskitty-shell --example window_demo   # W-1 手工验证真窗口
 
 ---
 
-## 下一步（待确认）
+## 下一步
 
 - [x] 用户决策：新建 muskitty-shell + 并行穿插
-- [ ] W-1 启动：crate 骨架（commit 1）
-- [ ] 规划落地后同步 `goal.md`（加入窗口化并行轨道）
-- [ ] M-3 与 W-1 的穿插节奏由用户在 `goal.md` 中排布
+- [x] W-1 全部 6 个 commit + 收尾修订（设计决策：WinitWindow 私有化）
+- [x] 规划落地后同步 `goal.md`（加入窗口化并行轨道，穿插节奏已排布）
+- [x] M-3 与 W-1 的穿插节奏由用户在 `goal.md` 中排布
+- [ ] **W-2（DPI）启动**：与 M-3 CSS 补全并行穿插（见 goal.md 节奏表）
