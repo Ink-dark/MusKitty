@@ -17,6 +17,12 @@ authors = ["MusCat / MusKitty Bit-Torch Community"]
 default = ["winit-backend"]
 winit-backend = ["dep:winit", "dep:softbuffer"]
 
+# 二进制入口依赖 winit 后端；--no-default-features 时仅 lib（无头渲染）可编译。
+[[bin]]
+name = "muskitty-shell"
+path = "src/main.rs"
+required-features = ["winit-backend"]
+
 [dependencies]
 muskitty-dom = { path = "../muskitty-dom", version = "0.2.0" }
 muskitty-cascade = { path = "../muskitty-cascade", version = "0.1.0" }

@@ -30,3 +30,11 @@
 
 pub mod page;
 pub mod window;
+
+/// winit + softbuffer 真窗口后端（`winit-backend` feature 门控）。
+#[cfg(feature = "winit-backend")]
+pub mod winit_window;
+
+/// 应用入口（事件循环 + 窗口生命周期，`winit-backend` feature 门控）。
+#[cfg(feature = "winit-backend")]
+pub mod app;
