@@ -27,3 +27,5 @@
 //! 下仍可编译无头渲染。
 //!
 //! 规划见 `docs/plans/2026-08-23-windowing.md`。
+
+pub mod window;
