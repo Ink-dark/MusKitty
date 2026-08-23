@@ -1,0 +1,121 @@
+//! 渲染管线：HTML + CSS → 像素。
+//!
+//! 把 DOM→CSS→Layout→Render 全链路串起来（浏览器外壳的核心职责），
+//! 产出 [`muskitty_renderer::RenderOutput`]。renderer 只负责
+//! `LayoutResult → RenderCommand[] → 像素`，本模块负责驱动整个管线。
+//! 管线逻辑从 renderer 的 `window_demo` 抽出，供真窗口 / Headless 复用。
+
+use muskitty_cascade::{compute_styles, StyleTreeOptions};
+use muskitty_css::parse_stylesheet;
+use muskitty_cssom::{from_stylesheet, Origin};
+use muskitty_layout::{build_layout_tree, compute_layout};
+use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
+
+/// 渲染 HTML + CSS 到 RGBA 像素（[`RenderOutput::Pixels`]）。
+///
+/// `width` / `height` 为画布尺寸（px）。W-1 阶段即窗口物理尺寸；
+/// W-2（DPI）起区分逻辑视口与物理分辨率。
+///
+/// 管线步骤：
+/// 1. HTML → DOM（muskitty-html5-parser）
+/// 2. CSS → CssStyleSheet（Author origin）
+/// 3. cascade + compute → 每元素 ComputedStyle
+/// 4. layout → LayoutResult（视口 = width × height）
+/// 5. paint → RenderCommand[]
+/// 6. TinySkiaBackend::render → `RenderOutput::Pixels`（RGBA8）
+pub fn render_page(html: &str, css: &str, width: u32, height: u32) -> RenderOutput {
+    let dom = muskitty_html5_parser::parse(html);
+    let parsed = parse_stylesheet(css);
+    let sheet = {
+        let mut s = from_stylesheet(&parsed);
+        s.origin = Origin::Author;
+        s
+    };
+    let styles = compute_styles(&dom, &[sheet], &StyleTreeOptions::default());
+    let mut tree = build_layout_tree(&dom, &styles);
+    let layout = compute_layout(&mut tree, width as f32, height as f32).expect("layout failed");
+    let input = PaintInput {
+        dom: &dom,
+        styles: &styles,
+        layout: &layout,
+        viewport: None,
+    };
+    let commands = paint(&input);
+    let mut backend = TinySkiaBackend::new();
+    backend.render(&commands, width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 单行无内部空白：空白文本节点在布局中会占位（Muskitty 尚未实现
+    // 空白折叠），会破坏 div 位置断言。
+    const RED_DIV_HTML: &str = r#"<!doctype html><html><body><div style="width:100px;height:50px;background-color:#ff0000"></div></body></html>"#;
+
+    /// 读取 (x, y) 处 RGBA 像素（8-bit per channel）。
+    fn pixel(data: &[u8], width: u32, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let i = ((y * width + x) * 4) as usize;
+        (data[i], data[i + 1], data[i + 2], data[i + 3])
+    }
+
+    #[test]
+    fn render_red_div_pixel_and_white_canvas() {
+        let out = render_page(
+            RED_DIV_HTML,
+            "div { display: block; } body { margin: 0; }",
+            200,
+            100,
+        );
+        let RenderOutput::Pixels {
+            width,
+            height,
+            data,
+        } = out
+        else {
+            panic!("expected Pixels");
+        };
+        assert_eq!(width, 200);
+        assert_eq!(height, 100);
+
+        // (10, 10) 在 div 内 → 红（不透明）。
+        let (r, g, b, a) = pixel(&data, width, 10, 10);
+        assert_eq!((r, g, b, a), (255, 0, 0, 255));
+        // (150, 10) 在 div 外 → 白画布（P3-5 白底）。
+        let (r, g, b, _) = pixel(&data, width, 150, 10);
+        assert_eq!((r, g, b), (255, 255, 255));
+    }
+
+    #[test]
+    fn render_text_produces_ink() {
+        let html = r#"
+<!doctype html>
+<html><body>
+  <p style="font-size:24px;color:#000000">Hello</p>
+</body></html>
+"#;
+        let out = render_page(html, "body { margin: 0; }", 200, 80);
+        let RenderOutput::Pixels {
+            width,
+            height,
+            data,
+        } = out
+        else {
+            panic!("expected Pixels");
+        };
+        assert_eq!(width, 200);
+        assert_eq!(height, 80);
+
+        // 统计非白像素（文字墨迹），应存在。
+        let mut ink = 0usize;
+        for py in 0..height {
+            for px in 0..width {
+                let (r, g, b, _) = pixel(&data, width, px, py);
+                if r < 200 || g < 200 || b < 200 {
+                    ink += 1;
+                }
+            }
+        }
+        assert!(ink > 0, "text should produce non-white (ink) pixels");
+    }
+}
