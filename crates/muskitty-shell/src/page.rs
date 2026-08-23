@@ -45,6 +45,49 @@ pub fn render_page(html: &str, css: &str, width: u32, height: u32) -> RenderOutp
     backend.render(&commands, width, height)
 }
 
+/// 渲染自包含 HTML 文件（含 `<style>`）到 RGBA 像素。
+///
+/// 读取 `path` 指向的 HTML 文件，用 [`extract_inline_style`] 提取其中
+/// `<style>` 块作为 Author CSS，再走 [`render_page`] 全管线。用于
+/// 渲染检测页（纯 HTML+CSS fixture）→ 与浏览器对照。
+pub fn render_html_file(
+    path: &str,
+    width: u32,
+    height: u32,
+) -> Result<RenderOutput, Box<dyn std::error::Error>> {
+    let html = std::fs::read_to_string(path)?;
+    let css = extract_inline_style(&html);
+    Ok(render_page(&html, &css, width, height))
+}
+
+/// 从自包含 HTML 提取所有 `<style>...</style>` 块内容，拼接为 CSS。
+///
+/// 标签名与属性大小写不敏感（HTML），但当前按 ASCII 小写匹配即可覆盖
+/// 常见写法（`<style>`、`<style type="text/css">`）。无 `<style>` 时返回空串。
+pub(crate) fn extract_inline_style(html: &str) -> String {
+    const OPEN_TAG: &str = "<style";
+    const CLOSE_TAG: &str = "</style>";
+    let lower = html.to_ascii_lowercase();
+    let mut css = String::new();
+    let mut search_from = 0usize;
+    while let Some(i) = lower[search_from..].find(OPEN_TAG) {
+        let open = search_from + i;
+        // 跳过开始标签本身（含属性），定位到 '>'.
+        let Some(gt) = lower[open..].find('>') else {
+            break;
+        };
+        let gt = open + gt + 1;
+        let Some(close) = lower[gt..].find(CLOSE_TAG) else {
+            break;
+        };
+        let close = gt + close;
+        css.push_str(&html[gt..close]);
+        css.push('\n');
+        search_from = close + CLOSE_TAG.len();
+    }
+    css
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +160,58 @@ mod tests {
             }
         }
         assert!(ink > 0, "text should produce non-white (ink) pixels");
+    }
+
+    #[test]
+    fn extract_inline_style_single_block() {
+        let html = r#"<!doctype html><html><head><style>body{margin:0}</style></head><body></body></html>"#;
+        assert_eq!(extract_inline_style(html), "body{margin:0}\n");
+    }
+
+    #[test]
+    fn extract_inline_style_with_attributes_and_multiple_blocks() {
+        let html = "<style type=\"text/css\">a{color:red}</style><body></body><style>b{display:block}</style>";
+        assert_eq!(
+            extract_inline_style(html),
+            "a{color:red}\nb{display:block}\n"
+        );
+    }
+
+    #[test]
+    fn extract_inline_style_missing_is_empty() {
+        assert_eq!(extract_inline_style("<body></body>"), "");
+    }
+
+    #[test]
+    fn extract_inline_style_keeps_css_semicolons_and_braces() {
+        let html = "<style>.a{border-top-width:1px;border-top-style:solid}</style>";
+        assert_eq!(
+            extract_inline_style(html),
+            ".a{border-top-width:1px;border-top-style:solid}\n"
+        );
+    }
+
+    #[test]
+    fn render_html_file_renders_style_driven_page() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("muskitty_render_html_file_test.html");
+        std::fs::write(
+            &path,
+            r#"<!doctype html><html><head><style>div{display:block;width:100px;height:50px;background-color:#ff0000}</style></head><body><div></div></body></html>"#,
+        )
+        .unwrap();
+        let out = render_html_file(&path.to_string_lossy(), 200, 100).expect("render file");
+        let RenderOutput::Pixels {
+            width,
+            height,
+            data,
+        } = out
+        else {
+            panic!("expected Pixels");
+        };
+        assert_eq!((width, height), (200, 100));
+        let (r, g, b, _) = pixel(&data, width, 10, 10);
+        assert_eq!((r, g, b), (255, 0, 0));
+        let _ = std::fs::remove_file(&path);
     }
 }

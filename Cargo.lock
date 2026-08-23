@@ -1298,6 +1298,7 @@ dependencies = [
  "muskitty-layout",
  "muskitty-renderer",
  "softbuffer",
+ "tiny-skia 0.12.0",
  "winit",
 ]
 

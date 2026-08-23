@@ -33,3 +33,8 @@ muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.2.0" }
 muskitty-renderer = { path = "../muskitty-renderer", version = "0.1.0" }
 winit = { version = "0.30", optional = true }
 softbuffer = { version = "0.4", optional = true }
+
+[dev-dependencies]
+# 仅 example/测试用：把 RenderOutput::Pixels 编码为 PNG（与 renderer 内部同一
+# 后端，便于对照）。dev-deps 不进入 pub API，符合 decoupling ADR。
+tiny-skia = "0.12"

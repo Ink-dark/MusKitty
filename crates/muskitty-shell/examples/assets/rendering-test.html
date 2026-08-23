@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MusKitty 渲染检测页</title>
+<style>
+body{margin:0;padding:0;font-family:sans-serif;font-size:16px;color:#212121;background-color:#ffffff}
+.title{font-size:32px;font-weight:700;padding-top:16px;padding-right:16px;padding-bottom:16px;padding-left:16px;background-color:#1565c0;color:#ffffff}
+.sec{font-size:20px;font-weight:700;padding-top:8px;padding-right:12px;padding-bottom:8px;padding-left:12px;background-color:#e3f2fd;color:#0d47a1;border-width:2px;border-style:solid;border-color:#1e88e5}
+.row{display:flex;padding-top:8px;padding-right:8px;padding-bottom:8px;padding-left:8px;background-color:#fafafa}
+.cell{width:110px;height:60px;margin-top:4px;margin-right:4px;margin-bottom:4px;margin-left:4px}
+.note{font-size:14px;color:#757575;padding-top:4px;padding-right:8px;padding-bottom:4px;padding-left:8px}
+.text-cell{width:220px;margin-top:4px;margin-right:4px;margin-bottom:4px;margin-left:4px;padding-top:4px;padding-right:4px;padding-bottom:4px;padding-left:4px;background-color:#f5f5f5}
+.box{margin-top:12px;margin-right:12px;margin-bottom:12px;margin-left:12px;padding-top:12px;padding-right:12px;padding-bottom:12px;padding-left:12px;border-width:3px;border-style:solid;border-color:#d32f2f;background-color:#fff3e0}
+.clip{width:200px;height:80px;overflow:hidden;margin-top:12px;margin-right:12px;margin-bottom:12px;margin-left:12px;background-color:#e8f5e9;border-width:2px;border-style:solid;border-color:#2e7d32}
+</style><!--
+--></head><body><!--
+--><div class="title">MusKitty 渲染检测页</div><!--
+--><div class="sec">§1 背景色 background-color</div><!--
+--><div class="row"><div class="cell" style="background-color:red"></div><div class="cell" style="background-color:blue"></div><div class="cell" style="background-color:#2196f3"></div><div class="cell" style="background-color:rgb(255,213,79)"></div><div class="cell" style="background-color:rgba(76,175,80,0.5)"></div><div class="cell" style="background-color:#000000"></div><div class="cell" style="background-color:transparent"></div></div><!--
+--><div class="note">red / blue / #2196f3 / rgb(255,213,79) / rgba 半透明 / 黑色 / 透明（透出白画布）</div><!--
+--><div class="sec">§2 边框 border（border-width/style/color 通用属性）</div><!--
+--><div class="row"><div class="cell" style="background-color:#ffffff;border-width:1px;border-style:solid;border-color:#e0e0e0"></div><div class="cell" style="background-color:#ffffff;border-width:4px;border-style:solid;border-color:#d32f2f"></div><div class="cell" style="background-color:#ffffff;border-width:8px;border-style:solid;border-color:#1565c0"></div><div class="cell" style="background-color:#ffffff;border-width:3px;border-style:dashed;border-color:#6a1b9a"></div></div><!--
+--><div class="note">1px 灰 / 4px 红 / 8px 蓝 / 3px dashed（已知限制：dashed 按 solid 渲染；border-top-* 四向 longhand 当前不生效，统一用通用属性）</div><!--
+--><div class="sec">§3 box model 尺寸/边距/内边距</div><!--
+--><div class="box" style="width:240px;height:60px;background-color:#fff3e0">margin 12 + padding 12 + border 3 红</div><!--
+--><div style="width:300px;height:150px;margin-top:8px;margin-right:8px;margin-bottom:8px;margin-left:8px;border-width:3px;border-style:solid;border-color:#ff9800;background-color:#fff8e1"><div style="width:100px;height:60px;margin-top:16px;margin-right:0;margin-bottom:0;margin-left:16px;background-color:#ff9800"></div></div><!--
+--><div class="sec">§4 文本 text</div><!--
+--><div class="row"><div class="text-cell" style="font-size:12px;color:#000000">12px 小字</div><div class="text-cell" style="font-size:24px;color:#000000">24px 中字</div><div class="text-cell" style="font-size:32px;color:#000000">32px 大字</div></div><!--
+--><div class="row"><div class="text-cell" style="font-weight:400;font-size:24px;color:#000000">常规 400</div><div class="text-cell" style="font-weight:700;font-size:24px;color:#000000">粗体 700</div><div class="text-cell" style="font-size:24px;color:blue">蓝色</div></div><!--
+--><div class="row"><div class="text-cell" style="font-family:serif;font-size:24px;color:#000000">serif 衬线</div><div class="text-cell" style="font-family:sans-serif;font-size:24px;color:#000000">sans-serif 无衬线</div><div class="text-cell" style="font-family:monospace;font-size:24px;color:#000000">monospace 等宽</div></div><!--
+--><div class="row"><div class="text-cell" style="text-align:left;font-size:20px;color:#000000">左对齐 left</div><div class="text-cell" style="text-align:center;font-size:20px;color:#000000">居中 center</div><div class="text-cell" style="text-align:right;font-size:20px;color:#000000">右对齐 right</div></div><!--
+--><div style="width:140px;margin-top:8px;margin-right:8px;margin-bottom:8px;margin-left:8px;padding-top:4px;padding-right:4px;padding-bottom:4px;padding-left:4px;background-color:#f5f5f5;font-size:16px;color:#000000">窄盒内长文本自动换行：这是一段比较长的中文文本，用来检测按容器宽度换行是否生效。</div><!--
+--><p style="font-size:18px;color:#1a237e;margin-top:8px;margin-right:8px;margin-bottom:4px;margin-left:8px">第一行段落</p><p style="font-size:18px;color:#4a148c;margin-top:4px;margin-right:8px;margin-bottom:8px;margin-left:8px">第二行段落</p><!--
+--><div class="sec">§5 display:flex</div><!--
+--><div class="row"><div class="cell" style="background-color:#e53935"></div><div class="cell" style="background-color:#43a047"></div><div class="cell" style="background-color:#1e88e5"></div></div><!--
+--><div class="row" style="flex-direction:column"><div class="cell" style="width:200px;background-color:#ffb300"></div><div class="cell" style="width:200px;background-color:#8e24aa"></div><div class="cell" style="width:200px;background-color:#00acc1"></div></div><!--
+--><div class="sec">§6 display:none（应不显示）</div><!--
+--><div style="width:200px;height:60px;background-color:red;display:none"></div><!--
+--><div class="note">上方红色元素 display:none，若可见即 bug；下方为正常文本。</div><!--
+--><div class="sec">§7 overflow:clip</div><!--
+--><div class="clip"><div style="width:400px;height:120px;margin-top:0;margin-right:0;margin-bottom:0;margin-left:0;background-color:#66bb6a"></div></div><!--
+--><div class="note">200×80 绿盒 overflow:hidden，子盒 400×120 溢出部分应被裁剪。</div><!--
+--></body>
+</html>
