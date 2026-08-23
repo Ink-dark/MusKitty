@@ -32,8 +32,13 @@ pub mod page;
 pub mod window;
 
 /// winit + softbuffer 真窗口后端（`winit-backend` feature 门控）。
+///
+/// `pub(crate)`：窗口创建完全封装在 crate 内部（经 `app::App` 暴露），
+/// 公共 API 不泄漏 winit/softbuffer 类型（对齐 decoupling ADR）。直接
+/// 构造 `PlatformWindow` 的演示由 W-4 的 `HeadlessWindow`（可无参构造）
+/// 承担。
 #[cfg(feature = "winit-backend")]
-pub mod winit_window;
+pub(crate) mod winit_window;
 
 /// 应用入口（事件循环 + 窗口生命周期，`winit-backend` feature 门控）。
 #[cfg(feature = "winit-backend")]
