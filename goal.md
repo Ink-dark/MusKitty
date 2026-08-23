@@ -1,21 +1,22 @@
 # Goal — 下一步任务清单（给 Codex / AI Agent 用）
 
 > **更新时间**：2026-08-23
-> **当前状态**：T-3 换行 + 字体属性已完成并推送。本轮**双轨并行**：主线 M-3（CSS 补全收尾）+ 并行轨道窗口化（W-1 进行中，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)，依据 [docs/research/2026-08-23-servo-window-layer-analysis.md](docs/research/2026-08-23-servo-window-layer-analysis.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
+> **当前状态**：T-3 换行 + 字体属性已完成并推送。窗口化轨道 **W-1 已完成**（`muskitty-shell` 落地：PlatformWindow trait + App::run + renderer 回归纯净）。本轮**双轨并行**：主线 M-3（CSS 补全收尾）+ 并行轨道窗口化（下一阶段 **W-2 DPI**，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)，依据 [docs/research/2026-08-23-servo-window-layer-analysis.md](docs/research/2026-08-23-servo-window-layer-analysis.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
 
 ---
 
 ## 当前阶段定位
 
 - **主线**：M-3 CSS 补全 — media query 求值（cascade filter 目前透传）、@layer 排序（audit B8）、revert/revert-layer（B7）、剩余 shorthand、background-image。按渲染真实页面的需求驱动裁剪范围。
-- **并行轨道**：窗口化 — 新建 `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象 + `WinitWindow` 迁移 + DPI + 输入 + Headless + 多标签。
+- **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2）→ 输入（W-3）→ Headless（W-4）→ 多标签（W-5）。
 - **中期主线**：M-1 网络接轨 / M-2 交互基础排在 M-3 之后；inline formatting context 独立远期 Phase。
 
 ## 穿插节奏（双轨并行）
 
 | 轮次 | 轨道 | 内容 | 触碰 crate |
 |------|------|------|-----------|
-| 本轮 | 并行 | W-1 窗口化整块（6 commit：骨架 → trait → 管线 → WinitWindow → 迁移 → 清理） | shell（新）/ renderer |
+| 已完成 | 并行 | W-1 窗口化整块（6 commit + 收尾修订：WinitWindow 私有化） | shell（新）/ renderer |
+| 下一轮 | 并行 | W-2 DPI（整数倍先行，renderer Backend 加 scale） | shell / renderer |
 | 穿插 | 主线 | M-3 一批（按需） | cascade / layout |
 
 **节奏**：每轮一个窗口化阶段收尾（含测试 + commit）→ 切回 M-3 一批 → 下一窗口化阶段。两轨无文件冲突（cascade/layout vs shell/renderer）。
@@ -24,27 +25,32 @@
 
 ## 任务列表
 
-### 并行轨道：W-1 窗口化（进行中）
+### 并行轨道：W-1 窗口化（✅ 已完成）
 
-**目标**：`muskitty-shell` crate + `PlatformWindow` trait 抽象，`window_demo` 从 renderer 迁入，renderer 回归纯净。功能与现状一致（可缩放、可关闭、Esc 关闭）。
+**目标**：`muskitty-shell` crate + `PlatformWindow` trait 抽象，`window_demo` 从 renderer 迁入，renderer 回归纯净。功能与现状一致（可缩放、可关闭）。
 
 **Commit 序列**：
 
-- [ ] C-1 crate 骨架 + workspace member（Cargo.toml feature-gate winit-backend + 6 path deps + lib.rs；根 members 加入）
-- [ ] C-2 `PlatformWindow` trait 最小集 + `Cursor`/`WindowGeometry`（无外部依赖类型泄漏）
-- [ ] C-3 `page.rs` 渲染管线 `render_page(html, css, w, h) -> RenderOutput`
-- [ ] C-4 `WinitWindow: PlatformWindow` + `app.rs` + `main.rs`（RGBA→0RGB 在 present 内，抽纯函数）
-- [ ] C-5 `window_demo` 迁入 shell examples，删除 renderer 版本
-- [ ] C-6 renderer 移除 winit/softbuffer dev-deps
+- [x] C-1 crate 骨架 + workspace member（Cargo.toml feature-gate winit-backend + 6 path deps + lib.rs；根 members 加入）
+- [x] C-2 `PlatformWindow` trait 最小集 + `Cursor`/`WindowGeometry`（无外部依赖类型泄漏）
+- [x] C-3 `page.rs` 渲染管线 `render_page(html, css, w, h) -> RenderOutput`
+- [x] C-4 `WinitWindow: PlatformWindow` + `app.rs` + `main.rs`（RGBA→0RGB 在 present 内，抽纯函数）
+- [x] C-5 `window_demo` 迁入 shell examples，删除 renderer 版本
+- [x] C-6 renderer 移除 winit/softbuffer dev-deps
+- [x] 收尾修订：`WinitWindow` 降 `pub(crate)`（构造参数含 winit 类型，用户决策严格合规），示例改用 `App::run`；直接构造 `PlatformWindow` 的演示迁至 W-4 `HeadlessWindow`
 
 **退出条件（全部满足才可 commit）**：
 
-- [ ] `cargo check --workspace` / `cargo test --workspace` 通过
-- [ ] `cargo fmt --all -- --check` 通过
-- [ ] `cargo clippy --all-targets -- -D warnings` 零警告
-- [ ] `cargo run -p muskitty-shell --example window_demo` 真窗口渲染与现状一致
-- [ ] shell `pub` 导出无 winit/softbuffer 类型；renderer 无 winit/softbuffer dev-deps
-- [ ] 单测：RGBA→0RGB 转换 + page 管线像素断言
+- [x] `cargo check --workspace` / `cargo test --workspace` 通过
+- [x] `cargo fmt --all -- --check` 通过
+- [x] `cargo clippy --all-targets -- -D warnings` 零警告
+- [x] `cargo run -p muskitty-shell --example window_demo` 真窗口渲染与现状一致
+- [x] shell `pub` 导出无 winit/softbuffer 类型；renderer 无 winit/softbuffer dev-deps
+- [x] 单测：RGBA→0RGB 转换 + page 管线像素断言
+
+### 并行轨道：W-2 DPI（待启动）
+
+**目标**：`hidpi_scale_factor()` 返回真实值；`render_page`/`Backend` 加 scale 参数——layout 用逻辑视口（CSS px），渲染用物理分辨率（`logical × scale`）。整数倍（1x/2x）先行。同组命令 scale=1 与 scale=2 输出分辨率分别为 `w×h` 与 `2w×2h`，且 scale=2 左上角像素与 scale=1 一致（非简单插值）。
 
 ### 主线：M-3 CSS 补全（穿插推进）
 
