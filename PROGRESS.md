@@ -1,6 +1,6 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-08-29 | W-2 DPI 完成并推送（renderer/shell 加 scale：layout 逻辑 CSS px、栅格化物理分辨率，整数 1x/2x）；下一里程碑 M-3 CSS 补全 + W-3 输入
+> 最后更新: 2026-08-29 | W-3 输入完成（input.rs InputEvent/Key/Modifiers 等 shell 自有类型 + match_shortcut 快捷键层 + App 事件接线 + `PlatformWindow::handle_event` 页面层入口；Esc 关闭 / Ctrl+R 刷新）；下一里程碑 M-3 CSS 补全 + W-4 Headless 后端
 >
 > Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
 > Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
@@ -394,6 +394,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 11. ~~**T-3 换行 + 字体属性**~~ ✅ 已完成（2026-08-22）：taffy measure function 换行（layout `8f18108`）、font-family/font-weight 测量（layout `056ec23`）、renderer 换行/字重/对齐（renderer `8a28bc8`/`fc6f971`/`20606b8`）。补齐端到端用例时发现并修复多行叠行 bug（`draw_text` 漏加 `run.line_y`，glyph 行内局部坐标需加行顶偏移）。line-height 仍为 `font_size * 1.2` 近似，精确解析推迟。
 12. ~~**外部依赖解耦**~~ ✅ 已完成（2026-08-16）：layout（taffy/cosmic-text `bf52557`）、renderer（tiny-skia Pixmap `98af15d`）、network（reqwest Error `8cfbdfd`）公共 API 均不再暴露外部依赖类型，上层可抽离。
 13. ~~**W-2 DPI（HiDPI 缩放）**~~ ✅ 已完成（2026-08-29）：`Backend::render` / `render_page` / `render_html_file` 加 scale 参数——layout 用逻辑视口（CSS px），栅格化物理分辨率 `round(logical×scale)`（renderer `0192cae` / shell page `b0a645f`）；窗口流读 hidpi scale、脏检查含 scale、`ScaleFactorChanged` 重绘（shell `d53ca2f`）。整数 1x/2x 有 scale=1-vs-2 单测兜底（非插值）；`render_file` 示例 scale=1 输出不变。
+14. ~~**W-3 输入（InputEvent 抽象 + shell 快捷键层 + 事件分发结构）**~~ ✅ 已完成（2026-08-29）：input.rs 类型 + 纯函数 `match_shortcut`（shell `953f890`）、`PlatformWindow::handle_event` 页面层入口（`7fed8bb`）、App 事件接线 + 转换函数（`0962c74`）、文档同步（C-4）。架构修正：快捷键层在 `App::dispatch_input`（Esc 需 `event_loop.exit()`、Ctrl+R 需渲染管线，均 App 独有），`handle_event` 为页面层（W-3 无命中测试恒 `false`，仅立分发结构）；页面级命中测试单列延后。
 
 ## Phase 3 (Layout 层) — 已完成
 

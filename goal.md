@@ -1,14 +1,14 @@
 # Goal — 下一步任务清单（给 Codex / AI Agent 用）
 
 > **更新时间**：2026-08-29
-> **当前状态**：窗口化轨道 **W-2 DPI 已完成**（renderer `Backend::render` + shell `render_page` 加 scale：layout 用逻辑视口 CSS px、栅格化物理分辨率 `round(logical×scale)`，整数 1x/2x 有 scale=1-vs-2 单测兜底；窗口流读 hidpi scale、脏检查含 scale、ScaleFactorChanged 重绘）。本轮**双轨并行**：主线 M-3（CSS 补全收尾）+ 并行轨道窗口化（下一阶段 **W-3 输入**，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
+> **当前状态**：窗口化轨道 **W-3 输入已完成**（`input.rs` InputEvent/Key/Modifiers/MouseButton/TouchPhase shell 自有类型 + 纯函数 `match_shortcut`；winit 事件 → InputEvent 转换（逻辑 px）；`PlatformWindow::handle_event` 页面层入口；事件分层——shell 快捷键（Esc 关闭、Ctrl+R 刷新）在 `App::dispatch_input` 先于页面层处理；命中测试单列延后。input.rs 12 + app.rs 17 条无窗口单测）。本轮**双轨并行**：主线 M-3（CSS 补全收尾）+ 并行轨道窗口化（下一阶段 **W-4 Headless 后端**，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
 
 ---
 
 ## 当前阶段定位
 
 - **主线**：M-3 CSS 补全 — media query 求值（cascade filter 目前透传）、@layer 排序（audit B8）、revert/revert-layer（B7）、剩余 shorthand、background-image。按渲染真实页面的需求驱动裁剪范围。
-- **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2 ✅）→ 输入（W-3）→ Headless（W-4）→ 多标签（W-5）。
+- **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2 ✅）→ 输入（W-3 ✅）→ Headless（W-4）→ 多标签（W-5）。
 - **中期主线**：M-1 网络接轨 / M-2 交互基础排在 M-3 之后；inline formatting context 独立远期 Phase。
 
 ## 穿插节奏（双轨并行）
@@ -17,7 +17,8 @@
 |------|------|------|-----------|
 | 已完成 | 并行 | W-1 窗口化整块（6 commit + 收尾修订：WinitWindow 私有化） | shell（新）/ renderer |
 | 已完成 | 并行 | W-2 DPI（3 commit：Backend/render_page scale + 窗口流接线） | shell / renderer |
-| 下一轮 | 并行 | W-3 输入（鼠标/键盘事件 → 命中测试 / 滚动） | shell |
+| 已完成 | 并行 | W-3 输入（4 commit：InputEvent 抽象 + 快捷键层 + handle_event 页面层 + 文档；命中测试单列延后） | shell |
+| 下一轮 | 并行 | W-4 Headless 后端（headless_window.rs + render_to_png，无窗口 CI 渲染测试） | shell |
 | 穿插 | 主线 | M-3 一批（按需） | cascade / layout |
 
 **节奏**：每轮一个窗口化阶段收尾（含测试 + commit）→ 切回 M-3 一批 → 下一窗口化阶段。两轨无文件冲突（cascade/layout vs shell/renderer）。
@@ -66,6 +67,28 @@
 - [x] `cargo clippy --all-targets -- -D warnings` 零警告
 - [x] 单测：同组命令 scale=1→`w×h`、scale=2→`2w×2h`，关键像素与 scale=1 对应逻辑点一致（非插值）；`render_page` scale=2 输出分辨率与红块物理坐标正确
 - [x] `cargo run -p muskitty-shell --example render_file` 输出不变（scale=1）
+
+### 并行轨道：W-3 输入（✅ 已完成）
+
+**目标**：`input.rs` 输入事件抽象 + shell 快捷键层（Esc 关闭、Ctrl+R 刷新）+ 事件分发结构。页面级命中测试**不在本轮**（单列延后，见规划文档）。
+
+**Commit 序列**：
+
+- [x] C-1 `[shell]` input.rs：InputEvent/Key/Modifiers/MouseButton/ButtonState/TouchPhase/ShortcutAction + 纯函数 `match_shortcut`（12 条无窗口单测）
+- [x] C-2 `[shell]` `PlatformWindow::handle_event` 页面层入口（winit 后端 W-3 恒 false）
+- [x] C-3 `[shell]` App 事件接线：ModifiersChanged/CursorMoved 跟踪 + 键盘/鼠标/滚轮/触摸 → InputEvent 转换（逻辑 px）+ `dispatch_input` 分层 + `reload`（17 条单测，含 2 条快捷键集成）
+- [x] C-4 `[docs]` 规划文档 W-3 完成 + 架构修正记录；goal.md/PROGRESS.md 同步
+
+**架构修正**：快捷键层在 `App::dispatch_input`（Esc 需 `event_loop.exit()`、Ctrl+R 需渲染管线，均 App 独有）；`PlatformWindow::handle_event` 为页面/转发层。详见规划文档 §W-3。
+
+**退出条件（全部满足才可 commit）**：
+
+- [x] `cargo check --workspace` / `cargo test --workspace` 通过
+- [x] `cargo fmt --all -- --check` 通过
+- [x] `cargo clippy --all-targets -- -D warnings` 零警告
+- [x] `cargo check -p muskitty-shell --no-default-features` 无头仍可编译
+- [x] 单测：InputEvent 转换 + 快捷键匹配（Esc→Close、Ctrl+R→Reload、非快捷键→None），无需真实窗口
+- [x] 手工验证：`cargo run -p muskitty-shell` Esc 关窗、Ctrl+R 重渲染（人工执行）
 
 ### 主线：M-3 CSS 补全（穿插推进）
 
