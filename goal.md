@@ -1,13 +1,13 @@
 # Goal — 下一步任务清单（给 Codex / AI Agent 用）
 
 > **更新时间**：2026-08-29
-> **当前状态**：窗口化轨道 **W-3 输入已完成**（`input.rs` InputEvent/Key/Modifiers/MouseButton/TouchPhase shell 自有类型 + 纯函数 `match_shortcut`；winit 事件 → InputEvent 转换（逻辑 px）；`PlatformWindow::handle_event` 页面层入口；事件分层——shell 快捷键（Esc 关闭、Ctrl+R 刷新）在 `App::dispatch_input` 先于页面层处理；命中测试单列延后。input.rs 12 + app.rs 17 条无窗口单测）。本轮**双轨并行**：主线 M-3（CSS 补全收尾）+ 并行轨道窗口化（下一阶段 **W-4 Headless 后端**，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
+> **当前状态**：窗口化轨道 **W-3 输入已完成**（`input.rs` InputEvent/Key/Modifiers/MouseButton/TouchPhase shell 自有类型 + 纯函数 `match_shortcut`；winit 事件 → InputEvent 转换（逻辑 px）；`PlatformWindow::handle_event` 页面层入口；事件分层——shell 快捷键（Esc 关闭、Ctrl+R 刷新）在 `App::dispatch_input` 先于页面层处理；命中测试单列延后。input.rs 12 + app.rs 17 条无窗口单测）。主线 **M-3 batch 1 已完成**（`border:` 简写展开 → border-width/style/color；media 视口接线——`@media (min-width)` 等条件现按真实窗口逻辑视口求值）。本轮**双轨并行**：主线 M-3（batch 2，按需）+ 并行轨道窗口化（下一阶段 **W-4 Headless 后端**，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
 
 ---
 
 ## 当前阶段定位
 
-- **主线**：M-3 CSS 补全 — media query 求值（cascade filter 目前透传）、@layer 排序（audit B8）、revert/revert-layer（B7）、剩余 shorthand、background-image。按渲染真实页面的需求驱动裁剪范围。
+- **主线**：M-3 CSS 补全 — batch 1（border 简写 + media 视口接线）✅ 已完成；@layer 排序（audit B8）已完整实现无需再做；余项 revert/revert-layer 真语义（B7）、background-image、方向性 border、outline 按需求裁剪延后（原因见 PROGRESS.md item 15）。按渲染真实页面的需求驱动裁剪范围。
 - **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2 ✅）→ 输入（W-3 ✅）→ Headless（W-4）→ 多标签（W-5）。
 - **中期主线**：M-1 网络接轨 / M-2 交互基础排在 M-3 之后；inline formatting context 独立远期 Phase。
 
@@ -92,9 +92,13 @@
 
 ### 主线：M-3 CSS 补全（穿插推进）
 
-**范围**：media query 求值 / @layer 排序（B8）/ revert + revert-layer（B7）/ 剩余 shorthand / background-image。
+**Batch 1（✅ 已完成 2026-08-29）**：
+- `border:` 简写展开 → border-width/style/color（CSS Backgrounds & Borders L3 §4.4；顺序无关 `<width>||<style>||<color>`、每类至多一次、缺失类别取注册表初始值 medium/none/currentcolor；cascade `b87b820`，renderer paint e2e `de48621`）
+- media 视口接线：`compute_styles` 用 `StyleTreeOptions.viewport_width/height` 构造 `MediaContext`（cascade `fcde127`）；`render_page` 传逻辑布局视口（shell `f0c5619`）；默认 1920×1080 行为不变
 
-**细节**：待 M-3 任务拆解（按渲染真实页面需求裁剪范围后逐项列出）。
+**已核实无需做**：@layer 排序（audit B8）已完整实现（`layer_order` + LayerTracker + 5 元 cascade key）。
+
+**延后（原因）**：revert/revert-layer 真语义（B7，需低 origin/层回滚，零真实页面需求）；background-image（renderer 无 image 消费方：无 image 命令/解码，network 未接轨）；方向性 border（border-left 等）；outline。逐一见 PROGRESS.md item 15。
 
 ---
 
