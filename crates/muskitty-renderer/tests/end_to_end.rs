@@ -44,7 +44,7 @@ fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
 
     let mut backend = TinySkiaBackend::new();
     // P2-18：render 返回像素输出，测试消费返回值确认尺寸与数据长度。
-    let output = backend.render(&commands, vw as u32, vh as u32);
+    let output = backend.render(&commands, vw as u32, vh as u32, 1.0);
     match output {
         RenderOutput::Pixels {
             width,
@@ -232,7 +232,7 @@ fn end_to_end_text_produces_ink_pixels() {
     );
 
     let mut backend = TinySkiaBackend::new();
-    let data = match backend.render(&commands, 200, 100) {
+    let data = match backend.render(&commands, 200, 100, 1.0) {
         RenderOutput::Pixels { data, .. } => data,
         other => panic!("expected Pixels, got {:?}", other),
     };
@@ -341,7 +341,7 @@ fn render_text_case(
     });
 
     let mut backend = TinySkiaBackend::new();
-    let data = match backend.render(&commands, vw as u32, vh as u32) {
+    let data = match backend.render(&commands, vw as u32, vh as u32, 1.0) {
         RenderOutput::Pixels { data, .. } => data,
         other => panic!("expected Pixels, got {:?}", other),
     };

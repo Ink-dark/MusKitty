@@ -1275,9 +1275,7 @@ dependencies = [
  "muskitty-html5-parser",
  "muskitty-layout",
  "muskitty-selectors",
- "softbuffer",
  "tiny-skia 0.12.0",
- "winit",
 ]
 
 [[package]]
@@ -1286,6 +1284,22 @@ version = "0.2.0"
 dependencies = [
  "muskitty-css",
  "muskitty-dom",
+]
+
+[[package]]
+name = "muskitty-shell"
+version = "0.1.0"
+dependencies = [
+ "muskitty-cascade",
+ "muskitty-css",
+ "muskitty-cssom",
+ "muskitty-dom",
+ "muskitty-html5-parser",
+ "muskitty-layout",
+ "muskitty-renderer",
+ "softbuffer",
+ "tiny-skia 0.12.0",
+ "winit",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-08-22 | T-3 换行 + 字体属性完成并推送（含多行叠行渲染修复）；下一里程碑 M-3 CSS 补全
+> 最后更新: 2026-08-29 | W-2 DPI 完成并推送（renderer/shell 加 scale：layout 逻辑 CSS px、栅格化物理分辨率，整数 1x/2x）；下一里程碑 M-3 CSS 补全 + W-3 输入
 >
 > Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
 > Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
@@ -393,6 +393,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 10. ~~**文本渲染 + 布局增强 + 窗口化**~~ ✅ 已完成（2026-08-16）：文本渲染（layout 测量 `3d18bf4` + renderer glyph 渲染 `50bc822`）、position 定位（`d721a0b`）、overflow 裁剪（`d09bc78`）、grid 布局（cascade `2c27d7d` + layout `e690d4e`）、winit 窗口化（`07eb0b8`）。均已推送远端。
 11. ~~**T-3 换行 + 字体属性**~~ ✅ 已完成（2026-08-22）：taffy measure function 换行（layout `8f18108`）、font-family/font-weight 测量（layout `056ec23`）、renderer 换行/字重/对齐（renderer `8a28bc8`/`fc6f971`/`20606b8`）。补齐端到端用例时发现并修复多行叠行 bug（`draw_text` 漏加 `run.line_y`，glyph 行内局部坐标需加行顶偏移）。line-height 仍为 `font_size * 1.2` 近似，精确解析推迟。
 12. ~~**外部依赖解耦**~~ ✅ 已完成（2026-08-16）：layout（taffy/cosmic-text `bf52557`）、renderer（tiny-skia Pixmap `98af15d`）、network（reqwest Error `8cfbdfd`）公共 API 均不再暴露外部依赖类型，上层可抽离。
+13. ~~**W-2 DPI（HiDPI 缩放）**~~ ✅ 已完成（2026-08-29）：`Backend::render` / `render_page` / `render_html_file` 加 scale 参数——layout 用逻辑视口（CSS px），栅格化物理分辨率 `round(logical×scale)`（renderer `0192cae` / shell page `b0a645f`）；窗口流读 hidpi scale、脏检查含 scale、`ScaleFactorChanged` 重绘（shell `d53ca2f`）。整数 1x/2x 有 scale=1-vs-2 单测兜底（非插值）；`render_file` 示例 scale=1 输出不变。
 
 ## Phase 3 (Layout 层) — 已完成
 

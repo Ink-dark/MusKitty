@@ -71,15 +71,27 @@ impl TinySkiaBackend {
 }
 
 impl Backend for TinySkiaBackend {
-    fn render(&mut self, commands: &[RenderCommand], width: u32, height: u32) -> RenderOutput {
-        // Pixmap::new 返回 None 当 width/height 为 0 或超过 i32::MAX/4。
-        // 回退到 1x1 像素以避免 panic（这种情况下命令通常也无法绘制）。
-        let mut pixmap = Pixmap::new(width, height)
+    fn render(
+        &mut self,
+        commands: &[RenderCommand],
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> RenderOutput {
+        // scale 为 HiDPI 因子（物理像素 ÷ 逻辑像素，W-2）。非正/NaN 回退 1.0。
+        let scale = if scale > 0.0 { scale } else { 1.0 };
+
+        // 物理分辨率 = round(逻辑 × scale)。Pixmap::new 返回 None 当 width/height
+        // 为 0 或超过 i32::MAX/4 → 回退 1x1 像素以避免 panic（此时命令通常也无法绘制）。
+        let phys_w = ((width as f32) * scale).round() as u32;
+        let phys_h = ((height as f32) * scale).round() as u32;
+        let mut pixmap = Pixmap::new(phys_w, phys_h)
             .unwrap_or_else(|| Pixmap::new(1, 1).expect("1x1 pixmap always succeeds"));
 
         // P3-5: 画布默认填白（根元素背景传播的简化近似，见审计文档）。
         // 元素指令按序覆盖其上；未覆盖区域呈现白色而非透明。
-        if let Some(canvas) = Rect::from_xywh(0.0, 0.0, width as f32, height as f32) {
+        // 白底覆盖整张物理画布，用物理尺寸 + identity（设备空间），无需缩放。
+        if let Some(canvas) = Rect::from_xywh(0.0, 0.0, phys_w as f32, phys_h as f32) {
             let mut white = Paint::default();
             white.set_color_rgba8(255, 255, 255, 255);
             pixmap.fill_rect(canvas, &white, Transform::identity(), None);
@@ -91,9 +103,15 @@ impl Backend for TinySkiaBackend {
         let mut swash_cache: Option<SwashCache> = None;
 
         // 裁剪栈（L-2）：Clip/EndClip 维护，栈顶作为后续绘制的 clip_mask。
-        let canvas_w = width;
-        let canvas_h = height;
+        // clip mask 为物理尺寸（device 空间）；clip rect 为逻辑坐标，fill /
+        // intersect 时用 scale_xform 映射进 mask 空间，避免坐标空间错位。
+        let canvas_w = phys_w;
+        let canvas_h = phys_h;
         let mut clip_stack: Vec<Mask> = Vec::new();
+
+        // W-2：逻辑坐标 → 物理坐标的向量缩放（清晰非模糊放大）。所有 rect /
+        // border / clip path 均走此变换；文本用 scale∘translate（见 draw_text）。
+        let scale_xform = Transform::from_scale(scale, scale);
 
         for cmd in commands {
             let clip = clip_stack.last();
@@ -117,14 +135,14 @@ impl Backend for TinySkiaBackend {
                             let mut paint = Paint::default();
                             paint.set_color_rgba8(bg.r, bg.g, bg.b, bg.a);
                             paint.anti_alias = false;
-                            pixmap.fill_rect(rect, &paint, Transform::identity(), clip);
+                            pixmap.fill_rect(rect, &paint, scale_xform, clip);
                         }
                     }
 
                     // 绘制边框
                     if let Some(b) = border {
                         if b.width > 0.0 {
-                            draw_border(&mut pixmap, *x, *y, *width, *height, b, clip);
+                            draw_border(&mut pixmap, *x, *y, *width, *height, b, scale, clip);
                         }
                     }
                 }
@@ -154,6 +172,7 @@ impl Backend for TinySkiaBackend {
                         *font_weight,
                         *text_align,
                         *color,
+                        scale,
                         font_system.as_mut().expect("font_system just initialized"),
                         swash_cache.as_mut().expect("swash_cache just initialized"),
                         clip,
@@ -174,17 +193,12 @@ impl Backend for TinySkiaBackend {
                     let mask = match clip {
                         Some(top) => {
                             let mut m = top.clone();
-                            m.intersect_path(
-                                &path,
-                                FillRule::Winding,
-                                false,
-                                Transform::identity(),
-                            );
+                            m.intersect_path(&path, FillRule::Winding, false, scale_xform);
                             m
                         }
                         None => {
                             let mut m = Mask::new(canvas_w, canvas_h).expect("mask alloc");
-                            m.fill_path(&path, FillRule::Winding, false, Transform::identity());
+                            m.fill_path(&path, FillRule::Winding, false, scale_xform);
                             m
                         }
                     };
@@ -202,14 +216,15 @@ impl Backend for TinySkiaBackend {
         // 引用有效直到赋值前，故先取引用再 move。
         let p = self.pixmap.as_ref().expect("pixmap just set");
         RenderOutput::Pixels {
-            width,
-            height,
+            width: phys_w,
+            height: phys_h,
             data: p.data().to_vec(),
         }
     }
 }
 
 /// 绘制矩形边框（沿 border-box 内边缘描边）。
+#[allow(clippy::too_many_arguments)]
 fn draw_border(
     pixmap: &mut Pixmap,
     x: f32,
@@ -217,6 +232,7 @@ fn draw_border(
     width: f32,
     height: f32,
     border: &Border,
+    scale: f32,
     clip_mask: Option<&Mask>,
 ) {
     let half = border.width / 2.0;
@@ -245,15 +261,19 @@ fn draw_border(
     );
     paint.anti_alias = true;
 
+    // W-2：stroke 宽度保持逻辑 px（tiny-skia 在局部空间描边后再应用
+    // transform，见 painter.rs 的 `path.stroke` → `fill_path(transform)`），
+    // 缩放由 scale_xform 完成；此处只放大路径坐标。
     let stroke = Stroke {
         width: border.width,
         ..Default::default()
     };
+    let scale_xform = Transform::from_scale(scale, scale);
 
     // dashed / dotted 当前按 solid 渲染（推迟 dash 模式接入）
     match border.style {
         BorderStyle::Solid | BorderStyle::Dashed | BorderStyle::Dotted => {
-            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), clip_mask);
+            pixmap.stroke_path(&path, &paint, &stroke, scale_xform, clip_mask);
         }
         BorderStyle::None => {} // 已在外层过滤
     }
@@ -276,6 +296,7 @@ fn draw_text(
     font_weight: u16,
     text_align: TextAlign,
     color: Color,
+    scale: f32,
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
     clip_mask: Option<&Mask>,
@@ -294,7 +315,9 @@ fn draw_text(
     paint.anti_alias = true;
 
     // glyph 物理坐标相对 buffer 原点，经 Transform 平移到 Text 命令位置。
-    let transform = Transform::from_translate(x, y);
+    // W-2：scale∘translate = from_row(s,0,0,s,s*x,s*y)——先缩放 glyph 相对
+    // 偏移，再平移并缩放盒原点（逻辑 (x,y) → 物理 (s*x, s*y)）。
+    let transform = Transform::from_row(scale, 0.0, 0.0, scale, scale * x, scale * y);
 
     for run in buffer.layout_runs() {
         // 行水平偏移（text-align，T-3）。
@@ -313,17 +336,21 @@ fn draw_text(
             if let Some(commands) = swash_cache.get_outline_commands(font_system, cache_key) {
                 let mut pb = PathBuilder::new();
                 for cmd in commands {
+                    // swash outline 是 y-up（baseline 原点，见 cosmic-text
+                    // `with_pixels` 中 `y = -placement.top` 的取反），而画布
+                    // y 向下：outline 的 +y 应落在 baseline 上方，故取 `gy - p.y`。
+                    // 误加 `p.y` 会让每个字形垂直翻转（W-1 真窗口发现的 bug）。
                     match *cmd {
-                        Command::MoveTo(p) => pb.move_to(gx + p.x, gy + p.y),
-                        Command::LineTo(p) => pb.line_to(gx + p.x, gy + p.y),
-                        Command::QuadTo(c, p) => pb.quad_to(gx + c.x, gy + c.y, gx + p.x, gy + p.y),
+                        Command::MoveTo(p) => pb.move_to(gx + p.x, gy - p.y),
+                        Command::LineTo(p) => pb.line_to(gx + p.x, gy - p.y),
+                        Command::QuadTo(c, p) => pb.quad_to(gx + c.x, gy - c.y, gx + p.x, gy - p.y),
                         Command::CurveTo(c1, c2, p) => pb.cubic_to(
                             gx + c1.x,
-                            gy + c1.y,
+                            gy - c1.y,
                             gx + c2.x,
-                            gy + c2.y,
+                            gy - c2.y,
                             gx + p.x,
-                            gy + p.y,
+                            gy - p.y,
                         ),
                         Command::Close => pb.close(),
                     }
@@ -361,8 +388,9 @@ mod tests {
         cmds: &[RenderCommand],
         w: u32,
         h: u32,
+        scale: f32,
     ) -> (u32, u32, Vec<u8>) {
-        match backend.render(cmds, w, h) {
+        match backend.render(cmds, w, h, scale) {
             RenderOutput::Pixels {
                 width,
                 height,
@@ -379,6 +407,73 @@ mod tests {
     }
 
     #[test]
+    fn glyph_is_not_vertically_flipped() {
+        // 回归测试（W-1 真窗口发现"文字全部反翻"）：swash outline 是 y-up
+        // （baseline 原点），绘制须 `baseline_y - p.y`；若误加 `p.y` 则每个
+        // 字形垂直翻转。用大写 "T" 判别：横杠在 cap 顶部、竖干伸到 baseline。
+        // 正确渲染 → 顶部墨迹行平均宽度 > 底部；翻转后横杠落到底部 → 反之。
+        let mut backend = TinySkiaBackend::new();
+        let cmds = vec![RenderCommand::Text {
+            x: 10.0,
+            y: 20.0,
+            width: 200.0,
+            text: "T".to_string(),
+            font_size: 64.0,
+            font_family: "serif".to_string(),
+            font_weight: 400,
+            text_align: TextAlign::Left,
+            color: Color::rgb(0, 0, 0),
+        }];
+        // 画布足够高，让翻转后的字形（横杠落到 baseline 之下）完整可见。
+        let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 160, 1.0);
+
+        // 每行墨迹的像素数与水平范围。
+        let mut counts = vec![0usize; height as usize];
+        let mut min_x = vec![i32::MAX; height as usize];
+        let mut max_x = vec![i32::MIN; height as usize];
+        for py in 0..height {
+            for px in 0..width {
+                let (r, g, b, _) = pixel(&data, width, px, py);
+                if r < 200 || g < 200 || b < 200 {
+                    let i = py as usize;
+                    counts[i] += 1;
+                    min_x[i] = min_x[i].min(px as i32);
+                    max_x[i] = max_x[i].max(px as i32);
+                }
+            }
+        }
+
+        // 墨迹行的垂直范围。
+        let ink_rows: Vec<usize> = counts
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c > 0)
+            .map(|(i, _)| i)
+            .collect();
+        let top = *ink_rows.first().expect("glyph has ink");
+        let bottom = *ink_rows.last().expect("glyph has ink");
+        assert!(
+            bottom - top > 4,
+            "glyph should span several rows, got top={top} bottom={bottom}"
+        );
+
+        // 顶部四分之一 vs 底部四分之一墨迹行的平均宽度。
+        let avg_width = |rows: &[usize]| -> f32 {
+            rows.iter()
+                .map(|&i| (max_x[i] - min_x[i]) as f32)
+                .sum::<f32>()
+                / rows.len() as f32
+        };
+        let top_w = avg_width(&ink_rows[..ink_rows.len() / 4]);
+        let bottom_w = avg_width(&ink_rows[ink_rows.len() * 3 / 4..]);
+        assert!(
+            top_w > bottom_w,
+            "capital T's horizontal bar must sit at the TOP: top-quarter avg width {top_w:.1} \
+             > bottom-quarter {bottom_w:.1}; glyph is vertically flipped"
+        );
+    }
+
+    #[test]
     fn render_text_produces_ink() {
         let mut backend = TinySkiaBackend::new();
         let cmds = vec![RenderCommand::Text {
@@ -392,7 +487,7 @@ mod tests {
             text_align: TextAlign::Left,
             color: Color::rgb(0, 0, 0),
         }];
-        let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 50);
+        let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 50, 1.0);
 
         // 统计非白像素（文字墨迹）；白画布（P3-5）下文字应为黑色像素。
         let mut ink = 0usize;
@@ -420,7 +515,7 @@ mod tests {
             RenderCommand::rect(0.0, 0.0, 100.0, 100.0, Color::rgb(255, 0, 0)),
             RenderCommand::EndClip,
         ];
-        let (width, _, data) = render_pixels(&mut backend, &cmds, 100, 100);
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 100, 100, 1.0);
 
         // clip 内（10,10）应为红色。
         let (r, _, _, _) = pixel(&data, width, 10, 10);
@@ -444,7 +539,7 @@ mod tests {
             50.0,
             Color::rgb(255, 0, 0),
         )];
-        let (width, height, data) = render_pixels(&mut backend, &cmds, 100, 50);
+        let (width, height, data) = render_pixels(&mut backend, &cmds, 100, 50, 1.0);
         assert_eq!(width, 100);
         assert_eq!(height, 50);
 
@@ -460,7 +555,7 @@ mod tests {
     fn render_empty_commands_produces_white_canvas() {
         // P3-5：画布默认填白，空指令也产出白底而非透明。
         let mut backend = TinySkiaBackend::new();
-        let (width, _, data) = render_pixels(&mut backend, &[], 10, 10);
+        let (width, _, data) = render_pixels(&mut backend, &[], 10, 10, 1.0);
         let (r, g, b, a) = pixel(&data, width, 0, 0);
         assert_eq!(r, 255);
         assert_eq!(g, 255);
@@ -489,7 +584,7 @@ mod tests {
                 border: None,
             },
         ];
-        let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10);
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10, 1.0);
         // 零尺寸矩形不应绘制 → 画布保持白色（P3-5）
         let (r, _, _, a) = pixel(&data, width, 0, 0);
         assert_eq!(a, 255, "white canvas — zero-size rects skipped");
@@ -511,7 +606,7 @@ mod tests {
                 style: BorderStyle::Solid,
             }),
         }];
-        let (width, _, data) = render_pixels(&mut backend, &cmds, 100, 100);
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 100, 100, 1.0);
 
         // 边框外（左上角）应为白底画布（P3-5）
         let (r, _, _, a) = pixel(&data, width, 0, 0);
@@ -535,7 +630,7 @@ mod tests {
             10.0,
             Color::rgb(0, 255, 0),
         )];
-        backend.render(&cmds, 10, 10);
+        backend.render(&cmds, 10, 10, 1.0);
         let png = backend.encode_png().expect("encode should succeed");
         // PNG magic header
         assert!(png.len() > 8);
@@ -561,7 +656,7 @@ mod tests {
             4.0,
             Color::rgb(255, 0, 0),
         )];
-        backend.render(&cmds, 4, 4);
+        backend.render(&cmds, 4, 4, 1.0);
 
         let tmp = std::env::temp_dir().join("muskitty_tiny_skia_test.png");
         backend.save_png(&tmp).expect("save should succeed");
@@ -579,7 +674,7 @@ mod tests {
             10.0,
             Color::rgba(255, 0, 0, 128),
         )];
-        let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10);
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10, 1.0);
         let (r, g, _, a) = pixel(&data, width, 5, 5);
         // P3-5 白画布下，半透明红 source-over 混合到白底 →
         // (≈255, 127, 127) 粉色，alpha 变为不透明。
@@ -590,5 +685,83 @@ mod tests {
             "green ~127 from white canvas, got {}",
             g
         );
+    }
+
+    #[test]
+    fn render_scale_doubles_resolution_and_scales_rects() {
+        // W-2 退出条件：同组命令 scale=1 → w×h，scale=2 → 2w×2h；scale=2 的
+        // 关键逻辑点颜色与 scale=1 对应物理点一致（向量缩放，非简单插值）。
+        let cmds = vec![
+            RenderCommand::rect(10.0, 10.0, 20.0, 20.0, Color::rgb(255, 0, 0)),
+            RenderCommand::rect(60.0, 20.0, 10.0, 10.0, Color::rgb(0, 0, 255)),
+        ];
+
+        let mut backend = TinySkiaBackend::new();
+        let (w1, h1, d1) = render_pixels(&mut backend, &cmds, 100, 50, 1.0);
+        assert_eq!((w1, h1), (100, 50));
+
+        let mut backend2 = TinySkiaBackend::new();
+        let (w2, h2, d2) = render_pixels(&mut backend2, &cmds, 100, 50, 2.0);
+        assert_eq!((w2, h2), (200, 100));
+
+        // 逻辑点 (15,15) 红、(65,25) 蓝、(0,0) 白：scale=1 直接读，scale=2 读物理 (2p)。
+        assert_eq!(pixel(&d1, w1, 15, 15), (255, 0, 0, 255));
+        assert_eq!(pixel(&d2, w2, 30, 30), (255, 0, 0, 255));
+        assert_eq!(pixel(&d1, w1, 65, 25), (0, 0, 255, 255));
+        assert_eq!(pixel(&d2, w2, 130, 50), (0, 0, 255, 255));
+        assert_eq!(pixel(&d1, w1, 0, 0), (255, 255, 255, 255));
+        assert_eq!(pixel(&d2, w2, 0, 0), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn render_scale_scales_border_stroke() {
+        // 边框 stroke 在局部空间描边后随 transform 缩放（painter.rs 先
+        // `path.stroke` 再 `fill_path(transform)`）：scale=2 时逻辑 2px 边框
+        // → 物理 4px（比 scale=1 的 2px 宽一倍）。
+        let border = Border {
+            width: 2.0,
+            color: Color::rgb(0, 0, 255),
+            style: BorderStyle::Solid,
+        };
+        let cmds = vec![RenderCommand::Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 80.0,
+            height: 60.0,
+            background: None,
+            border: Some(border),
+        }];
+
+        let mut backend = TinySkiaBackend::new();
+        let (w2, _, d2) = render_pixels(&mut backend, &cmds, 100, 100, 2.0);
+        assert_eq!(w2, 200);
+
+        // 内缩路径物理 y = (10+1)*2 = 22，stroke 半宽 2px → 覆盖 y ∈ [20,24]。
+        assert_eq!(
+            pixel(&d2, w2, 100, 21),
+            (0, 0, 255, 255),
+            "border top edge at 2x"
+        );
+        assert_eq!(
+            pixel(&d2, w2, 100, 30),
+            (255, 255, 255, 255),
+            "interior without background stays white canvas"
+        );
+    }
+
+    #[test]
+    fn render_scale_nonpositive_falls_back_to_1() {
+        // scale ≤ 0（含 NaN）回退 1.0：不 panic、输出与 1x 一致。
+        let cmds = vec![RenderCommand::rect(
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            Color::rgb(255, 0, 0),
+        )];
+        let mut backend = TinySkiaBackend::new();
+        let (w, h, data) = render_pixels(&mut backend, &cmds, 100, 50, 0.0);
+        assert_eq!((w, h), (100, 50));
+        assert_eq!(pixel(&data, w, 5, 5), (255, 0, 0, 255));
     }
 }

@@ -6,6 +6,7 @@
 members = [
     "crates/muskitty-renderer",
     "crates/muskitty-network",
+    "crates/muskitty-shell",
 ]
 # 以下 crate 都作为独立 git 仓库剥离，各自有自己的 [workspace] 根。
 # exclude 防止父 workspace 误吸入并报 "multiple workspace roots" 错误。
