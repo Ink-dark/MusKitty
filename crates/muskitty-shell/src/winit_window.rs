@@ -69,7 +69,7 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn hidpi_scale_factor(&self) -> f32 {
-        // winit 返回 f64，取整为 f32（W-2 起真正参与渲染缩放）。
+        // winit 返回 f64，取整为 f32（W-2 起参与渲染缩放与逻辑换算）。
         self.window.scale_factor() as f32
     }
 
@@ -78,9 +78,17 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn geometry(&self) -> WindowGeometry {
+        // W-2：winit 的 inner_size / outer_position 返回物理像素；WindowGeometry
+        // 语义为逻辑 px，用窗口 scale_factor（f64 保精度）换算。布局按逻辑尺寸，
+        // 栅格化再乘 scale（见 app.rs 的 render_at）。
+        let scale = self.window.scale_factor();
         // outer_position 在部分平台（如 Wayland）返回 Err，回退到默认。
-        let pos = self.window.outer_position().unwrap_or_default();
-        let size = self.window.inner_size();
+        let pos = self
+            .window
+            .outer_position()
+            .unwrap_or_default()
+            .to_logical::<i32>(scale);
+        let size = self.window.inner_size().to_logical::<u32>(scale);
         WindowGeometry::new(pos.x, pos.y, size.width.max(1), size.height.max(1))
     }
 

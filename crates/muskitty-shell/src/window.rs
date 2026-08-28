@@ -78,8 +78,8 @@ pub trait PlatformWindow {
 
     /// HiDPI 缩放因子（物理像素 ÷ 逻辑像素）。
     ///
-    /// W-1 阶段各后端可返回 1.0；W-2（DPI 支持）起 winit 后端返回
-    /// 窗口实际值。
+    /// W-2 起 winit 后端返回窗口实际值（物理↔逻辑换算与渲染缩放统一用它）；
+    /// Headless 后端返回 1.0（逻辑 = 物理）。
     fn hidpi_scale_factor(&self) -> f32;
 
     /// 请求一次重绘（异步，事件循环下一帧处理）。
