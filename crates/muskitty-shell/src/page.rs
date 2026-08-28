@@ -33,7 +33,12 @@ pub fn render_page(html: &str, css: &str, width: u32, height: u32, scale: f32) -
         s.origin = Origin::Author;
         s
     };
-    let styles = compute_styles(&dom, &[sheet], &StyleTreeOptions::default());
+    // media 视口 = 布局视口（逻辑 CSS px）；与 layout 用同一 width/height。
+    let opts = StyleTreeOptions {
+        viewport_width: width as f64,
+        viewport_height: height as f64,
+    };
+    let styles = compute_styles(&dom, &[sheet], &opts);
     let mut tree = build_layout_tree(&dom, &styles);
     // 布局用逻辑尺寸（CSS px）；scale 只影响栅格化，不改变布局。
     let layout = compute_layout(&mut tree, width as f32, height as f32).expect("layout failed");
