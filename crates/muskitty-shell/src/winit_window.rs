@@ -17,6 +17,7 @@ use std::rc::Rc;
 use softbuffer::{Context, Surface};
 use winit::window::{CursorIcon, Fullscreen, Window};
 
+use crate::input::InputEvent;
 use crate::window::{Cursor, PlatformWindow, WindowGeometry};
 
 /// RGBA8 → softbuffer 0RGB u32（row-major）。
@@ -129,6 +130,12 @@ impl PlatformWindow for WinitWindow {
         let mut buffer = self.surface.buffer_mut().expect("surface buffer");
         buffer.copy_from_slice(&pixels);
         buffer.present().expect("present frame");
+    }
+
+    fn handle_event(&mut self, _event: InputEvent) -> bool {
+        // W-3 无页面级命中测试：窗口后端不消费输入，返回 false 让上层
+        // 继续分发（shell 快捷键已在 App::dispatch_input 先行处理）。
+        false
     }
 }
 

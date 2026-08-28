@@ -11,6 +11,8 @@
 //! 但裁剪掉 Muskitty 软件渲染不需要的部分（GPU RenderingContext /
 //! 对话框 / IME / 无障碍）。
 
+use crate::input::InputEvent;
+
 /// 鼠标光标形状。
 ///
 /// 与 winit `CursorIcon` 的子集对应，按需扩展。仅在 `winit-backend`
@@ -71,7 +73,9 @@ impl WindowGeometry {
 ///   [`request_repaint`](Self::request_repaint)）取 `&self`（各后端内部可用
 ///   内部可变性）；
 /// - [`present`](Self::present) 提交一帧像素，需独占借用（softbuffer
-///   表面需 `&mut` 取 buffer）。
+///   表面需 `&mut` 取 buffer）；
+/// - [`handle_event`](Self::handle_event) 接收输入事件（页面层入口），
+///   需独占借用（事件分发可能变更窗口/页面状态）。
 pub trait PlatformWindow {
     /// 窗口唯一标识。
     fn id(&self) -> u64;
@@ -102,4 +106,14 @@ pub trait PlatformWindow {
     /// `width * height * 4`）。各实现负责转成自身显示格式（如 softbuffer
     /// 的 0RGB u32）并提交。
     fn present(&mut self, data: &[u8], width: u32, height: u32);
+
+    /// 页面层输入入口：把已转成 [`InputEvent`] 的事件交给窗口/页面处理。
+    ///
+    /// 返回 `true` 表示页面消费了该事件（不应继续转发）；`false` 表示未消费。
+    /// W-3 无页面级命中测试，所有后端恒返回 `false`，仅建立事件分发结构——
+    /// 后续命中测试阶段（事件 → 具体元素）在本方法内实现。
+    /// shell 快捷键（Esc 关闭 / Ctrl+R 刷新）**不经过本方法**：在
+    /// `crate::app::App::dispatch_input` 中先于本方法处理（对齐
+    /// `docs/plans/2026-08-23-windowing.md` §W-3 事件分层）。
+    fn handle_event(&mut self, event: InputEvent) -> bool;
 }
