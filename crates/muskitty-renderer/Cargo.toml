@@ -23,8 +23,11 @@ muskitty-cascade = { path = "../muskitty-cascade", version = "0.1.0" }
 muskitty-layout = { path = "../muskitty-layout", version = "0.1.0" }
 muskitty-css = { path = "../muskitty-css", version = "0.6.0" }
 tiny-skia = { version = "0.12", optional = true }
+cosmic-text = "0.13"
 
 [dev-dependencies]
 muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.2.0" }
 muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
 muskitty-selectors = { path = "../muskitty-selectors", version = "0.2.0", features = ["dom"] }
+winit = "0.30"
+softbuffer = "0.4"

@@ -24,6 +24,7 @@ const HTML: &str = r#"
       <div style="background-color: #ffeb3b; width: 200px; height: 200px; border-width: 2px; border-style: solid; border-color: #f57f17"></div>
       <div style="background-color: #f44336; width: 200px; height: 150px; border-width: 2px; border-style: solid; border-color: #b71c1c"></div>
     </div>
+    <p style="font-size: 32px; color: #212121">Hello MusKitty</p>
   </body>
 </html>
 "#;

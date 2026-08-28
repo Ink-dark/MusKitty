@@ -42,6 +42,6 @@ pub mod render_tree;
 pub use backend::tiny_skia::TinySkiaBackend;
 pub use backend::{mock::MockBackend, Backend, RenderOutput};
 pub use color::Color;
-pub use command::{Border, BorderStyle, RenderCommand};
+pub use command::{Border, BorderStyle, RenderCommand, TextAlign};
 pub use paint::{paint, PaintInput};
 pub use render_tree::{extract_background_color, extract_border};

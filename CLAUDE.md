@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 从零用 Rust 重写浏览器核心模块。独立实现，不 fork Chromium。Chromium 源码仅作参考，WHATWG 规范和 WPT 测试套件是行为 ground truth。
 
-当前阶段：Phase 4（Renderer）B-3 / B-4 已完成，DOM→CSS→Layout→Render 全链路打通，最小可运行 demo 工作（HTML+CSS → PNG）。HTML 解析层（tokenizer + tree construction + DOM）、CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配 + CSS Values + CSSOM + Cascade + Layout + tiny-skia Renderer 均已完成。Phase 5（Network）已启动基础搭建：`muskitty-network` crate（`NetworkFetcher` trait 抽象 + reqwest 后端，远期自研 HTTP 栈路线见 [docs/plans/2026-08-09-phase5-network.md](docs/plans/2026-08-09-phase5-network.md)），暂不与现有链路接轨。全项目审计（[docs/audit-2026-08-08-full-scan.md](docs/audit-2026-08-08-full-scan.md)）B1-B14 已全部完成、P0/P1/P2 清零；当前焦点：审计遗留收尾（P2-1 绝对长度单位换算、P3-2 calc() 求值、PERF-10）+ cascade shorthand→longhand 展开。
+当前阶段：Phase 4（Renderer）B-3 / B-4 已完成，DOM→CSS→Layout→Render 全链路打通，最小可运行 demo 工作（HTML+CSS → PNG）。HTML 解析层（tokenizer + tree construction + DOM）、CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配 + CSS Values + CSSOM + Cascade + Layout + tiny-skia Renderer 均已完成。Phase 5（Network）已启动基础搭建：`muskitty-network` crate（`NetworkFetcher` trait 抽象 + reqwest 后端，远期自研 HTTP 栈路线见 [docs/plans/2026-08-09-phase5-network.md](docs/plans/2026-08-09-phase5-network.md)），暂不与现有链路接轨。全项目审计（[docs/audit-2026-08-08-full-scan.md](docs/audit-2026-08-08-full-scan.md)）B1-B14 已全部完成、P0/P1/P2 清零，审计遗留收尾（P2-1 绝对长度单位、P3-2 calc() 求值、PERF-10、shorthand→longhand 展开）也已全部完成。当前焦点：文本渲染（cosmic-text 集成）→ 布局增强（position/overflow/grid）→ 窗口化（winit + softbuffer 真窗口）→ 外部依赖解耦（layout/renderer/network，见 [docs/decisions/2026-08-16-external-dependency-decoupling.md](docs/decisions/2026-08-16-external-dependency-decoupling.md)）均已完成；T-3 换行待后续；Network 暂缓（保持 trait + reqwest 基础不动）。
 
 本主仓库 (`Ink-dark/MusKitty`) 作 workspace 协调中心：`members = ["crates/muskitty-renderer", "crates/muskitty-network"]`，11 个已剥离 crate 列在 `exclude` 中并各自独立 git 仓库于 `muskitty-dev/` org 下，新设备 clone 主仓库后通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
 
@@ -57,6 +57,7 @@ MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，worksp
     ├── spec/                           # 规范源文件（CSS Syntax Overview.bs 等）
     ├── plans/                          # 当前阶段计划文档
     ├── audit-2026-08-08-full-scan.md   # 全项目代码审查报告
+    ├── decisions/                      # 架构决策记录（ADR）
     └── archive/                        # 历史设计文档 / 审查报告
 ```
 
@@ -79,6 +80,7 @@ muskitty-html5-tokenizer ─→ muskitty-html5-parser        │                
 - 每个模块独立 crate，测试覆盖率 ≥ 80%
 - 公共 API 必须有 doc comment，引用规范条款
 - 参考优先级：**WHATWG > WPT > Chromium 源码**
+- 外部依赖解耦：本体 crate 公共 API 只暴露自身抽象类型，外部依赖（taffy/tiny-skia/cosmic-text/reqwest 等）类型不得出现在 pub 导出（见 [docs/decisions/2026-08-16-external-dependency-decoupling.md](docs/decisions/2026-08-16-external-dependency-decoupling.md)）
 
 ### Behavior
 1. **Read before write** — 动手前读规范对应章节 + Chromium 参考实现。不确定就问，不猜

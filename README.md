@@ -20,8 +20,8 @@ is the workspace coordinator and project-level documentation hub.
 | `muskitty-selectors` | Selectors Level 4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | v0.1.0 | [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors) |
 | `muskitty-css-values` | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | v0.1.0 | [muskitty-dev/muskitty-css-values](https://github.com/muskitty-dev/muskitty-css-values) |
 | `muskitty-cssom` | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | v0.1.0 | [muskitty-dev/muskitty-cssom](https://github.com/muskitty-dev/muskitty-cssom) |
-| `muskitty-cascade` | CSS Cascade L5 §4.1–§4.4/§5/§6.1/§7 | local v0.1.0 | in-tree (📦) |
-| `muskitty-layout` | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 | local v0.1.0 | in-tree (📦) |
+| `muskitty-cascade` | CSS Cascade L5 §4.1–§4.4/§5/§6.1/§7 | local v0.1.0 | [muskitty-dev/muskitty-cascade](https://github.com/muskitty-dev/muskitty-cascade) |
+| `muskitty-layout` | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 | local v0.1.0 | [muskitty-dev/muskitty-layout](https://github.com/muskitty-dev/muskitty-layout) |
 
 Test status (latest CI): each independent repo runs 6 jobs (Check / Unit
 Tests / Integration Tests / Format / Clippy / MSRV 1.82). See PROGRESS.md for
@@ -35,25 +35,30 @@ the per-crate test matrix.
 - Networking stack (deferred to a later layer)
 
 The project has completed Phase 2 (CSS parsing layer: tokenizer, parser,
-selectors, values, CSSOM, and cascade) and Phase 3 (Layout: taffy 0.12
-integration with CSS Cascade + DOM). Phase 4 (Renderer) is the next
-target — bringing the browser to life with HTML+CSS → layout → render to
-a window or image. Layer 5 (Network) is future work — see
+selectors, values, CSSOM, and cascade), Phase 3 (Layout: taffy 0.12
+integration with CSS Cascade + DOM), and Phase 4 (Renderer: DOM → CSS →
+Layout → Render to PNG/window, including text rendering via cosmic-text).
+Recent work added position/overflow/grid layout support and decoupled
+external dependencies (taffy / tiny-skia / cosmic-text / reqwest) from the
+public APIs of their crates. Layer 5 (Network) has a `NetworkFetcher` trait
+abstraction + reqwest backend as a foundation — see
 [PROGRESS.md](PROGRESS.md) for the layer roadmap.
 
 ## Repository layout
 
 ```
 MusKitty/                              # this repo — workspace coordinator
-├── Cargo.toml                         # members = [cascade, layout], exclude = [9 extracted crates]
+├── Cargo.toml                         # members = [renderer, network], exclude = [11 extracted crates]
 ├── PROGRESS.md                        # project-wide progress dashboard
-├── CLAUDE.md                          # engineering rules / hard constraints
+├── CLAUDE.md / AGENTS.md              # engineering rules / hard constraints
 ├── README.md                          # this file
 ├── fetch-crates.ps1                   # Windows: pull standalone crates
 ├── fetch-crates.sh                    # macOS/Linux: pull standalone crates
 ├── crates/
-│   ├── muskitty-cascade/              # 📦 workspace member (in-tree, tracked)
-│   ├── muskitty-layout/               # 📦 workspace member (in-tree, tracked)
+│   ├── muskitty-renderer/             # 📦 workspace member (tiny-skia backend)
+│   ├── muskitty-network/              # 📦 workspace member (NetworkFetcher trait + reqwest)
+│   ├── muskitty-cascade/              # 🔗 extracted → muskitty-dev/muskitty-cascade
+│   ├── muskitty-layout/               # 🔗 extracted → muskitty-dev/muskitty-layout
 │   ├── muskitty-css/                  # 🔗 extracted → muskitty-dev/muskitty-css
 │   ├── muskitty-css-parser/           # 🔗 extracted → muskitty-dev/muskitty-css-parser
 │   ├── muskitty-css-tokenizer/        # 🔗 extracted → muskitty-dev/muskitty-css-tokenizer
@@ -66,6 +71,7 @@ MusKitty/                              # this repo — workspace coordinator
 ├── docs/
 │   ├── spec/                          # source specs
 │   ├── plans/                         # current phase plan documents
+│   ├── decisions/                     # architecture decision records (ADR)
 │   └── archive/                       # historical design docs / review reports
 └── .trae/archive/                     # archived phase plans
 ```
@@ -73,7 +79,7 @@ MusKitty/                              # this repo — workspace coordinator
 📦 = workspace member, tracked in this repo.
 🔗 = extracted as independent repo (gitignored here); use `fetch-crates.ps1` to pull.
 
-The 2 workspace members (`muskitty-cascade`, `muskitty-layout`) depend on the
+The 2 workspace members (`muskitty-renderer`, `muskitty-network`) depend on the
 extracted crates via `path = "..."`. The extracted crates are listed in
 `Cargo.toml → exclude` (not `members`) and are each their own `[workspace]` root.
 
@@ -95,7 +101,7 @@ MSRV: Rust 1.82+ across all crates.
 
 ## Building locally
 
-The workspace members (`muskitty-cascade`, `muskitty-layout`) depend on crates
+The workspace members (`muskitty-renderer`, `muskitty-network`) depend on crates
 that are **not** tracked in this repo because each has been extracted to its
 own repository under [`muskitty-dev`](https://github.com/muskitty-dev). A fresh
 clone will be missing those directories — run the fetch script first.
@@ -106,7 +112,7 @@ clone will be missing those directories — run the fetch script first.
 git clone https://github.com/Ink-dark/MusKitty.git
 cd MusKitty
 
-# Pull all 9 standalone dependency crates into crates/
+# Pull all 11 standalone dependency crates into crates/
 pwsh ./fetch-crates.ps1 clone    # Windows
 # or
 ./fetch-crates.sh clone           # macOS / Linux

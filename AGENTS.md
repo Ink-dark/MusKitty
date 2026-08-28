@@ -6,13 +6,13 @@ This file provides guidance to AI coding agents (Codex CLI / Claude Code / etc.)
 
 从零用 Rust 重写浏览器核心模块。独立实现，不 fork Chromium。Chromium 源码仅作参考，WHATWG 规范和 WPT 测试套件是行为 ground truth。
 
-当前阶段：Phase 4（Renderer）B-3 / B-4 已完成，DOM→CSS→Layout→Render 全链路打通，最小可运行 demo 工作（HTML+CSS → PNG）。HTML 解析层（tokenizer + tree construction + DOM）、CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配 + CSS Values + CSSOM + Cascade + Layout + tiny-skia Renderer 均已完成。当前焦点：清掉全工作区安全审计发现的 P0/P1/P2 漏洞（见 [goal.md](goal.md) 与 [docs/security-audit-2026-08-02.md](docs/security-audit-2026-08-02.md)）。剥离任务暂停（用户决策：硬性剥离没好处后续还是会炸，干脆按工作区需求来一次性在工作区里面 fetch crates 跑的也方便）。Layer 5 (Network) 是远期工作。
+当前阶段：Phase 4（Renderer）B-3 / B-4 已完成，DOM→CSS→Layout→Render 全链路打通，最小可运行 demo 工作（HTML+CSS → PNG）。HTML 解析层（tokenizer + tree construction + DOM）、CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配 + CSS Values + CSSOM + Cascade + Layout + tiny-skia Renderer 均已完成。Phase 5（Network）已启动基础搭建（`NetworkFetcher` trait 抽象 + reqwest 后端，远期自研 HTTP 栈，见 [docs/plans/2026-08-09-phase5-network.md](docs/plans/2026-08-09-phase5-network.md)），暂不与现有链路接轨。全项目审计（[docs/audit-2026-08-08-full-scan.md](docs/audit-2026-08-08-full-scan.md)）B1-B14 已全部完成、P0/P1/P2 清零。当前焦点：文本渲染（cosmic-text 集成）→ 布局增强（position/overflow/grid）→ 窗口化（winit + softbuffer 真窗口）→ 外部依赖解耦（layout/renderer/network，见 [docs/decisions/2026-08-16-external-dependency-decoupling.md](docs/decisions/2026-08-16-external-dependency-decoupling.md)）均已完成；T-3 换行待后续；Network 暂缓（保持 trait + reqwest 基础不动）。
 
-本主仓库 (`Ink-dark/MusKitty`) 作 workspace 协调中心：`members = ["crates/muskitty-renderer", "crates/muskitty-cascade", "crates/muskitty-cssom"]`，9 个已剥离 crate 列在 `exclude` 中并各自独立 git 仓库于 `muskitty-dev/` org 下，新设备 clone 主仓库后通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
+本主仓库 (`Ink-dark/MusKitty`) 作 workspace 协调中心：`members = ["crates/muskitty-renderer", "crates/muskitty-cascade", "crates/muskitty-cssom"]`，11 个已剥离 crate 列在 `exclude` 中并各自独立 git 仓库于 `muskitty-dev/` org 下，新设备 clone 主仓库后通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
 
 ## Build & Test Commands
 
-主仓库 `members = ["crates/muskitty-renderer", "crates/muskitty-cascade", "crates/muskitty-cssom"]`，可直接 `cargo check --workspace` 一次性检查所有 in-tree crate。其他 9 个独立 crate 在各自目录里构建。
+主仓库 `members = ["crates/muskitty-renderer", "crates/muskitty-cascade", "crates/muskitty-cssom"]`，可直接 `cargo check --workspace` 一次性检查所有 in-tree crate。其他 11 个独立 crate 在各自目录里构建。
 
 ```bash
 # 在工作区根（主仓库）一次性检查/测试所有 in-tree crate
@@ -32,7 +32,7 @@ cargo clippy --all-targets -- -D warnings
 # 跨 crate 联合构建（开发时本地 workspace 仍可解析 path 依赖）
 cd D:\Muskitty\crates\muskitty-selectors && cargo test
 
-# 新设备初始化（拉取 9 个独立 crate）
+# 新设备初始化（拉取 11 个独立 crate）
 pwsh ./fetch-crates.ps1          # Windows
 bash ./fetch-crates.sh           # Linux/macOS
 ```
@@ -43,16 +43,17 @@ bash ./fetch-crates.sh           # Linux/macOS
 
 ```
 MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，workspace 协调中心
-├── Cargo.toml                          # members = [renderer, cascade, cssom], exclude = [9 个已剥离 crate]
+├── Cargo.toml                          # members = [renderer, network], exclude = [11 个已剥离 crate]
 ├── PROGRESS.md                         # 项目进度面板
 ├── CLAUDE.md / AGENTS.md               # 硬约束指南（本文件）
 ├── goal.md                             # 当轮任务清单与退出条件
 ├── README.md                           # 项目 README
-├── fetch-crates.ps1 / .sh              # 一次性拉取 9 个独立 crate 的脚本
+├── fetch-crates.ps1 / .sh              # 一次性拉取 11 个独立 crate 的脚本
 ├── crates/                             # workspace member + 独立 git 仓库
 │   ├── muskitty-renderer/              # 📦 workspace member (tiny-skia backend, 未剥离)
-│   ├── muskitty-cascade/               # 📦 workspace member (CSS Cascade L5, 未剥离)
-│   ├── muskitty-cssom/                 # 📦 workspace member (CSSOM, 未剥离)
+│   ├── muskitty-network/               # 📦 workspace member (NetworkFetcher trait + reqwest 后端, 远期自研 HTTP 栈)
+│   ├── muskitty-cascade/               # 🔗 已剥离 (CSS Cascade L5)
+│   ├── muskitty-cssom/                 # 🔗 已剥离 (CSSOM)
 │   ├── muskitty-layout/                # 🔗 已剥离 (taffy 0.12 layout)
 │   ├── muskitty-dom/                   # 🔗 已剥离 (DOM Core)
 │   ├── muskitty-html5-tokenizer/        # 🔗 已剥离 (WHATWG §13.2.5 tokenizer)
@@ -62,12 +63,11 @@ MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，worksp
 │   ├── muskitty-css/                   # 🔗 已剥离 (Facade: tokenizer + parser)
 │   ├── muskitty-selectors/             # 🔗 已剥离 (Selectors Level 4)
 │   ├── muskitty-css-values/            # 🔗 已剥离 (CSS Values L4)
-│   # 未来 crate 预留:
-│   # muskitty-network/                 # Layer 5
 └── docs/
     ├── spec/                           # 规范源文件（CSS Syntax Overview.bs 等）
     ├── plans/                          # 当前阶段计划文档
-    ├── security-audit-2026-08-02.md    # 全工作区安全审计报告
+    ├── audit-2026-08-08-full-scan.md   # 全项目代码审查报告
+    ├── decisions/                      # 架构决策记录（ADR）
     └── archive/                        # 历史设计文档 / 审查报告
 ```
 
@@ -77,7 +77,7 @@ MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，worksp
 muskitty-dom ────────────────────────────────────────────┐
                                                          ├─→ muskitty-selectors ──┐
 muskitty-css-tokenizer ─→ muskitty-css-parser ─→ muskitty-css ──────────────────────┤
-                                                         ├─→ muskitty-css-values  ├─→ muskitty-cascade (in-tree) ─→ muskitty-layout (已剥离)
+                                                         ├─→ muskitty-css-values  ├─→ muskitty-cascade (已剥离) ─→ muskitty-layout (已剥离)
 muskitty-html5-tokenizer ─→ muskitty-html5-parser        │                         │
                                                          └─→ muskitty-cssom ──────┘                         └─→ muskitty-renderer (in-tree)
 ```
@@ -90,6 +90,7 @@ muskitty-html5-tokenizer ─→ muskitty-html5-parser        │                
 - 每个模块独立 crate，测试覆盖率 ≥ 80%
 - 公共 API 必须有 doc comment，引用规范条款
 - 参考优先级：**WHATWG > WPT > Chromium 源码**
+- 外部依赖解耦：本体 crate 公共 API 只暴露自身抽象类型，外部依赖（taffy/tiny-skia/cosmic-text/reqwest 等）类型不得出现在 pub 导出（见 [docs/decisions/2026-08-16-external-dependency-decoupling.md](docs/decisions/2026-08-16-external-dependency-decoupling.md)）
 
 ### Behavior
 1. **Read before write** — 动手前读规范对应章节 + Chromium 参考实现。不确定就问，不猜
@@ -114,7 +115,7 @@ muskitty-html5-tokenizer ─→ muskitty-html5-parser        │                
 - 新仓库加 `LICENSE` (Apache-2.0) + `README.md` + `.github/workflows/ci.yml` + `.github/workflows/publish.yml` + `scripts/setup-deps.sh`
 - `CARGO_REGISTRY_TOKEN` GitHub secret 通过 `gh secret set CARGO_REGISTRY_TOKEN --repo muskitty-dev/<crate>` 配置
 - 发布顺序遵循依赖拓扑（先底层后上层）
-- **当前状态**：剥离任务暂停。未剥离 crate（cascade / cssom / renderer）作为主仓库 workspace member 直接版本控制。新设备通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取 9 个已剥离 crate。
+- **当前状态**：剥离任务暂停。未剥离 crate（cascade / cssom / renderer）作为主仓库 workspace member 直接版本控制。新设备通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取 11 个已剥离 crate。
 
 ### Verification Flow
 1. 你写完 → `cargo check` 零 warning
