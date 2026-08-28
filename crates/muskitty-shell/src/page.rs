@@ -42,7 +42,8 @@ pub fn render_page(html: &str, css: &str, width: u32, height: u32) -> RenderOutp
     };
     let commands = paint(&input);
     let mut backend = TinySkiaBackend::new();
-    backend.render(&commands, width, height)
+    // W-2：C-1 后 render 带 scale 参数；headless 暂固定 1x，C-2 引入 scale 贯穿。
+    backend.render(&commands, width, height, 1.0)
 }
 
 /// 渲染自包含 HTML 文件（含 `<style>`）到 RGBA 像素。

@@ -8,10 +8,12 @@ use crate::command::RenderCommand;
 /// 记录所有传入的绘制指令与画布尺寸。
 #[derive(Debug, Default)]
 pub struct MockBackend {
-    /// 最后一次 render 调用的画布宽度。
+    /// 最后一次 render 调用的逻辑画布宽度。
     pub width: u32,
-    /// 最后一次 render 调用的画布高度。
+    /// 最后一次 render 调用的逻辑画布高度。
     pub height: u32,
+    /// 最后一次 render 调用的缩放因子（W-2）。
+    pub scale: f32,
     /// 收到的所有绘制指令（按传入顺序）。
     pub commands: Vec<RenderCommand>,
 }
@@ -34,9 +36,16 @@ impl MockBackend {
 }
 
 impl Backend for MockBackend {
-    fn render(&mut self, commands: &[RenderCommand], width: u32, height: u32) -> RenderOutput {
+    fn render(
+        &mut self,
+        commands: &[RenderCommand],
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> RenderOutput {
         self.width = width;
         self.height = height;
+        self.scale = scale;
         self.commands = commands.to_vec();
         // P2-18：返回指令本身（mock 不栅格化）。
         RenderOutput::Commands(commands.to_vec())
@@ -56,10 +65,11 @@ mod tests {
             RenderCommand::rect(20.0, 20.0, 30.0, 30.0, Color::rgb(0, 255, 0)),
         ];
         // P2-18：render 返回 RenderOutput::Commands
-        let output = backend.render(&cmds, 800, 600);
+        let output = backend.render(&cmds, 800, 600, 2.0);
         assert_eq!(output, RenderOutput::Commands(cmds.clone()));
         assert_eq!(backend.width, 800);
         assert_eq!(backend.height, 600);
+        assert_eq!(backend.scale, 2.0);
         assert_eq!(backend.len(), 2);
         assert_eq!(backend.commands, cmds);
     }
@@ -67,9 +77,10 @@ mod tests {
     #[test]
     fn mock_empty() {
         let mut backend = MockBackend::new();
-        let output = backend.render(&[], 100, 100);
+        let output = backend.render(&[], 100, 100, 1.0);
         assert_eq!(output, RenderOutput::Commands(vec![]));
         assert!(backend.is_empty());
         assert_eq!(backend.width, 100);
+        assert_eq!(backend.scale, 1.0);
     }
 }

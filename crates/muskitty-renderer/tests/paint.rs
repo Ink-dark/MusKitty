@@ -292,7 +292,7 @@ fn paint_mock_backend_consumes_commands() {
     );
     let mut backend = MockBackend::new();
     // P2-18：Mock 返回 Commands 输出。
-    let output = backend.render(&cmds, 800, 600);
+    let output = backend.render(&cmds, 800, 600, 1.0);
     assert_eq!(output, RenderOutput::Commands(cmds));
     assert_eq!(backend.len(), 1);
     assert_eq!(backend.width, 800);

@@ -25,9 +25,9 @@ pub mod tiny_skia;
 pub enum RenderOutput {
     /// 已栅格化的像素（RGBA 8-bit/channel，行长 = `width * 4`）。
     Pixels {
-        /// 画布宽度（px）。
+        /// 画布宽度（物理 px，= 逻辑宽 × scale，W-2）。
         width: u32,
-        /// 画布高度（px）。
+        /// 画布高度（物理 px，= 逻辑高 × scale，W-2）。
         height: u32,
         /// RGBA 像素数据（长度 = `width * height * 4`）。
         data: Vec<u8>,
@@ -44,7 +44,16 @@ pub enum RenderOutput {
 pub trait Backend {
     /// 渲染给定指令列表到后端目标。
     ///
-    /// `width` / `height` 为画布尺寸（px）。返回本次渲染的输出
-    /// （[`RenderOutput`]），调用方可按需消费。
-    fn render(&mut self, commands: &[RenderCommand], width: u32, height: u32) -> RenderOutput;
+    /// `width` / `height` 为**逻辑**画布尺寸（CSS px，即布局视口）；
+    /// `scale` 为 HiDPI 缩放因子（物理像素 ÷ 逻辑像素，W-2）。后端以
+    /// `round(width × scale) × round(height × scale)` 的物理分辨率栅格化，
+    /// 指令坐标保持逻辑 px，绘制时统一应用 scale transform（向量缩放，
+    /// 非模糊放大）。返回本次渲染的输出（[`RenderOutput`]），调用方可按需消费。
+    fn render(
+        &mut self,
+        commands: &[RenderCommand],
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> RenderOutput;
 }
