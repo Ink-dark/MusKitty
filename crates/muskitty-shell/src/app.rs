@@ -65,7 +65,8 @@ impl App {
 
     /// 以指定尺寸重新渲染页面，结果存入 `pixels`。
     fn render_at(&mut self, width: u32, height: u32) {
-        let out = render_page(self.html, self.css, width, height);
+        // W-2：C-2 起 render_page 带 scale；窗口流在 C-3 接入 hidpi 真实值。
+        let out = render_page(self.html, self.css, width, height, 1.0);
         if let RenderOutput::Pixels {
             width,
             height,

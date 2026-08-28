@@ -13,8 +13,10 @@ use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBacken
 
 /// 渲染 HTML + CSS 到 RGBA 像素（[`RenderOutput::Pixels`]）。
 ///
-/// `width` / `height` 为画布尺寸（px）。W-1 阶段即窗口物理尺寸；
-/// W-2（DPI）起区分逻辑视口与物理分辨率。
+/// `width` / `height` 为**逻辑**画布尺寸（CSS px，即布局视口）；
+/// `scale` 为 HiDPI 缩放因子（物理像素 ÷ 逻辑像素，W-2）。布局与
+/// 指令坐标均保持逻辑 px，输出分辨率为 `round(width×scale) ×
+/// round(height×scale)`（物理 px）。
 ///
 /// 管线步骤：
 /// 1. HTML → DOM（muskitty-html5-parser）
@@ -22,8 +24,8 @@ use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBacken
 /// 3. cascade + compute → 每元素 ComputedStyle
 /// 4. layout → LayoutResult（视口 = width × height）
 /// 5. paint → RenderCommand[]
-/// 6. TinySkiaBackend::render → `RenderOutput::Pixels`（RGBA8）
-pub fn render_page(html: &str, css: &str, width: u32, height: u32) -> RenderOutput {
+/// 6. TinySkiaBackend::render → `RenderOutput::Pixels`（RGBA8，物理分辨率）
+pub fn render_page(html: &str, css: &str, width: u32, height: u32, scale: f32) -> RenderOutput {
     let dom = muskitty_html5_parser::parse(html);
     let parsed = parse_stylesheet(css);
     let sheet = {
@@ -33,6 +35,7 @@ pub fn render_page(html: &str, css: &str, width: u32, height: u32) -> RenderOutp
     };
     let styles = compute_styles(&dom, &[sheet], &StyleTreeOptions::default());
     let mut tree = build_layout_tree(&dom, &styles);
+    // 布局用逻辑尺寸（CSS px）；scale 只影响栅格化，不改变布局。
     let layout = compute_layout(&mut tree, width as f32, height as f32).expect("layout failed");
     let input = PaintInput {
         dom: &dom,
@@ -42,8 +45,7 @@ pub fn render_page(html: &str, css: &str, width: u32, height: u32) -> RenderOutp
     };
     let commands = paint(&input);
     let mut backend = TinySkiaBackend::new();
-    // W-2：C-1 后 render 带 scale 参数；headless 暂固定 1x，C-2 引入 scale 贯穿。
-    backend.render(&commands, width, height, 1.0)
+    backend.render(&commands, width, height, scale)
 }
 
 /// 渲染自包含 HTML 文件（含 `<style>`）到 RGBA 像素。
@@ -55,10 +57,11 @@ pub fn render_html_file(
     path: &str,
     width: u32,
     height: u32,
+    scale: f32,
 ) -> Result<RenderOutput, Box<dyn std::error::Error>> {
     let html = std::fs::read_to_string(path)?;
     let css = extract_inline_style(&html);
-    Ok(render_page(&html, &css, width, height))
+    Ok(render_page(&html, &css, width, height, scale))
 }
 
 /// 从自包含 HTML 提取所有 `<style>...</style>` 块内容，拼接为 CSS。
@@ -110,6 +113,7 @@ mod tests {
             "div { display: block; } body { margin: 0; }",
             200,
             100,
+            1.0,
         );
         let RenderOutput::Pixels {
             width,
@@ -138,7 +142,7 @@ mod tests {
   <p style="font-size:24px;color:#000000">Hello</p>
 </body></html>
 "#;
-        let out = render_page(html, "body { margin: 0; }", 200, 80);
+        let out = render_page(html, "body { margin: 0; }", 200, 80, 1.0);
         let RenderOutput::Pixels {
             width,
             height,
@@ -201,7 +205,7 @@ mod tests {
             r#"<!doctype html><html><head><style>div{display:block;width:100px;height:50px;background-color:#ff0000}</style></head><body><div></div></body></html>"#,
         )
         .unwrap();
-        let out = render_html_file(&path.to_string_lossy(), 200, 100).expect("render file");
+        let out = render_html_file(&path.to_string_lossy(), 200, 100, 1.0).expect("render file");
         let RenderOutput::Pixels {
             width,
             height,
@@ -214,5 +218,35 @@ mod tests {
         let (r, g, b, _) = pixel(&data, width, 10, 10);
         assert_eq!((r, g, b), (255, 0, 0));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn render_page_scale_2_doubles_output_resolution() {
+        // W-2 退出条件：逻辑 200×100 布局 + scale=2 → 输出 400×200；
+        // 红块（逻辑 100×50，body margin 0 置于 (0,0)）物理坐标 (20,20) 为红，
+        // 红块外 (300,20) 仍为白画布（布局不变，仅栅格化放大）。
+        let out = render_page(
+            RED_DIV_HTML,
+            "div { display: block; } body { margin: 0; }",
+            200,
+            100,
+            2.0,
+        );
+        let RenderOutput::Pixels {
+            width,
+            height,
+            data,
+        } = out
+        else {
+            panic!("expected Pixels");
+        };
+        assert_eq!((width, height), (400, 200));
+
+        // 逻辑 (10,10) → 物理 (20,20)：红块内。
+        let (r, g, b, _) = pixel(&data, width, 20, 20);
+        assert_eq!((r, g, b), (255, 0, 0));
+        // 逻辑 (150,10) → 物理 (300,20)：红块宽 100 逻辑 → 200 物理，此点在块外。
+        let (r, g, b, _) = pixel(&data, width, 300, 20);
+        assert_eq!((r, g, b), (255, 255, 255));
     }
 }

@@ -50,7 +50,8 @@ fn main() {
         _ => panic!("usage: render_file [<输入.html> <输出.png> [宽] [高]]"),
     };
 
-    let out = render_html_file(html_path, width, height)
+    // W-2：headless 默认 1x（逻辑 = 物理），scale 后接入 CLI。
+    let out = render_html_file(html_path, width, height, 1.0)
         .unwrap_or_else(|e| panic!("render {html_path} failed: {e}"));
 
     let RenderOutput::Pixels {
