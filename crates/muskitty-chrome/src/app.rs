@@ -374,6 +374,10 @@ impl App {
                     self.views.select(n);
                     self.after_tab_change();
                 }
+                ShortcutAction::FocusAddress => {
+                    self.chrome.address_focused = true;
+                    self.request_flush();
+                }
             }
             return;
         }

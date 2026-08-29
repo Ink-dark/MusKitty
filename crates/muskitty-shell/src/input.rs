@@ -173,6 +173,8 @@ pub enum ShortcutAction {
     PrevTab,
     /// 切到第 `n` 个标签（0-based；Ctrl+1~9 → `TabSelect(0..=8)`）。
     TabSelect(usize),
+    /// 聚焦地址栏（Ctrl+L）。
+    FocusAddress,
 }
 
 /// Shell 快捷键匹配（纯函数，无窗口依赖）。
@@ -190,6 +192,8 @@ pub enum ShortcutAction {
 ///   [`ShortcutAction::TabSelect`]（0-based；Shift+数字产出其他字符，自然不匹配）；
 /// - `KeyDown { PageUp/PageDown, control && !alt && !meta }` →
 ///   [`ShortcutAction::PrevTab`] / [`ShortcutAction::NextTab`]；
+/// - `KeyDown { Character('l'|'L'), control && !alt && !meta }` →
+///   [`ShortcutAction::FocusAddress`]；
 /// - 其余 → `None`。
 ///
 /// 合成事件（`is_synthetic`）与按住重复（`repeat`）的过滤由调用方
@@ -209,6 +213,7 @@ pub fn match_shortcut(event: &InputEvent) -> Option<ShortcutAction> {
         Key::Character(c @ '1'..='9') if ctrl => {
             Some(ShortcutAction::TabSelect((*c as u8 - b'1') as usize))
         }
+        Key::Character('l' | 'L') if ctrl => Some(ShortcutAction::FocusAddress),
         Key::PageUp if ctrl => Some(ShortcutAction::PrevTab),
         Key::PageDown if ctrl => Some(ShortcutAction::NextTab),
         _ => None,
@@ -395,6 +400,14 @@ mod tests {
         assert_eq!(
             match_shortcut(&key_down(Key::Character('1'), Modifiers::default())),
             None
+        );
+    }
+
+    #[test]
+    fn match_shortcut_ctrl_l_focuses_address() {
+        assert_eq!(
+            match_shortcut(&key_down(Key::Character('l'), ctrl())),
+            Some(ShortcutAction::FocusAddress)
         );
     }
 

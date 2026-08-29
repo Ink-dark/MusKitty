@@ -185,6 +185,8 @@ impl App {
                 self.views.select(n);
                 self.request_flush();
             }
+            // shell 无地址栏（chrome 层接管后处理），仅消费该动作。
+            Some(ShortcutAction::FocusAddress) => {}
             None => {
                 // W-3 无页面命中测试：handle_event 恒返回 false，仅立分发结构。
                 if let Some(ww) = &mut self.winit_window {
