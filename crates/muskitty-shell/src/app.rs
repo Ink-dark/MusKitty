@@ -117,8 +117,27 @@ impl App {
             .unwrap_or_else(|| self.views.active().layout_state().2)
     }
 
-    /// 强制重新 parse→layout→render（绕过脏检查）并提交——Ctrl+R。
-    fn reload(&mut self) {
+    /// 请求一次「flush 点处理」：标记 active 需要重渲染并请求重绘
+    /// （脏位延迟更新，Servo §1.7——事件处理只标记，[`Self::flush`]
+    /// 在 `RedrawRequested` 统一执行）。Ctrl+R 走此路径。
+    fn request_flush(&mut self) {
+        self.views.active_mut().mark_needs_repaint();
+        if let Some(ww) = &self.winit_window {
+            ww.request_repaint();
+        }
+    }
+
+    /// 统一 flush 点（`RedrawRequested`）：
+    /// 1. 移除 `close_scheduled` 的标签（延迟关闭）；集合空 → 退出事件循环；
+    /// 2. active 标记了 [`crate::webview::WebView::needs_repaint`] 或
+    ///    窗口几何/scale 变化 → 按 `(逻辑宽, 逻辑高, scale)` 重渲染；
+    /// 3. 提交 active 最近一帧。
+    fn flush(&mut self, event_loop: &ActiveEventLoop) {
+        self.views.flush_close();
+        if self.views.is_empty() {
+            event_loop.exit();
+            return;
+        }
         let (w, h, scale) = match &self.winit_window {
             Some(ww) => {
                 let g = ww.geometry();
@@ -126,47 +145,41 @@ impl App {
             }
             None => return,
         };
-        self.render_at(w, h, scale);
-        self.present_current();
-    }
-
-    /// 标签集合变更（新建/关闭/切换）后按当前窗口几何重渲染 active
-    /// 并提交；集合空（全部标签关闭）则退出事件循环。
-    fn refresh_active(&mut self, event_loop: &ActiveEventLoop) {
-        if self.views.is_empty() {
-            event_loop.exit();
-            return;
+        let dirty = self.views.active().needs_repaint();
+        let stale = (w, h, scale) != self.views.active().layout_state();
+        if dirty || stale {
+            self.render_at(w, h, scale);
         }
-        self.reload();
+        self.present_current();
     }
 
     /// 事件分层（W-3/W-5）：先 shell 快捷键（Esc 关闭 / Ctrl+R 刷新 /
     /// 标签管理），未消费才转页面层（[`PlatformWindow::handle_event`]）。
+    /// 所有 shell 动作只变更标签集合 / 标脏位 + 请求重绘，渲染统一在
+    /// [`Self::flush`]（延迟更新）。
     fn dispatch_input(&mut self, event_loop: &ActiveEventLoop, event: InputEvent) {
         match input::match_shortcut(&event) {
             Some(ShortcutAction::Close) => event_loop.exit(),
-            Some(ShortcutAction::Reload) => self.reload(),
+            Some(ShortcutAction::Reload) => self.request_flush(),
             Some(ShortcutAction::NewTab) => {
                 self.views.new_tab(self.default_html, self.default_css);
-                self.refresh_active(event_loop);
+                self.request_flush();
             }
             Some(ShortcutAction::CloseTab) => {
                 self.views.close_active();
-                // C-3 起改为延迟 flush；当前立即移除以维持可观察行为。
-                self.views.flush_close();
-                self.refresh_active(event_loop);
+                self.request_flush();
             }
             Some(ShortcutAction::NextTab) => {
                 self.views.select_next();
-                self.refresh_active(event_loop);
+                self.request_flush();
             }
             Some(ShortcutAction::PrevTab) => {
                 self.views.select_prev();
-                self.refresh_active(event_loop);
+                self.request_flush();
             }
             Some(ShortcutAction::TabSelect(n)) => {
                 self.views.select(n);
-                self.refresh_active(event_loop);
+                self.request_flush();
             }
             None => {
                 // W-3 无页面命中测试：handle_event 恒返回 false，仅立分发结构。
@@ -318,19 +331,9 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::RedrawRequested => {
-                // 布局用窗口逻辑尺寸 + 当前 scale（W-2）；脏检查含 scale，
-                // 任一变化才重渲染，再提交物理分辨率像素。
-                let (w, h, scale) = match &self.winit_window {
-                    Some(ww) => {
-                        let g = ww.geometry();
-                        (g.width.max(1), g.height.max(1), ww.hidpi_scale_factor())
-                    }
-                    None => return,
-                };
-                if (w, h, scale) != self.views.active().layout_state() {
-                    self.render_at(w, h, scale);
-                }
-                self.present_current();
+                // 统一 flush 点（W-5 C-3）：关闭延迟处理 + 脏位/几何
+                // 变化才重渲染 + 提交 active 最近一帧。
+                self.flush(event_loop);
             }
             WindowEvent::Resized(_) => {
                 if let Some(ww) = &self.winit_window {
