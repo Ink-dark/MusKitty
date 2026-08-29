@@ -134,7 +134,7 @@
 - [x] `cargo clippy --all-targets -- -D warnings` 零警告
 - [x] `cargo check -p muskitty-shell --no-default-features` 无头可编译
 - [x] 单测：标签集合 CRUD（webview.rs 10 条：新建/延迟关闭/flush 重定位/切换循环/越界忽略/同索引不标脏）+ 新快捷键匹配（input.rs 5 条：Ctrl+T/W/1~9/PageUp/Down → 正确 action，Alt/Meta 不匹配）
-- [ ] 手工验证：`cargo run -p muskitty-shell` Ctrl+T 新建、Ctrl+W 关闭、Ctrl+1/PageUp 切换正确刷新（人工执行，待架构师跑窗口 demo）
+- [x] 手工验证（2026-08-29，桌面自动化驱动真窗口执行）：Ctrl+T → 标题 `Tab 4/4` + 画面大字 "Tab 4"；Ctrl+PageUp → `Tab 3/4` + "Tab 3"；Ctrl+1 → `Tab 1/4` + demo 内容（每标签渲染状态独立重绘）；Ctrl+W → 关闭当前标签落到继任 `Tab 1/3` + "Tab 2"；Esc 关窗退出（cargo run exit 0）。观测手段：`PlatformWindow::set_title`（flush 写 `Tab n/m` 到标题栏，`6f2679b`）+ Ctrl+T 新标签渲染大号 "Tab N"（`119f13f`）——无 tab strip 也可从标题栏与画面直接验证
 
 ### 主线：M-3 CSS 补全（穿插推进）
 
