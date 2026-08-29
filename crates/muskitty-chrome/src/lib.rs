@@ -34,3 +34,8 @@
 
 pub mod chrome;
 pub mod compositor;
+
+/// 浏览器窗口应用（winit 事件循环 + chrome 合成呈现，`winit-backend`
+/// feature 门控）。
+#[cfg(feature = "winit-backend")]
+pub mod app;

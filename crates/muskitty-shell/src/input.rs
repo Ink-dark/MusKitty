@@ -46,6 +46,10 @@ pub enum Key {
     PageUp,
     /// Page Down 键（Ctrl+PageDown → 下一个标签）。
     PageDown,
+    /// Backspace 键（chrome 地址栏删除；不参与快捷键匹配）。
+    Backspace,
+    /// Enter 键（chrome 地址栏提交；不参与快捷键匹配）。
+    Enter,
     /// 文本输入型字符。取 winit `Key::Character` 的首字符；空串归 [`Other`]。
     Character(char),
     /// 已识别但非快捷键相关（Named 非 Escape/PageUp/PageDown / Unidentified / Dead / 空字符）。

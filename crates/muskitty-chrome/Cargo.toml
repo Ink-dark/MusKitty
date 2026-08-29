@@ -18,6 +18,12 @@ authors = ["MusCat / MusKitty Bit-Torch Community"]
 default = ["winit-backend"]
 winit-backend = ["dep:winit", "dep:softbuffer"]
 
+# 二进制演示入口依赖 winit 后端；--no-default-features 时仅 lib 可编译。
+[[bin]]
+name = "muskitty-chrome"
+path = "src/main.rs"
+required-features = ["winit-backend"]
+
 [dependencies]
 # 渲染管线（HTML+CSS → 像素；与 muskitty-shell 相同的输入侧依赖集）。
 muskitty-dom = { path = "../muskitty-dom", version = "0.2.0" }
