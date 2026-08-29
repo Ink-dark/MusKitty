@@ -1,14 +1,14 @@
 # Goal — 下一步任务清单（给 Codex / AI Agent 用）
 
 > **更新时间**：2026-08-29
-> **当前状态**：窗口化轨道 **W-3 输入已完成**（`input.rs` InputEvent/Key/Modifiers/MouseButton/TouchPhase shell 自有类型 + 纯函数 `match_shortcut`；winit 事件 → InputEvent 转换（逻辑 px）；`PlatformWindow::handle_event` 页面层入口；事件分层——shell 快捷键（Esc 关闭、Ctrl+R 刷新）在 `App::dispatch_input` 先于页面层处理；命中测试单列延后。input.rs 12 + app.rs 17 条无窗口单测）。主线 **M-3 batch 1 已完成**（`border:` 简写展开 → border-width/style/color；media 视口接线——`@media (min-width)` 等条件现按真实窗口逻辑视口求值）。本轮**双轨并行**：主线 M-3（batch 2，按需）+ 并行轨道窗口化（下一阶段 **W-4 Headless 后端**，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
+> **当前状态**：窗口化轨道 **W-3 输入 + W-4 Headless 后端已完成**（`HeadlessWindow` + `render_to_png` + 无窗口渲染测试，`--no-default-features` 下 check/test/clippy 全绿，CI 无窗口可跑 shell 渲染测试）（`input.rs` InputEvent/Key/Modifiers/MouseButton/TouchPhase shell 自有类型 + 纯函数 `match_shortcut`；winit 事件 → InputEvent 转换（逻辑 px）；`PlatformWindow::handle_event` 页面层入口；事件分层——shell 快捷键（Esc 关闭、Ctrl+R 刷新）在 `App::dispatch_input` 先于页面层处理；命中测试单列延后。input.rs 12 + app.rs 17 条无窗口单测）。主线 **M-3 batch 1 已完成**（`border:` 简写展开 → border-width/style/color；media 视口接线——`@media (min-width)` 等条件现按真实窗口逻辑视口求值）。本轮**双轨并行**：主线 M-3（batch 2，按需）+ 并行轨道窗口化（下一阶段 **W-4 Headless 后端**，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
 
 ---
 
 ## 当前阶段定位
 
 - **主线**：M-3 CSS 补全 — batch 1（border 简写 + media 视口接线）✅ 已完成；@layer 排序（audit B8）已完整实现无需再做；余项 revert/revert-layer 真语义（B7）、background-image、方向性 border、outline 按需求裁剪延后（原因见 PROGRESS.md item 15）。按渲染真实页面的需求驱动裁剪范围。
-- **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2 ✅）→ 输入（W-3 ✅）→ Headless（W-4 📋 已规划，待启动）→ 多标签（W-5）。
+- **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2 ✅）→ 输入（W-3 ✅）→ Headless（W-4 ✅）→ 多标签（W-5，下一阶段）。
 - **中期主线**：M-1 网络接轨 / M-2 交互基础排在 M-3 之后；inline formatting context 独立远期 Phase。
 
 ## 穿插节奏（双轨并行）
@@ -18,7 +18,7 @@
 | 已完成 | 并行 | W-1 窗口化整块（6 commit + 收尾修订：WinitWindow 私有化） | shell（新）/ renderer |
 | 已完成 | 并行 | W-2 DPI（3 commit：Backend/render_page scale + 窗口流接线） | shell / renderer |
 | 已完成 | 并行 | W-3 输入（4 commit：InputEvent 抽象 + 快捷键层 + handle_event 页面层 + 文档；命中测试单列延后） | shell |
-| 下一轮 | 并行 | W-4 Headless 后端（headless_window.rs + render_to_png，无窗口 CI 渲染测试） | shell |
+| 已完成 | 并行 | W-4 Headless 后端（3 commit：HeadlessWindow + render_to_png/encode_png + 无窗口渲染测试） | shell |
 | 穿插 | 主线 | M-3 一批（按需） | cascade / layout |
 
 **节奏**：每轮一个窗口化阶段收尾（含测试 + commit）→ 切回 M-3 一批 → 下一窗口化阶段。两轨无文件冲突（cascade/layout vs shell/renderer）。
@@ -90,26 +90,26 @@
 - [x] 单测：InputEvent 转换 + 快捷键匹配（Esc→Close、Ctrl+R→Reload、非快捷键→None），无需真实窗口
 - [x] 手工验证：`cargo run -p muskitty-shell` Esc 关窗、Ctrl+R 重渲染（人工执行）
 
-### 并行轨道：W-4 Headless 后端（📋 已规划，待启动）
+### 并行轨道：W-4 Headless 后端（✅ 已完成 2026-08-29）
 
 **目标**：`headless_window.rs` 无窗口 `PlatformWindow` 实现 + `render_to_png` 便捷函数，无窗口环境（CI）可跑 shell 渲染测试。feature gate 在此兑现价值——`default-features = false`（`--no-default-features`）时无 winit/softbuffer 也能编译。规划源：[docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md) §W-4。
 
 **Commit 序列**：
 
-- [ ] C-1 `[shell]` `headless_window.rs`：`HeadlessWindow: PlatformWindow`，`present` 保存像素 / 写 PNG（无参构造，演示直接构造 `PlatformWindow` 的用例从 W-1 私有化迁到此处，W-1 收尾修订预留）
-- [ ] C-2 `[shell]` lib 顶层 `render_to_png(html, css, path)` 便捷函数（走 `page::render_page` 全管线 → 编码 PNG）
-- [ ] C-3 `[shell]` 测试集成：无窗口环境渲染测试（输出 PNG 像素与 renderer 直接渲染一致）
+- [x] C-1 `[shell]` `headless_window.rs`：`HeadlessWindow: PlatformWindow`，`present` 保存像素（`frame()` 访问 + `save_png`；Cell 内部可变性；无外部依赖类型可公开构造，W-1 收尾修订迁入 `070e013`）
+- [x] C-2 `[shell]` lib 顶层 `render_to_png(html, css, width, height, scale, path)` 便捷函数（走 `page::render_page` 全管线 → `page::encode_png` 编码；tiny-skia 升正式依赖但类型不入 pub API；window_demo 声明 required-features，`25610a6`）
+- [x] C-3 `[shell]` 测试集成：无窗口环境渲染测试（`tests/render_to_png.rs`：PNG 解码像素与直接渲染逐字节一致 + HeadlessWindow 帧/编码产物一致 + scale=2 分辨率，`--no-default-features` 全绿，`2c83e44`）
 
 **架构点**：`HeadlessWindow` 可无参构造（相对 `WinitWindow` 构造参数含 winit 类型必须 `pub(crate)`）；`present` 仍走裸像素 `(data, width, height)`（RGBA），PNG 编码在 shell 侧（或复用 renderer 的 encode）。
 
 **退出条件（全部满足才可 commit）**：
 
-- [ ] `cargo check --workspace` / `cargo test --workspace` 通过
-- [ ] `cargo fmt --all -- --check` 通过
-- [ ] `cargo clippy --all-targets -- -D warnings` 零警告
-- [ ] `cargo check -p muskitty-shell --no-default-features` 无头可编译（feature gate 兑现）
-- [ ] 无窗口环境跑通 `render_to_png`；输出 PNG 像素与 renderer 直接渲染一致
-- [ ] CI 可无窗口跑 shell 渲染测试
+- [x] `cargo check --workspace` / `cargo test --workspace` 通过
+- [x] `cargo fmt --all -- --check` 通过
+- [x] `cargo clippy --all-targets -- -D warnings` 零警告
+- [x] `cargo check -p muskitty-shell --no-default-features` 无头可编译（feature gate 兑现）
+- [x] 无窗口环境跑通 `render_to_png`；输出 PNG 像素与 renderer 直接渲染一致（逐字节比对）
+- [x] CI 可无窗口跑 shell 渲染测试（集成测试不依赖 winit/softbuffer）
 
 ### 主线：M-3 CSS 补全（穿插推进）
 

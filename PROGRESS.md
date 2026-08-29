@@ -397,6 +397,8 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 14. ~~**W-3 输入（InputEvent 抽象 + shell 快捷键层 + 事件分发结构）**~~ ✅ 已完成（2026-08-29）：input.rs 类型 + 纯函数 `match_shortcut`（shell `953f890`）、`PlatformWindow::handle_event` 页面层入口（`7fed8bb`）、App 事件接线 + 转换函数（`0962c74`）、文档同步（C-4）。架构修正：快捷键层在 `App::dispatch_input`（Esc 需 `event_loop.exit()`、Ctrl+R 需渲染管线，均 App 独有），`handle_event` 为页面层（W-3 无命中测试恒 `false`，仅立分发结构）；页面级命中测试单列延后。
 15. ~~**M-3 batch 1（border 简写 + media 视口接线）**~~ ✅ 已完成（2026-08-29）：`border:` 简写按 CSS Backgrounds & Borders L3 §4.4 展开为 border-width/style/color（顺序无关 `<width>||<style>||<color>`、每类至多一次、缺失类别取注册表初始值 medium/none/currentcolor，cascade `b87b820`；renderer 端到端 paint 测试证明 `extract_border` 消费，`de48621`）；media 视口接线——`compute_styles` 用 `StyleTreeOptions.viewport_width/height` 构造 `MediaContext`（cascade `fcde127`），`render_page` 传逻辑布局视口（shell `f0c5619`），默认 1920×1080 行为不变。M-3 余项：@layer 排序已完整（audit B8，无需再做）；background-image / revert 真语义 / 方向性 border（border-left 等）/ outline 延后（renderer 无 image 消费方；revert 需低 origin/层回滚零真实页面需求）。
 
+16. ~~**W-4 Headless 后端（HeadlessWindow + render_to_png + 无窗口测试）**~~ ✅ 已完成（2026-08-29）：`HeadlessWindow: PlatformWindow` 无窗口实现（`present` 保存最近帧、可 `save_png`，无外部依赖类型可公开构造，shell `070e013`）；lib 顶层 `render_to_png` 全管线 → PNG 便捷函数 + `page::encode_png` 编码出口（tiny-skia 升正式依赖但类型不入 pub API；window_demo 示例声明 required-features，shell `25610a6`）；无窗口集成测试——`render_to_png` PNG 解码像素与 `render_page` 直接渲染逐字节一致、HeadlessWindow 帧/编码产物一致、scale=2 分辨率核对（shell `2c83e44`），`--no-default-features` 下 check/test/clippy 全绿，feature gate 兑现 CI 无窗口价值。
+
 ## Phase 3 (Layout 层) — 已完成
 
 **时间**：2026-07-23 → 2026-08-01

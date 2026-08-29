@@ -177,7 +177,7 @@ M-3（CSS 补全）与窗口化触碰**不同 crate**，无文件冲突：
 
 ---
 
-### W-4 — Headless 后端（测试需要）
+### W-4 — Headless 后端（测试需要）（✅ 已完成 2026-08-29）
 
 **任务**：
 1. `headless_window.rs`：`HeadlessWindow: PlatformWindow`，`present` 保存像素 / 写 PNG
@@ -187,9 +187,11 @@ M-3（CSS 补全）与窗口化触碰**不同 crate**，无文件冲突：
 **架构点**：`default-features = false` 时无需 winit/softbuffer 编译（feature gate 在此兑现价值）。
 
 **退出条件**：
-- 无窗口环境跑通 `render_to_png`（`cargo test -p muskitty-shell --no-default-features` 全绿）
-- 输出 PNG 像素与 renderer 直接渲染一致
-- CI 可无窗口跑 shell 渲染测试
+- 无窗口环境跑通 `render_to_png`（`cargo test -p muskitty-shell --no-default-features` 全绿）✅
+- 输出 PNG 像素与 renderer 直接渲染一致 ✅（`tests/render_to_png.rs`：PNG 解码逐字节比对 `render_page` 直接渲染，含 scale=2）
+- CI 可无窗口跑 shell 渲染测试 ✅
+
+**实施记录**（3 commit：`070e013` / `25610a6` / `2c83e44`）：`HeadlessWindow` 无外部依赖类型可公开构造（`present` 保存最近帧 + `frame()` 访问 + `save_png`；`set_cursor`/`set_fullscreen` 用 `Cell` 内部可变性适配 trait 的 `&self`）；PNG 编码统一出口 `page::encode_png`（tiny-skia 升为 shell 正式依赖，类型仅在函数内部使用，pub 签名零外部类型，对齐 decoupling ADR）；`render_to_png(html, css, width, height, scale, path)` 走 `page::render_page` 全管线；`window_demo` 示例在 Cargo.toml 声明 `required-features = ["winit-backend"]`，`--no-default-features` 下 examples 跳过编译。
 
 ---
 
@@ -253,4 +255,4 @@ cargo run -p muskitty-shell --example window_demo   # W-1 手工验证真窗口
 - [x] M-3 与 W-1 的穿插节奏由用户在 `goal.md` 中排布
 - [x] **W-2（DPI）启动**：与 M-3 CSS 补全并行穿插（见 goal.md 节奏表）
 - [x] **W-3（输入）完成**：InputEvent 抽象 + 快捷键层 + 事件分发结构（见 §W-3 架构修正）
-- [ ] **W-4（Headless 后端）启动**：`headless_window.rs` + `render_to_png`，无窗口 CI 渲染测试
+- [x] **W-4（Headless 后端）完成**：`headless_window.rs` + `render_to_png` + 无窗口 CI 渲染测试（见 §W-4 实施记录）
