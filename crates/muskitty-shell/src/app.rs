@@ -41,10 +41,6 @@ pub struct App {
     winit_window: Option<WinitWindow>,
     /// 多标签集合（W-5）；渲染管线只作用于 active 视图。
     views: WebViewCollection,
-    /// 新建标签的默认内容（`App::run` 的入参；当前无加载器，Ctrl+T
-    /// 打开同内容新标签）。
-    default_html: &'static str,
-    default_css: &'static str,
     /// 当前修饰键状态（由 `ModifiersChanged` 更新；winit 输入事件本身不带）。
     modifiers: input::Modifiers,
     /// 最后已知光标位置（逻辑 px；winit 的 MouseInput/MouseWheel 不带位置）。
@@ -58,8 +54,6 @@ impl App {
             window: None,
             winit_window: None,
             views: WebViewCollection::new(html, css),
-            default_html: html,
-            default_css: css,
             modifiers: input::Modifiers::default(),
             cursor_position: (0.0, 0.0),
         }
@@ -81,7 +75,7 @@ impl App {
         // 布局用逻辑尺寸（CSS px），栅格化按 scale 输出物理分辨率（W-2）。
         let (html, css) = {
             let view = self.views.active_mut();
-            (view.html, view.css)
+            (view.html.as_str(), view.css.as_str())
         };
         let out = render_page(html, css, logical_width, logical_height, scale);
         if let RenderOutput::Pixels {
@@ -171,7 +165,8 @@ impl App {
             Some(ShortcutAction::Close) => event_loop.exit(),
             Some(ShortcutAction::Reload) => self.request_flush(),
             Some(ShortcutAction::NewTab) => {
-                self.views.new_tab(self.default_html, self.default_css);
+                let (html, css) = new_tab_content(self.views.len() + 1);
+                self.views.new_tab(html, css);
                 self.request_flush();
             }
             Some(ShortcutAction::CloseTab) => {
@@ -198,6 +193,17 @@ impl App {
             }
         }
     }
+}
+
+/// Ctrl+T 新标签的内容：大号 "Tab N" 标题文本。
+///
+/// 无加载器（W-5），新标签用可区分内容，标签切换/关闭在无 tab strip
+/// 时可从画面直接观察（配合窗口标题 `Tab n/m`）。
+fn new_tab_content(n: usize) -> (String, String) {
+    let html = format!(
+        "<!doctype html><html><body><h1 style=\"font-size:72px;color:#1a1a1a\">Tab {n}</h1></body></html>"
+    );
+    (html, String::new())
 }
 
 /// winit 修饰键 → shell [`Modifiers`](input::Modifiers)。
@@ -400,6 +406,17 @@ mod tests {
     use super::*;
     use winit::dpi::PhysicalPosition;
     use winit::keyboard::ModifiersState;
+
+    #[test]
+    fn new_tab_content_contains_tab_number() {
+        let (html, css) = new_tab_content(2);
+        assert!(
+            html.contains("Tab 2"),
+            "html should show tab number: {html}"
+        );
+        assert!(html.contains("font-size:72px"), "big text for visibility");
+        assert_eq!(css, "");
+    }
 
     #[test]
     fn modifiers_from_winit_empty() {

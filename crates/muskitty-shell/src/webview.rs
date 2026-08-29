@@ -19,14 +19,14 @@
 /// `pixels` / `width` / `height` 为最近一次渲染的 RGBA 输出（物理
 /// 分辨率，present 用）；`logical_width` / `logical_height` / `scale`
 /// 为最近一次渲染的布局状态（脏检查用，避免每帧全量渲染）。
-/// `html` / `css` 为页面内容（当前 `&'static str`，接加载器后换持有
-/// 数据）。
+/// `html` / `css` 为页面内容（持有 `String`：标签内容需可区分/可变，
+/// 接加载器后由加载方填充）。
 #[derive(Debug, Clone)]
 pub struct WebView {
     /// 页面 HTML。
-    pub html: &'static str,
+    pub html: String,
     /// 页面 CSS。
-    pub css: &'static str,
+    pub css: String,
     /// 脏位：需要重渲染（内容/尺寸/scale 变化或显式 reload）。
     needs_repaint: bool,
     /// 脏位：已请求关闭（统一 flush 点移除，Servo §1.7 延迟更新）。
@@ -42,10 +42,10 @@ pub struct WebView {
 impl WebView {
     /// 构造 WebView：尚未渲染（`needs_repaint = true`，首个 flush 点
     /// 渲染），布局状态为零值。
-    pub fn new(html: &'static str, css: &'static str) -> Self {
+    pub fn new(html: impl Into<String>, css: impl Into<String>) -> Self {
         Self {
-            html,
-            css,
+            html: html.into(),
+            css: css.into(),
             needs_repaint: true,
             close_scheduled: false,
             pixels: Vec::new(),
@@ -121,7 +121,7 @@ pub struct WebViewCollection {
 
 impl WebViewCollection {
     /// 构造集合：以给定内容创建第一个标签并激活。
-    pub fn new(html: &'static str, css: &'static str) -> Self {
+    pub fn new(html: impl Into<String>, css: impl Into<String>) -> Self {
         Self {
             views: vec![WebView::new(html, css)],
             active: 0,
@@ -129,7 +129,7 @@ impl WebViewCollection {
     }
 
     /// 新建标签（内容 `html`/`css`）并激活。
-    pub fn new_tab(&mut self, html: &'static str, css: &'static str) {
+    pub fn new_tab(&mut self, html: impl Into<String>, css: impl Into<String>) {
         self.views.push(WebView::new(html, css));
         self.active = self.views.len() - 1;
     }
