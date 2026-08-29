@@ -1,6 +1,6 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-08-29 | W-2 DPI 完成并推送（renderer/shell 加 scale：layout 逻辑 CSS px、栅格化物理分辨率，整数 1x/2x）；下一里程碑 M-3 CSS 补全 + W-3 输入
+> 最后更新: 2026-08-29 | M-3 batch 1 完成（border 简写展开 → border-width/style/color + media 视口接线：`@media (min-width)` 等条件现按真实窗口逻辑视口求值）；下一里程碑 W-4 Headless 后端 + M-3 batch 2
 >
 > Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
 > Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
@@ -394,6 +394,12 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 11. ~~**T-3 换行 + 字体属性**~~ ✅ 已完成（2026-08-22）：taffy measure function 换行（layout `8f18108`）、font-family/font-weight 测量（layout `056ec23`）、renderer 换行/字重/对齐（renderer `8a28bc8`/`fc6f971`/`20606b8`）。补齐端到端用例时发现并修复多行叠行 bug（`draw_text` 漏加 `run.line_y`，glyph 行内局部坐标需加行顶偏移）。line-height 仍为 `font_size * 1.2` 近似，精确解析推迟。
 12. ~~**外部依赖解耦**~~ ✅ 已完成（2026-08-16）：layout（taffy/cosmic-text `bf52557`）、renderer（tiny-skia Pixmap `98af15d`）、network（reqwest Error `8cfbdfd`）公共 API 均不再暴露外部依赖类型，上层可抽离。
 13. ~~**W-2 DPI（HiDPI 缩放）**~~ ✅ 已完成（2026-08-29）：`Backend::render` / `render_page` / `render_html_file` 加 scale 参数——layout 用逻辑视口（CSS px），栅格化物理分辨率 `round(logical×scale)`（renderer `0192cae` / shell page `b0a645f`）；窗口流读 hidpi scale、脏检查含 scale、`ScaleFactorChanged` 重绘（shell `d53ca2f`）。整数 1x/2x 有 scale=1-vs-2 单测兜底（非插值）；`render_file` 示例 scale=1 输出不变。
+14. ~~**W-3 输入（InputEvent 抽象 + shell 快捷键层 + 事件分发结构）**~~ ✅ 已完成（2026-08-29）：input.rs 类型 + 纯函数 `match_shortcut`（shell `953f890`）、`PlatformWindow::handle_event` 页面层入口（`7fed8bb`）、App 事件接线 + 转换函数（`0962c74`）、文档同步（C-4）。架构修正：快捷键层在 `App::dispatch_input`（Esc 需 `event_loop.exit()`、Ctrl+R 需渲染管线，均 App 独有），`handle_event` 为页面层（W-3 无命中测试恒 `false`，仅立分发结构）；页面级命中测试单列延后。
+15. ~~**M-3 batch 1（border 简写 + media 视口接线）**~~ ✅ 已完成（2026-08-29）：`border:` 简写按 CSS Backgrounds & Borders L3 §4.4 展开为 border-width/style/color（顺序无关 `<width>||<style>||<color>`、每类至多一次、缺失类别取注册表初始值 medium/none/currentcolor，cascade `b87b820`；renderer 端到端 paint 测试证明 `extract_border` 消费，`de48621`）；media 视口接线——`compute_styles` 用 `StyleTreeOptions.viewport_width/height` 构造 `MediaContext`（cascade `fcde127`），`render_page` 传逻辑布局视口（shell `f0c5619`），默认 1920×1080 行为不变。M-3 余项：@layer 排序已完整（audit B8，无需再做）；background-image / revert 真语义 / 方向性 border（border-left 等）/ outline 延后（renderer 无 image 消费方；revert 需低 origin/层回滚零真实页面需求）。
+
+16. ~~**W-4 Headless 后端（HeadlessWindow + render_to_png + 无窗口测试）**~~ ✅ 已完成（2026-08-29）：`HeadlessWindow: PlatformWindow` 无窗口实现（`present` 保存最近帧、可 `save_png`，无外部依赖类型可公开构造，shell `070e013`）；lib 顶层 `render_to_png` 全管线 → PNG 便捷函数 + `page::encode_png` 编码出口（tiny-skia 升正式依赖但类型不入 pub API；window_demo 示例声明 required-features，shell `25610a6`）；无窗口集成测试——`render_to_png` PNG 解码像素与 `render_page` 直接渲染逐字节一致、HeadlessWindow 帧/编码产物一致、scale=2 分辨率核对（shell `2c83e44`），`--no-default-features` 下 check/test/clippy 全绿，feature gate 兑现 CI 无窗口价值。
+
+17. ~~**W-5 多标签状态管理（WebViewCollection + 标签快捷键 + 脏位延迟更新）**~~ ✅ 已完成（2026-08-29）：`webview.rs`（不 feature 门控）——`WebView`（内容 + 每标签渲染状态 + `needs_repaint`/`close_scheduled` 脏位）+ `WebViewCollection`（新建/延迟关闭/切换，active 不变量，切换自动标脏，shell `a618c4e`）；标签快捷键 Ctrl+T/W/1~9/PageUp/PageDown（`ShortcutAction` 扩展 + `Key::PageUp/PageDown`，`match_shortcut` 5 条新单测，`dispatch_input` 接线，Ctrl+T 开默认内容、全部关闭退出，shell `9e5c3dc`）；脏位延迟更新——shell 动作只标脏 + request_repaint，`RedrawRequested` 统一 flush（关标签延迟移除/空则退出/脏或 stale 才重渲染，shell `ea99d22`）。范围裁剪：favicon 占位、tab strip 不做。窗口化轨道 W-1~W-5 全部完成。
 
 ## Phase 3 (Layout 层) — 已完成
 

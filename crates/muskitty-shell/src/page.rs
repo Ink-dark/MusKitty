@@ -33,7 +33,12 @@ pub fn render_page(html: &str, css: &str, width: u32, height: u32, scale: f32) -
         s.origin = Origin::Author;
         s
     };
-    let styles = compute_styles(&dom, &[sheet], &StyleTreeOptions::default());
+    // media 视口 = 布局视口（逻辑 CSS px）；与 layout 用同一 width/height。
+    let opts = StyleTreeOptions {
+        viewport_width: width as f64,
+        viewport_height: height as f64,
+    };
+    let styles = compute_styles(&dom, &[sheet], &opts);
     let mut tree = build_layout_tree(&dom, &styles);
     // 布局用逻辑尺寸（CSS px）；scale 只影响栅格化，不改变布局。
     let layout = compute_layout(&mut tree, width as f32, height as f32).expect("layout failed");
@@ -90,6 +95,32 @@ pub(crate) fn extract_inline_style(html: &str) -> String {
         search_from = close + CLOSE_TAG.len();
     }
     css
+}
+
+/// 把 RGBA8 像素（行长 = `width * 4`）编码为 PNG。
+///
+/// shell 侧的 PNG 出口（[`crate::render_to_png`] /
+/// `HeadlessWindow::save_png`），后端与 renderer 一致（tiny-skia）。
+/// tiny-skia 类型只在本函数内部使用，不出现在 pub 签名（对齐
+/// decoupling ADR）。
+pub(crate) fn encode_png(
+    data: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let Some(mut pixmap) = tiny_skia::Pixmap::new(width, height) else {
+        return Err(format!("encode_png: invalid dimensions {width}x{height}").into());
+    };
+    let expected = data.len();
+    let buf_len = pixmap.data_mut().len();
+    if expected != buf_len {
+        return Err(format!(
+            "encode_png: data length {expected} does not match {width}x{height} RGBA buffer ({buf_len})"
+        )
+        .into());
+    }
+    pixmap.data_mut().copy_from_slice(data);
+    Ok(pixmap.encode_png()?)
 }
 
 #[cfg(test)]

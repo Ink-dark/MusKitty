@@ -3,7 +3,9 @@
 > **创建时间**：2026-08-23
 > **依据**：`docs/research/2026-08-23-servo-window-layer-analysis.md`（Servo 窗口层分析）
 > **用户决策**：① 新建 `muskitty-shell` workspace member 承载窗口抽象（按研究文档 §5）；② 窗口化作为独立轨道与 M-3（CSS 补全收尾）**并行穿插**推进
-> **当前状态**：W-1 **已完成**。`muskitty-shell` workspace member 落地：`PlatformWindow` trait + `WinitWindow`（pub(crate)，构造参数含 winit 类型不外泄）+ `page::render_page` 管线 + `App::run` 便捷入口 + 迁入的 `examples/window_demo.rs`。renderer 已回归纯净（删除 window_demo、移除 winit/softbuffer dev-deps）
+> **当前状态**：W-1 / W-2（DPI）/ **W-3（输入）已完成**。`muskitty-shell` workspace member 落地：`PlatformWindow` trait + `WinitWindow`（pub(crate)，构造参数含 winit 类型不外泄）+ `page::render_page` 管线 + `App::run` 便捷入口 + 迁入的 `examples/window_demo.rs`。renderer 已回归纯净（删除 window_demo、移除 winit/softbuffer dev-deps）
+>
+> **W-3 已完成（2026-08-29）**：`input.rs` InputEvent 抽象 + shell 快捷键层（Esc 关闭 / Ctrl+R 刷新）+ `PlatformWindow::handle_event` 页面层入口。架构修正见 §W-3（快捷键层在 `App::dispatch_input`，handle_event 为页面层）。
 > **关联文件**：`crates/muskitty-shell/`（本 crate）、`crates/muskitty-renderer/Cargo.toml`（已清理）
 
 ---
@@ -152,7 +154,7 @@ M-3（CSS 补全）与窗口化触碰**不同 crate**，无文件冲突：
 
 ---
 
-### W-3 — 输入事件抽象
+### W-3 — 输入事件抽象（✅ 已完成，2026-08-29）
 
 **任务**：
 1. `input.rs` 完善 `InputEvent`（Keyboard/MouseButton/MouseMove/MouseWheel/Touch，参照研究文档 §3.3）
@@ -162,14 +164,20 @@ M-3（CSS 补全）与窗口化触碰**不同 crate**，无文件冲突：
 
 **范围裁剪**：页面级命中测试（事件→元素）依赖 layout 几何 + 命中算法，**不在本轮**（单列延后项）。W-3 只做 shell 快捷键层 + 事件分发结构。
 
-**退出条件**：
-- Esc 关闭窗口、Ctrl+R 刷新（重新 parse→render）
-- `handle_event` 返回语义正确（快捷键 consumed，其余 false）
-- 单测：InputEvent 转换 + 快捷键匹配（无需真实窗口）
+**架构修正（落地时记录）**：原设想把快捷键层放在 `PlatformWindow::handle_event` 内，但 Esc 关闭需 `event_loop.exit()`（仅 `App` 持有），Ctrl+R 刷新需重跑 `render_page(html, css, …)`（仅 `App` 持有），且 winit 0.30 无 `Window::close()`——两个快捷键结构性归 App 所有。因此：
+- **快捷键层**在 `App::dispatch_input`（`input::match_shortcut` 纯函数匹配，Close → `event_loop.exit()`、Reload → `reload()` 强制重 parse→render）；
+- **`PlatformWindow::handle_event` 是页面/转发层**（返回"页面是否已消费"，W-3 无命中测试恒 `false`，仅建立分发结构）。
+此修正对齐 Servo 实际架构（研究文档 §5.2：Servo 的 `PlatformWindow` 无输入路由，路由在 shell 层 `ServoShellWindow`）。
+
+**退出条件（全部满足）**：
+- [x] Esc 关闭窗口（`App::dispatch_input` → Close → `event_loop.exit()`）
+- [x] Ctrl+R 刷新（`reload()` 无条件 `render_at` + present）
+- [x] `handle_event` 返回语义正确（快捷键在 App 层先消费；`handle_event` 页面层 W-3 恒 `false`）
+- [x] 单测：InputEvent 转换 + 快捷键匹配（无需真实窗口；input.rs 12 条 + app.rs 17 条）
 
 ---
 
-### W-4 — Headless 后端（测试需要）
+### W-4 — Headless 后端（测试需要）（✅ 已完成 2026-08-29）
 
 **任务**：
 1. `headless_window.rs`：`HeadlessWindow: PlatformWindow`，`present` 保存像素 / 写 PNG
@@ -179,24 +187,28 @@ M-3（CSS 补全）与窗口化触碰**不同 crate**，无文件冲突：
 **架构点**：`default-features = false` 时无需 winit/softbuffer 编译（feature gate 在此兑现价值）。
 
 **退出条件**：
-- 无窗口环境跑通 `render_to_png`（`cargo test -p muskitty-shell --no-default-features` 全绿）
-- 输出 PNG 像素与 renderer 直接渲染一致
-- CI 可无窗口跑 shell 渲染测试
+- 无窗口环境跑通 `render_to_png`（`cargo test -p muskitty-shell --no-default-features` 全绿）✅
+- 输出 PNG 像素与 renderer 直接渲染一致 ✅（`tests/render_to_png.rs`：PNG 解码逐字节比对 `render_page` 直接渲染，含 scale=2）
+- CI 可无窗口跑 shell 渲染测试 ✅
+
+**实施记录**（3 commit：`070e013` / `25610a6` / `2c83e44`）：`HeadlessWindow` 无外部依赖类型可公开构造（`present` 保存最近帧 + `frame()` 访问 + `save_png`；`set_cursor`/`set_fullscreen` 用 `Cell` 内部可变性适配 trait 的 `&self`）；PNG 编码统一出口 `page::encode_png`（tiny-skia 升为 shell 正式依赖，类型仅在函数内部使用，pub 签名零外部类型，对齐 decoupling ADR）；`render_to_png(html, css, width, height, scale, path)` 走 `page::render_page` 全管线；`window_demo` 示例在 Cargo.toml 声明 `required-features = ["winit-backend"]`，`--no-default-features` 下 examples 跳过编译。
 
 ---
 
-### W-5 — 窗口状态管理（多标签）
+### W-5 — 窗口状态管理（多标签）（✅ 已完成 2026-08-29）
 
 **任务**：
 1. `app.rs` 升级为 `WebViewCollection`：多 WebView（每份 HTML+CSS+渲染状态）
 2. 标签切换：Ctrl+T 新建、Ctrl+W 关闭、Ctrl+1~9 / Ctrl+PageUp/Down 切换
 3. 脏位标记：`needs_repaint` / `close_scheduled`（Servo §1.7 延迟更新模式）
 
-**范围裁剪**：favicon 依赖 network + `<link rel=icon>`，**降级为占位**（无 network 接轨前意义有限）。
+**范围裁剪**：favicon 依赖 network + `<link rel=icon>`，**降级为占位**（无 network 接轨前意义有限）。✅ 按裁剪执行：标签栏可视化 UI（tab strip）不在本轮。
 
 **退出条件**：
-- 可创建/关闭多个标签，切换正确刷新
-- 快捷键处理经 `handle_event` 分层正确分发
+- 可创建/关闭多个标签，切换正确刷新 ✅（webview.rs 10 条集合单测 + 手工验证）
+- 快捷键处理经 `handle_event` 分层正确分发 ✅（dispatch_input 分层不变：shell 快捷键先于页面层）
+
+**实施记录**（4 commit：`a618c4e` / `9e5c3dc` / `ea99d22` / docs）：新增 `webview.rs`（不 feature 门控、零外部依赖）——`WebView`（内容 + 每标签渲染状态 pixels/布局状态 + `needs_repaint`/`close_scheduled` 脏位）与 `WebViewCollection`（`new_tab`/`close_active`/`flush_close`/`select_next`/`select_prev`/`select`，维护 `active` 不变量，active 变化自动标脏）；`ShortcutAction` 扩展 NewTab/CloseTab/NextTab/PrevTab/TabSelect(usize)，`Key` 增 PageUp/PageDown，`match_shortcut` 支持 Ctrl+T/W/1~9/PageUp/PageDown（公共条件 `control && !alt && !meta`，Shift 放行）；`App` 集合化（渲染管线只作用于 active 视图；`App::run` 入参成为 Ctrl+T 的默认内容）；延迟更新——shell 动作只标脏 + `request_repaint`，`RedrawRequested` 统一 `flush`（先移除待关闭标签，空则退出；active 脏或几何/scale 变化才重渲染；提交 active 帧）。全部标签关闭 = 退出事件循环。
 
 ---
 
@@ -243,4 +255,6 @@ cargo run -p muskitty-shell --example window_demo   # W-1 手工验证真窗口
 - [x] W-1 全部 6 个 commit + 收尾修订（设计决策：WinitWindow 私有化）
 - [x] 规划落地后同步 `goal.md`（加入窗口化并行轨道，穿插节奏已排布）
 - [x] M-3 与 W-1 的穿插节奏由用户在 `goal.md` 中排布
-- [ ] **W-2（DPI）启动**：与 M-3 CSS 补全并行穿插（见 goal.md 节奏表）
+- [x] **W-2（DPI）启动**：与 M-3 CSS 补全并行穿插（见 goal.md 节奏表）
+- [x] **W-3（输入）完成**：InputEvent 抽象 + 快捷键层 + 事件分发结构（见 §W-3 架构修正）
+- [x] **W-4（Headless 后端）完成**：`headless_window.rs` + `render_to_png` + 无窗口 CI 渲染测试（见 §W-4 实施记录）

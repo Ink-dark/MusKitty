@@ -1,29 +1,25 @@
 [package]
-name = "muskitty-shell"
+name = "muskitty-chrome"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 license = "Apache-2.0"
-description = "Browser shell: PlatformWindow abstraction + winit/softbuffer window + headless render"
+description = "MusKitty browser chrome window layer: self-drawn tab strip / toolbar / address bar composited with the page"
 repository = "https://github.com/Ink-dark/MusKitty"
 homepage = "https://github.com/Ink-dark/MusKitty"
-keywords = ["browser", "window", "shell", "rendering", "web"]
+keywords = ["browser", "chrome", "ui", "window", "rendering"]
 categories = ["rendering", "gui"]
 authors = ["MusCat / MusKitty Bit-Torch Community"]
 
 [features]
-# winit + softbuffer 真窗口后端（默认开启）。关闭后仅保留无头渲染
-# （HeadlessWindow / render_to_png），可用于无窗口环境的 CI 测试。
+# winit + softbuffer 真窗口后端（默认开启）。关闭后仅保留自绘 chrome 的
+# 纯函数层（model/paint/input/compositor）与无头渲染，可用于无窗口环境
+# 的 CI 测试（对齐 muskitty-shell 的 W-4 feature gate 模式）。
 default = ["winit-backend"]
 winit-backend = ["dep:winit", "dep:softbuffer"]
 
-# 二进制入口依赖 winit 后端；--no-default-features 时仅 lib（无头渲染）可编译。
-[[bin]]
-name = "muskitty-shell"
-path = "src/main.rs"
-required-features = ["winit-backend"]
-
 [dependencies]
+# 渲染管线（HTML+CSS → 像素；与 muskitty-shell 相同的输入侧依赖集）。
 muskitty-dom = { path = "../muskitty-dom", version = "0.2.0" }
 muskitty-cascade = { path = "../muskitty-cascade", version = "0.1.0" }
 muskitty-layout = { path = "../muskitty-layout", version = "0.1.0" }
@@ -31,13 +27,11 @@ muskitty-css = { path = "../muskitty-css", version = "0.6.0" }
 muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
 muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.2.0" }
 muskitty-renderer = { path = "../muskitty-renderer", version = "0.1.0" }
-# PNG 编码出口（render_to_png / HeadlessWindow::save_png，W-4）。tiny-skia
-# 类型不进入 pub API（只在 page::encode_png 内部使用），符合 decoupling ADR。
+# 过渡期复用 shell 的 page（渲染管线）/webview（标签状态）；D-7 迁移后移除。
+muskitty-shell = { path = "../muskitty-shell", version = "0.1.0" }
+# chrome 自绘（纯 Rust，与 renderer 同版本，避免树内重复版本）：
+# tiny-skia 画 chrome 像素；cosmic-text(+swash) 整形与提取文本轮廓。
 tiny-skia = "0.12"
+cosmic-text = "0.13"
 winit = { version = "0.30", optional = true }
 softbuffer = { version = "0.4", optional = true }
-
-# 真窗口示例依赖 winit 后端；--no-default-features 下跳过编译。
-[[example]]
-name = "window_demo"
-required-features = ["winit-backend"]

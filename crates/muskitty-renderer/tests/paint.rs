@@ -415,6 +415,53 @@ fn paint_border_only_emits_command() {
     }
 }
 
+#[test]
+fn paint_border_shorthand_emits_border() {
+    // M-3: `border:` 简写 → cascade 展开 → extract_border 端到端。
+    // 必须显式 px 宽度：无宽度时 parse_border_width 读不到 Dimension 而无边框
+    // （renderer 既有缺口，`border: solid red` 不绘制）。
+    let cmds = paint_pipeline(
+        "<div style=\"border: 2px solid black; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect {
+            background, border, ..
+        } => {
+            assert_eq!(*background, None);
+            let b = border.expect("border present");
+            assert_eq!(b.width, 2.0);
+            assert_eq!(b.color, Color::BLACK);
+            assert_eq!(b.style, BorderStyle::Solid);
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
+#[test]
+fn paint_border_shorthand_hex_color() {
+    // 简写带 hash 颜色：parse_border_color 走 hex 路径
+    let cmds = paint_pipeline(
+        "<div style=\"border: 3px dashed #ff8800; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert_eq!(cmds.len(), 1);
+    match &cmds[0] {
+        RenderCommand::Rect { border, .. } => {
+            let b = border.expect("border present");
+            assert_eq!(b.width, 3.0);
+            assert_eq!(b.color, Color::rgb(0xff, 0x88, 0x00));
+            assert_eq!(b.style, BorderStyle::Dashed);
+        }
+        _ => panic!("expected Rect"),
+    }
+}
+
 // —— B-2: rgb() / rgba() 颜色函数测试 ——
 
 #[test]
