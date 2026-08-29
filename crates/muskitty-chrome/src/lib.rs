@@ -31,3 +31,5 @@
 //! 下纯函数层 + 无头渲染照常编译测试（CI 无窗口可跑）。
 //!
 //! 规划见 `docs/plans/2026-08-29-chrome-window-layer.md`。
+
+pub mod chrome;
