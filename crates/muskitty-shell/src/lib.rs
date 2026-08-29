@@ -31,6 +31,7 @@
 pub mod headless_window;
 pub mod input;
 pub mod page;
+pub mod webview;
 pub mod window;
 
 /// winit + softbuffer 真窗口后端（`winit-backend` feature 门控）。

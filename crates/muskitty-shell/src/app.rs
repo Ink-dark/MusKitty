@@ -22,6 +22,7 @@ use muskitty_renderer::RenderOutput;
 
 use crate::input::{self, InputEvent, ShortcutAction};
 use crate::page::render_page;
+use crate::webview::WebViewCollection;
 use crate::window::PlatformWindow;
 use crate::winit_window::WinitWindow;
 
@@ -29,26 +30,21 @@ use crate::winit_window::WinitWindow;
 pub const DEFAULT_W: u32 = 800;
 pub const DEFAULT_H: u32 = 600;
 
-/// 应用状态：窗口 + 当前渲染结果。
+/// 应用状态：窗口 + 多标签 WebView 集合（W-5）。
 ///
-/// `pixels` / `width` / `height` 为最近一次渲染的 RGBA 输出（物理分辨率，
-/// `round(逻辑 × scale)`，present 用）；`logical_width` / `logical_height` /
-/// `scale` 为最近一次渲染的布局状态（脏检查用，避免每帧全量渲染）。
+/// 渲染状态（pixels / 布局状态）从 `App` 上移到每份
+/// [`crate::webview::WebView`]（每标签一份）；`App` 持有
+/// [`WebViewCollection`] 并只作用于 active 标签。`App::run` 传入的
+/// 页面内容作为**新建标签的默认内容**。
 pub struct App {
     window: Option<Rc<Window>>,
     winit_window: Option<WinitWindow>,
-    pixels: Vec<u8>,
-    width: u32,
-    height: u32,
-    logical_width: u32,
-    logical_height: u32,
-    scale: f32,
+    /// 多标签集合（W-5）；渲染管线只作用于 active 视图。
+    views: WebViewCollection,
     /// 当前修饰键状态（由 `ModifiersChanged` 更新；winit 输入事件本身不带）。
     modifiers: input::Modifiers,
     /// 最后已知光标位置（逻辑 px；winit 的 MouseInput/MouseWheel 不带位置）。
     cursor_position: (f32, f32),
-    html: &'static str,
-    css: &'static str,
 }
 
 impl App {
@@ -57,16 +53,9 @@ impl App {
         Self {
             window: None,
             winit_window: None,
-            pixels: Vec::new(),
-            width: 0,
-            height: 0,
-            logical_width: 0,
-            logical_height: 0,
-            scale: 1.0,
+            views: WebViewCollection::new(html, css),
             modifiers: input::Modifiers::default(),
             cursor_position: (0.0, 0.0),
-            html,
-            css,
         }
     }
 
@@ -80,39 +69,46 @@ impl App {
         event_loop.run_app(&mut app).expect("run app");
     }
 
-    /// 以逻辑尺寸 + scale 重新渲染页面，结果存入 `pixels`（物理分辨率）。
+    /// 以逻辑尺寸 + scale 重新渲染 **active 标签**（W-5：每标签各持
+    /// 渲染状态），结果存入该视图（物理分辨率）。
     fn render_at(&mut self, logical_width: u32, logical_height: u32, scale: f32) {
         // 布局用逻辑尺寸（CSS px），栅格化按 scale 输出物理分辨率（W-2）。
-        let out = render_page(self.html, self.css, logical_width, logical_height, scale);
+        let (html, css) = {
+            let view = self.views.active_mut();
+            (view.html, view.css)
+        };
+        let out = render_page(html, css, logical_width, logical_height, scale);
         if let RenderOutput::Pixels {
             width,
             height,
             data,
         } = out
         {
-            self.logical_width = logical_width;
-            self.logical_height = logical_height;
-            self.scale = scale;
-            self.width = width;
-            self.height = height;
-            self.pixels = data;
+            self.views.active_mut().store_render(
+                data,
+                width,
+                height,
+                logical_width,
+                logical_height,
+                scale,
+            );
         }
     }
 
-    /// 提交当前像素到窗口（无窗口时 no-op）。
+    /// 提交 active 标签的最近一帧到窗口（无窗口时 no-op）。
     fn present_current(&mut self) {
         if let Some(ww) = &mut self.winit_window {
-            // present 用渲染输出的物理尺寸（self.width/height）。
-            ww.present(&self.pixels, self.width, self.height);
+            let (pixels, width, height) = self.views.active().frame();
+            ww.present(pixels, width, height);
         }
     }
 
-    /// 当前 HiDPI scale（无窗口时回退到最近渲染的 scale）。
+    /// 当前 HiDPI scale（无窗口时回退到 active 视图最近渲染的 scale）。
     fn hidpi_scale(&self) -> f32 {
         self.winit_window
             .as_ref()
             .map(|w| w.hidpi_scale_factor())
-            .unwrap_or(self.scale)
+            .unwrap_or_else(|| self.views.active().layout_state().2)
     }
 
     /// 强制重新 parse→layout→render（绕过脏检查）并提交——Ctrl+R。
@@ -290,7 +286,7 @@ impl ApplicationHandler for App {
                     }
                     None => return,
                 };
-                if (w, h, scale) != (self.logical_width, self.logical_height, self.scale) {
+                if (w, h, scale) != self.views.active().layout_state() {
                     self.render_at(w, h, scale);
                 }
                 self.present_current();
