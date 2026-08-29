@@ -28,6 +28,7 @@
 //!
 //! 规划见 `docs/plans/2026-08-23-windowing.md`。
 
+pub mod headless_window;
 pub mod input;
 pub mod page;
 pub mod window;
