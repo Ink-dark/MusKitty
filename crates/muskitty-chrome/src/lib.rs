@@ -33,3 +33,4 @@
 //! 规划见 `docs/plans/2026-08-29-chrome-window-layer.md`。
 
 pub mod chrome;
+pub mod compositor;
