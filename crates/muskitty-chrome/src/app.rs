@@ -19,8 +19,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{Window, WindowId};
 
-use muskitty_shell::input::{self, InputEvent, Key, ShortcutAction};
-use muskitty_shell::webview::WebViewCollection;
+use crate::shortcut::{self, InputEvent, Key, ShortcutAction};
+use crate::webview::WebViewCollection;
 
 use crate::chrome::input::{apply_hover, apply_key, apply_mouse, ChromeEffect, ChromeKey};
 use crate::chrome::model::{chrome_height, layout_chrome, ChromeRects, ChromeState};
@@ -95,7 +95,7 @@ pub struct App {
     rects: ChromeRects,
     assets: ChromeAssets,
     /// 当前修饰键状态（winit 输入事件本身不带）。
-    modifiers: input::Modifiers,
+    modifiers: shortcut::Modifiers,
     /// 最后已知光标位置（物理 px；chrome 命中测试矩形同为物理坐标系。
     /// 页面层逻辑坐标转换待页面命中测试接入时再做）。
     cursor: (f32, f32),
@@ -136,7 +136,7 @@ impl App {
             chrome: ChromeState::default(),
             rects: layout_chrome(1, 1, 1.0, 1, &ChromeState::default()),
             assets: ChromeAssets::new(),
-            modifiers: input::Modifiers::default(),
+            modifiers: shortcut::Modifiers::default(),
             cursor: (0.0, 0.0),
             source: None,
             source_tab: 0,
@@ -148,7 +148,7 @@ impl App {
     pub fn with_source_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let html = std::fs::read_to_string(path)?;
         let mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
-        let css = muskitty_shell::page::extract_inline_style(&html);
+        let css = crate::page::extract_inline_style(&html);
         let mut app = Self::new("", "");
         {
             let view = app.views.active_mut();
@@ -193,7 +193,7 @@ impl App {
         if let Some(src) = self.source.as_mut() {
             src.mtime = mtime;
         }
-        let css = muskitty_shell::page::extract_inline_style(&html);
+        let css = crate::page::extract_inline_style(&html);
         let title = std::path::Path::new(&path)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned());
@@ -259,7 +259,7 @@ impl App {
         if dirty {
             let out = {
                 let a = self.views.active();
-                muskitty_shell::page::render_page(&a.html, &a.css, vw, vh, scale)
+                crate::page::render_page(&a.html, &a.css, vw, vh, scale)
             };
             if let muskitty_renderer::RenderOutput::Pixels {
                 width,
@@ -353,7 +353,7 @@ impl App {
             key,
             modifiers: self.modifiers,
         };
-        if let Some(action) = input::match_shortcut(&ev) {
+        if let Some(action) = shortcut::match_shortcut(&ev) {
             match action {
                 ShortcutAction::Close => event_loop.exit(),
                 ShortcutAction::Reload => self.after_tab_change(),
@@ -398,7 +398,7 @@ impl App {
     }
 }
 
-/// winit 逻辑键 → shell [`Key`](input::Key)（含 chrome 地址栏需要的
+/// winit 逻辑键 → shell [`Key`](shortcut::Key)（含 chrome 地址栏需要的
 /// Backspace / Enter；两者不参与快捷键匹配）。
 fn key_from_winit(key: &WinitKey) -> Key {
     match key {
@@ -452,7 +452,7 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::ModifiersChanged(m) => {
                 let s = m.state();
-                self.modifiers = input::Modifiers {
+                self.modifiers = shortcut::Modifiers {
                     control: s.control_key(),
                     shift: s.shift_key(),
                     alt: s.alt_key(),

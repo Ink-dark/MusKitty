@@ -1,4 +1,4 @@
-//! 输入事件抽象（W-3）。
+//! 输入事件抽象与 shell 快捷键（W-3，自 muskitty-shell 迁入 D-7）。
 //!
 //! 定义与窗口后端无关的输入事件类型（[`InputEvent`] / [`Key`] /
 //! [`Modifiers`] / [`MouseButton`] / [`TouchPhase`]）与 shell 快捷键匹配
@@ -155,8 +155,9 @@ pub enum InputEvent {
 
 /// Shell 快捷键动作。
 ///
-/// 由 [`match_shortcut`] 匹配产生，在 `crate::app::App::dispatch_input`
-/// 中执行（事件分层的第一层：shell 快捷键先于页面层）。
+/// 由 [`match_shortcut`] 匹配产生，在 `crate::app::App` 的事件分发中
+/// 执行（事件分层第一层：shell 快捷键先于页面层；自 muskitty-shell
+/// 迁入，D-7）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShortcutAction {
     /// 关闭窗口（Esc）。
