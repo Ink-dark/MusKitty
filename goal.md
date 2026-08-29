@@ -8,7 +8,7 @@
 ## 当前阶段定位
 
 - **主线**：M-3 CSS 补全 — batch 1（border 简写 + media 视口接线）✅ 已完成；@layer 排序（audit B8）已完整实现无需再做；余项 revert/revert-layer 真语义（B7）、background-image、方向性 border、outline 按需求裁剪延后（原因见 PROGRESS.md item 15）。按渲染真实页面的需求驱动裁剪范围。
-- **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2 ✅）→ 输入（W-3 ✅）→ Headless（W-4）→ 多标签（W-5）。
+- **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2 ✅）→ 输入（W-3 ✅）→ Headless（W-4 📋 已规划，待启动）→ 多标签（W-5）。
 - **中期主线**：M-1 网络接轨 / M-2 交互基础排在 M-3 之后；inline formatting context 独立远期 Phase。
 
 ## 穿插节奏（双轨并行）
@@ -89,6 +89,27 @@
 - [x] `cargo check -p muskitty-shell --no-default-features` 无头仍可编译
 - [x] 单测：InputEvent 转换 + 快捷键匹配（Esc→Close、Ctrl+R→Reload、非快捷键→None），无需真实窗口
 - [x] 手工验证：`cargo run -p muskitty-shell` Esc 关窗、Ctrl+R 重渲染（人工执行）
+
+### 并行轨道：W-4 Headless 后端（📋 已规划，待启动）
+
+**目标**：`headless_window.rs` 无窗口 `PlatformWindow` 实现 + `render_to_png` 便捷函数，无窗口环境（CI）可跑 shell 渲染测试。feature gate 在此兑现价值——`default-features = false`（`--no-default-features`）时无 winit/softbuffer 也能编译。规划源：[docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md) §W-4。
+
+**Commit 序列**：
+
+- [ ] C-1 `[shell]` `headless_window.rs`：`HeadlessWindow: PlatformWindow`，`present` 保存像素 / 写 PNG（无参构造，演示直接构造 `PlatformWindow` 的用例从 W-1 私有化迁到此处，W-1 收尾修订预留）
+- [ ] C-2 `[shell]` lib 顶层 `render_to_png(html, css, path)` 便捷函数（走 `page::render_page` 全管线 → 编码 PNG）
+- [ ] C-3 `[shell]` 测试集成：无窗口环境渲染测试（输出 PNG 像素与 renderer 直接渲染一致）
+
+**架构点**：`HeadlessWindow` 可无参构造（相对 `WinitWindow` 构造参数含 winit 类型必须 `pub(crate)`）；`present` 仍走裸像素 `(data, width, height)`（RGBA），PNG 编码在 shell 侧（或复用 renderer 的 encode）。
+
+**退出条件（全部满足才可 commit）**：
+
+- [ ] `cargo check --workspace` / `cargo test --workspace` 通过
+- [ ] `cargo fmt --all -- --check` 通过
+- [ ] `cargo clippy --all-targets -- -D warnings` 零警告
+- [ ] `cargo check -p muskitty-shell --no-default-features` 无头可编译（feature gate 兑现）
+- [ ] 无窗口环境跑通 `render_to_png`；输出 PNG 像素与 renderer 直接渲染一致
+- [ ] CI 可无窗口跑 shell 渲染测试
 
 ### 主线：M-3 CSS 补全（穿插推进）
 
