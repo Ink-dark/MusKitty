@@ -97,6 +97,32 @@ pub(crate) fn extract_inline_style(html: &str) -> String {
     css
 }
 
+/// 把 RGBA8 像素（行长 = `width * 4`）编码为 PNG。
+///
+/// shell 侧的 PNG 出口（[`crate::render_to_png`] /
+/// `HeadlessWindow::save_png`），后端与 renderer 一致（tiny-skia）。
+/// tiny-skia 类型只在本函数内部使用，不出现在 pub 签名（对齐
+/// decoupling ADR）。
+pub(crate) fn encode_png(
+    data: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let Some(mut pixmap) = tiny_skia::Pixmap::new(width, height) else {
+        return Err(format!("encode_png: invalid dimensions {width}x{height}").into());
+    };
+    let expected = data.len();
+    let buf_len = pixmap.data_mut().len();
+    if expected != buf_len {
+        return Err(format!(
+            "encode_png: data length {expected} does not match {width}x{height} RGBA buffer ({buf_len})"
+        )
+        .into());
+    }
+    pixmap.data_mut().copy_from_slice(data);
+    Ok(pixmap.encode_png()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

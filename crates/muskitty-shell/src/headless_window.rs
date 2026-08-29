@@ -2,11 +2,11 @@
 //!
 //! [`HeadlessWindow`] 是 [`PlatformWindow`] 的无窗口实现：没有真实 OS
 //! 窗口，[`present`](PlatformWindow::present) 把一帧像素保存在内存中，
-//! 供测试断言；PNG 编码走 lib 顶层的 [`crate::render_to_png`] 便捷函数
-//! （W-4 C-2）。用途：无窗口环境（CI）跑 shell 渲染测试，以及直接构造
-//! `PlatformWindow` 的演示用例（W-1 收尾修订迁至此处——`WinitWindow`
-//! 构造参数含 winit 类型必须 `pub(crate)`，而 `HeadlessWindow` 无外部
-//! 依赖类型，可公开构造）。
+//! 可经 [`save_png`](Self::save_png) 编码为 PNG；无管线便捷入口见
+//! [`crate::render_to_png`]。用途：无窗口环境（CI）跑 shell 渲染测试，
+//! 以及直接构造 `PlatformWindow` 的演示用例（W-1 收尾修订迁至此处——
+//! `WinitWindow` 构造参数含 winit 类型必须 `pub(crate)`，而
+//! `HeadlessWindow` 无外部依赖类型，可公开构造）。
 //!
 //! 本模块零外部依赖类型，`--no-default-features` 下照常编译（对齐
 //! `docs/decisions/2026-08-16-external-dependency-decoupling.md`）。
@@ -50,6 +50,22 @@ impl HeadlessWindow {
     /// 最近一帧像素 `(data, width, height)`（RGBA8），未提交过帧则为 `None`。
     pub fn frame(&self) -> Option<(&[u8], u32, u32)> {
         self.frame.as_ref().map(|(d, w, h)| (d.as_slice(), *w, *h))
+    }
+
+    /// 把最近一帧编码为 PNG 并写入 `path`。
+    ///
+    /// 编码复用 shell 侧 [`crate::page::encode_png`]（tiny-skia 后端与
+    /// renderer 一致）。未提交过帧时报错。
+    pub fn save_png<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some((data, width, height)) = self.frame.as_ref() else {
+            return Err("HeadlessWindow: no frame presented yet".into());
+        };
+        let png = crate::page::encode_png(data, *width, *height)?;
+        std::fs::write(path, png)?;
+        Ok(())
     }
 }
 
@@ -128,5 +144,28 @@ mod tests {
             position: (0.0, 0.0),
             modifiers: Default::default(),
         }));
+    }
+
+    #[test]
+    fn save_png_writes_decodable_png() {
+        let mut w = HeadlessWindow::new(2, 1);
+        w.present(&[255, 0, 0, 255, 255, 255, 255, 255], 2, 1);
+
+        let path = std::env::temp_dir().join("muskitty_headless_save_png_test.png");
+        w.save_png(&path).expect("save png");
+
+        // 解码回读：尺寸与像素一致（tiny-skia Pixmap 数据即 RGBA8）。
+        let pixmap = tiny_skia::Pixmap::load_png(&path).expect("read png");
+        assert_eq!((pixmap.width(), pixmap.height()), (2, 1));
+        assert_eq!(pixmap.data(), &[255u8, 0, 0, 255, 255, 255, 255, 255][..]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_png_without_frame_errors() {
+        let w = HeadlessWindow::new(2, 1);
+        let path = std::env::temp_dir().join("muskitty_headless_no_frame.png");
+        assert!(w.save_png(&path).is_err());
+        assert!(!path.exists());
     }
 }

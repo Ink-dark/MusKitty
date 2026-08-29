@@ -45,3 +45,34 @@ pub(crate) mod winit_window;
 /// 应用入口（事件循环 + 窗口生命周期，`winit-backend` feature 门控）。
 #[cfg(feature = "winit-backend")]
 pub mod app;
+
+/// 渲染 HTML + CSS 到 PNG 文件（无窗口便捷入口，W-4）。
+///
+/// 走 [`page::render_page`] 全管线（HTML→DOM→CSS→cascade→layout→
+/// paint→render）得到 RGBA 像素，再编码为 PNG 写入 `path`。无窗口环境
+/// （CI）的渲染出口；像素级断言见 [`page::render_page`] 单测与 W-4 C-3
+/// 一致性测试。
+///
+/// `width` / `height` 为逻辑画布尺寸（CSS px），`scale` 为 HiDPI 缩放
+/// 因子（物理分辨率 = 逻辑 × scale，见 [`page::render_page`] 文档）。
+pub fn render_to_png(
+    html: &str,
+    css: &str,
+    width: u32,
+    height: u32,
+    scale: f32,
+    path: impl AsRef<std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = page::render_page(html, css, width, height, scale);
+    let muskitty_renderer::RenderOutput::Pixels {
+        width,
+        height,
+        data,
+    } = output
+    else {
+        return Err("render_page: expected RenderOutput::Pixels".into());
+    };
+    let png = page::encode_png(&data, width, height)?;
+    std::fs::write(path, png)?;
+    Ok(())
+}

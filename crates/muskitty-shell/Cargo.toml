@@ -31,10 +31,13 @@ muskitty-css = { path = "../muskitty-css", version = "0.6.0" }
 muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
 muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.2.0" }
 muskitty-renderer = { path = "../muskitty-renderer", version = "0.1.0" }
+# PNG 编码出口（render_to_png / HeadlessWindow::save_png，W-4）。tiny-skia
+# 类型不进入 pub API（只在 page::encode_png 内部使用），符合 decoupling ADR。
+tiny-skia = "0.12"
 winit = { version = "0.30", optional = true }
 softbuffer = { version = "0.4", optional = true }
 
-[dev-dependencies]
-# 仅 example/测试用：把 RenderOutput::Pixels 编码为 PNG（与 renderer 内部同一
-# 后端，便于对照）。dev-deps 不进入 pub API，符合 decoupling ADR。
-tiny-skia = "0.12"
+# 真窗口示例依赖 winit 后端；--no-default-features 下跳过编译。
+[[example]]
+name = "window_demo"
+required-features = ["winit-backend"]
