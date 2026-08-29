@@ -401,6 +401,8 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 17. ~~**W-5 多标签状态管理（WebViewCollection + 标签快捷键 + 脏位延迟更新）**~~ ✅ 已完成（2026-08-29）：`webview.rs`（不 feature 门控）——`WebView`（内容 + 每标签渲染状态 + `needs_repaint`/`close_scheduled` 脏位）+ `WebViewCollection`（新建/延迟关闭/切换，active 不变量，切换自动标脏，shell `a618c4e`）；标签快捷键 Ctrl+T/W/1~9/PageUp/PageDown（`ShortcutAction` 扩展 + `Key::PageUp/PageDown`，`match_shortcut` 5 条新单测，`dispatch_input` 接线，Ctrl+T 开默认内容、全部关闭退出，shell `9e5c3dc`）；脏位延迟更新——shell 动作只标脏 + request_repaint，`RedrawRequested` 统一 flush（关标签延迟移除/空则退出/脏或 stale 才重渲染，shell `ea99d22`）。范围裁剪：favicon 占位、tab strip 不做。窗口化轨道 W-1~W-5 全部完成。
 
+18. ~~**muskitty-chrome 窗口层（自绘 chrome，取代 shell）**~~ ✅ 已完成（2026-08-29）：决策见 ADR `2026-08-29-chrome-window-layer`（egui GPU 管线冲突 / iced 框架开销，选 Chromium Views 式自绘合成）。`chrome::model`（布局纯函数 9 测）/ `paint`（tiny-skia + cosmic-text 0.13 + swash outline，7 像素测）/ `input`（hit_test/apply 6 测）/ `compositor`（页面+chrome 同帧合成）/ `app`（winit + softbuffer、标签集合、脏位 flush）。功能：多标签快捷键、地址栏（Ctrl+L/输入/回车提交 → 占位页 + 标签标题）、**文件热重载**（mtime 200ms 轮询）、`render_window_to_png` 无窗口 CI 测试（62 条，`--no-default-features` 全绿）。真窗口验证（自动化 + 用户实测）发现并修复按键双发（漏 Pressed 过滤）。`muskitty-shell` 退役删除（`84b07a4`，git rename 保留历史），W-1~W-5 语义由 chrome 承接。
+
 ## Phase 3 (Layout 层) — 已完成
 
 **时间**：2026-07-23 → 2026-08-01
