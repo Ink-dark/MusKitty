@@ -32,9 +32,9 @@ pub struct Modifiers {
 
 /// 按键（当前最小集）。
 ///
-/// 只含快捷键匹配需要的按键：`Escape` 与文本输入字符（[`Character`]）。
-/// 其余 Named 键（Enter / Tab / Home 等）统一归 [`Other`]，延后到
-/// 多标签快捷键（W-5）再扩展——提前穷举违反 Simplicity（当前无消费者）。
+/// 只含快捷键匹配需要的按键：`Escape`、翻页键（标签前后切换）、
+/// 文本输入字符（[`Character`]）。其余 Named 键（Enter / Tab / Home 等）
+/// 统一归 [`Other`]——提前穷举违反 Simplicity（当前无消费者）。
 ///
 /// [`Character`]: Key::Character
 /// [`Other`]: Key::Other
@@ -42,9 +42,13 @@ pub struct Modifiers {
 pub enum Key {
     /// Esc 键。
     Escape,
+    /// Page Up 键（Ctrl+PageUp → 上一个标签）。
+    PageUp,
+    /// Page Down 键（Ctrl+PageDown → 下一个标签）。
+    PageDown,
     /// 文本输入型字符。取 winit `Key::Character` 的首字符；空串归 [`Other`]。
     Character(char),
-    /// 已识别但非快捷键相关（Named 非 Escape / Unidentified / Dead / 空字符）。
+    /// 已识别但非快捷键相关（Named 非 Escape/PageUp/PageDown / Unidentified / Dead / 空字符）。
     Other,
 }
 
@@ -155,6 +159,16 @@ pub enum ShortcutAction {
     Close,
     /// 重新加载页面（Ctrl+R）——重新 parse→layout→render。
     Reload,
+    /// 新建标签（Ctrl+T）。
+    NewTab,
+    /// 关闭当前标签（Ctrl+W）。
+    CloseTab,
+    /// 切到下一个标签（Ctrl+PageDown）。
+    NextTab,
+    /// 切到上一个标签（Ctrl+PageUp）。
+    PrevTab,
+    /// 切到第 `n` 个标签（0-based；Ctrl+1~9 → `TabSelect(0..=8)`）。
+    TabSelect(usize),
 }
 
 /// Shell 快捷键匹配（纯函数，无窗口依赖）。
@@ -164,6 +178,14 @@ pub enum ShortcutAction {
 /// - `KeyDown { Character('r'|'R'), control && !alt && !meta }` →
 ///   [`ShortcutAction::Reload`]（允许 Shift，即 Ctrl+Shift+R 也刷新；
 ///   Alt/Meta 组合不匹配）；
+/// - `KeyDown { Character('t'|'T'), control && !alt && !meta }` →
+///   [`ShortcutAction::NewTab`]；
+/// - `KeyDown { Character('w'|'W'), control && !alt && !meta }` →
+///   [`ShortcutAction::CloseTab`]；
+/// - `KeyDown { Character('1'..='9'), control && !alt && !meta }` →
+///   [`ShortcutAction::TabSelect`]（0-based；Shift+数字产出其他字符，自然不匹配）；
+/// - `KeyDown { PageUp/PageDown, control && !alt && !meta }` →
+///   [`ShortcutAction::PrevTab`] / [`ShortcutAction::NextTab`]；
 /// - 其余 → `None`。
 ///
 /// 合成事件（`is_synthetic`）与按住重复（`repeat`）的过滤由调用方
@@ -172,11 +194,19 @@ pub fn match_shortcut(event: &InputEvent) -> Option<ShortcutAction> {
     let InputEvent::KeyDown { key, modifiers } = event else {
         return None;
     };
+    // Ctrl 系快捷键公共条件：Ctrl 按下、Alt/Meta 不按下（Shift 放行，
+    // 与 Chrome/常见编辑器一致；Shift+数字产出其他字符自然不匹配）。
+    let ctrl = modifiers.control && !modifiers.alt && !modifiers.meta;
     match key {
         Key::Escape => Some(ShortcutAction::Close),
-        Key::Character('r' | 'R') if modifiers.control && !modifiers.alt && !modifiers.meta => {
-            Some(ShortcutAction::Reload)
+        Key::Character('r' | 'R') if ctrl => Some(ShortcutAction::Reload),
+        Key::Character('t' | 'T') if ctrl => Some(ShortcutAction::NewTab),
+        Key::Character('w' | 'W') if ctrl => Some(ShortcutAction::CloseTab),
+        Key::Character(c @ '1'..='9') if ctrl => {
+            Some(ShortcutAction::TabSelect((*c as u8 - b'1') as usize))
         }
+        Key::PageUp if ctrl => Some(ShortcutAction::PrevTab),
+        Key::PageDown if ctrl => Some(ShortcutAction::NextTab),
         _ => None,
     }
 }
@@ -314,5 +344,85 @@ mod tests {
             },
         };
         assert_eq!(match_shortcut(&ev), None);
+    }
+
+    fn key_down(key: Key, modifiers: Modifiers) -> InputEvent {
+        InputEvent::KeyDown { key, modifiers }
+    }
+
+    fn ctrl() -> Modifiers {
+        Modifiers {
+            control: true,
+            ..Modifiers::default()
+        }
+    }
+
+    #[test]
+    fn match_shortcut_ctrl_t_is_new_tab() {
+        assert_eq!(
+            match_shortcut(&key_down(Key::Character('t'), ctrl())),
+            Some(ShortcutAction::NewTab)
+        );
+        assert_eq!(
+            match_shortcut(&key_down(Key::Character('T'), ctrl())),
+            Some(ShortcutAction::NewTab)
+        );
+    }
+
+    #[test]
+    fn match_shortcut_ctrl_w_is_close_tab() {
+        assert_eq!(
+            match_shortcut(&key_down(Key::Character('w'), ctrl())),
+            Some(ShortcutAction::CloseTab)
+        );
+    }
+
+    #[test]
+    fn match_shortcut_ctrl_digits_select_tab() {
+        assert_eq!(
+            match_shortcut(&key_down(Key::Character('1'), ctrl())),
+            Some(ShortcutAction::TabSelect(0))
+        );
+        assert_eq!(
+            match_shortcut(&key_down(Key::Character('9'), ctrl())),
+            Some(ShortcutAction::TabSelect(8))
+        );
+        // 无 Ctrl：不匹配。
+        assert_eq!(
+            match_shortcut(&key_down(Key::Character('1'), Modifiers::default())),
+            None
+        );
+    }
+
+    #[test]
+    fn match_shortcut_ctrl_page_keys_switch_tabs() {
+        assert_eq!(
+            match_shortcut(&key_down(Key::PageUp, ctrl())),
+            Some(ShortcutAction::PrevTab)
+        );
+        assert_eq!(
+            match_shortcut(&key_down(Key::PageDown, ctrl())),
+            Some(ShortcutAction::NextTab)
+        );
+        // Alt/Meta 组合不匹配。
+        assert_eq!(
+            match_shortcut(&key_down(
+                Key::PageDown,
+                Modifiers {
+                    control: true,
+                    alt: true,
+                    ..Modifiers::default()
+                }
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn match_shortcut_page_keys_without_ctrl_is_none() {
+        assert_eq!(
+            match_shortcut(&key_down(Key::PageUp, Modifiers::default())),
+            None
+        );
     }
 }

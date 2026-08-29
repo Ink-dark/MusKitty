@@ -41,6 +41,10 @@ pub struct App {
     winit_window: Option<WinitWindow>,
     /// 多标签集合（W-5）；渲染管线只作用于 active 视图。
     views: WebViewCollection,
+    /// 新建标签的默认内容（`App::run` 的入参；当前无加载器，Ctrl+T
+    /// 打开同内容新标签）。
+    default_html: &'static str,
+    default_css: &'static str,
     /// 当前修饰键状态（由 `ModifiersChanged` 更新；winit 输入事件本身不带）。
     modifiers: input::Modifiers,
     /// 最后已知光标位置（逻辑 px；winit 的 MouseInput/MouseWheel 不带位置）。
@@ -54,6 +58,8 @@ impl App {
             window: None,
             winit_window: None,
             views: WebViewCollection::new(html, css),
+            default_html: html,
+            default_css: css,
             modifiers: input::Modifiers::default(),
             cursor_position: (0.0, 0.0),
         }
@@ -124,12 +130,44 @@ impl App {
         self.present_current();
     }
 
-    /// 事件分层（W-3）：先 shell 快捷键（Esc 关闭 / Ctrl+R 刷新），
-    /// 未消费才转页面层（[`PlatformWindow::handle_event`]）。
+    /// 标签集合变更（新建/关闭/切换）后按当前窗口几何重渲染 active
+    /// 并提交；集合空（全部标签关闭）则退出事件循环。
+    fn refresh_active(&mut self, event_loop: &ActiveEventLoop) {
+        if self.views.is_empty() {
+            event_loop.exit();
+            return;
+        }
+        self.reload();
+    }
+
+    /// 事件分层（W-3/W-5）：先 shell 快捷键（Esc 关闭 / Ctrl+R 刷新 /
+    /// 标签管理），未消费才转页面层（[`PlatformWindow::handle_event`]）。
     fn dispatch_input(&mut self, event_loop: &ActiveEventLoop, event: InputEvent) {
         match input::match_shortcut(&event) {
             Some(ShortcutAction::Close) => event_loop.exit(),
             Some(ShortcutAction::Reload) => self.reload(),
+            Some(ShortcutAction::NewTab) => {
+                self.views.new_tab(self.default_html, self.default_css);
+                self.refresh_active(event_loop);
+            }
+            Some(ShortcutAction::CloseTab) => {
+                self.views.close_active();
+                // C-3 起改为延迟 flush；当前立即移除以维持可观察行为。
+                self.views.flush_close();
+                self.refresh_active(event_loop);
+            }
+            Some(ShortcutAction::NextTab) => {
+                self.views.select_next();
+                self.refresh_active(event_loop);
+            }
+            Some(ShortcutAction::PrevTab) => {
+                self.views.select_prev();
+                self.refresh_active(event_loop);
+            }
+            Some(ShortcutAction::TabSelect(n)) => {
+                self.views.select(n);
+                self.refresh_active(event_loop);
+            }
             None => {
                 // W-3 无页面命中测试：handle_event 恒返回 false，仅立分发结构。
                 if let Some(ww) = &mut self.winit_window {
@@ -151,10 +189,13 @@ pub(crate) fn modifiers_from_winit(m: &Modifiers) -> input::Modifiers {
     }
 }
 
-/// winit 逻辑键 → shell [`Key`](input::Key)（当前最小集：Escape / 字符 / Other）。
+/// winit 逻辑键 → shell [`Key`](input::Key)
+/// （当前最小集：Escape / PageUp / PageDown / 字符 / Other）。
 pub(crate) fn key_from_winit(key: &WinitKey) -> input::Key {
     match key {
         WinitKey::Named(NamedKey::Escape) => input::Key::Escape,
+        WinitKey::Named(NamedKey::PageUp) => input::Key::PageUp,
+        WinitKey::Named(NamedKey::PageDown) => input::Key::PageDown,
         WinitKey::Character(s) => s
             .chars()
             .next()
