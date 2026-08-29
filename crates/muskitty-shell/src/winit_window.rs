@@ -132,6 +132,10 @@ impl PlatformWindow for WinitWindow {
         buffer.present().expect("present frame");
     }
 
+    fn set_title(&self, title: &str) {
+        self.window.set_title(title);
+    }
+
     fn handle_event(&mut self, _event: InputEvent) -> bool {
         // W-3 无页面级命中测试：窗口后端不消费输入，返回 false 让上层
         // 继续分发（shell 快捷键已在 App::dispatch_input 先行处理）。

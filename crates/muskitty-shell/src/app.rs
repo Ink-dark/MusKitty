@@ -151,6 +151,15 @@ impl App {
             self.render_at(w, h, scale);
         }
         self.present_current();
+        // 标签状态最小反馈（无 tab strip）：标题栏显示当前标签序号/总数。
+        let title = format!(
+            "MusKitty — Tab {}/{}",
+            self.views.active_index() + 1,
+            self.views.len()
+        );
+        if let Some(ww) = &self.winit_window {
+            ww.set_title(&title);
+        }
     }
 
     /// 事件分层（W-3/W-5）：先 shell 快捷键（Esc 关闭 / Ctrl+R 刷新 /

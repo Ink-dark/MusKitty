@@ -107,6 +107,13 @@ pub trait PlatformWindow {
     /// 的 0RGB u32）并提交。
     fn present(&mut self, data: &[u8], width: u32, height: u32);
 
+    /// 设置窗口标题。
+    ///
+    /// W-5：无 tab strip 的最小标签状态反馈——App 在统一 flush 点把
+    /// 标签状态写入标题（如 `MusKitty — Tab 2/3`），快捷键是否生效可
+    /// 从标题栏观察。Headless 后端仅记录（供测试断言）。
+    fn set_title(&self, title: &str);
+
     /// 页面层输入入口：把已转成 [`InputEvent`] 的事件交给窗口/页面处理。
     ///
     /// 返回 `true` 表示页面消费了该事件（不应继续转发）；`false` 表示未消费。

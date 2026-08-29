@@ -13,7 +13,7 @@
 //! 规划见 `docs/plans/2026-08-23-windowing.md` §W-4。
 
 use crate::window::{Cursor, PlatformWindow, WindowGeometry};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 /// 无窗口 `PlatformWindow` 实现。
 ///
@@ -27,6 +27,8 @@ pub struct HeadlessWindow {
     scale: f32,
     cursor: Cell<Cursor>,
     fullscreen: Cell<bool>,
+    /// 最近一次设置的标题（无窗口可显示，记录供测试断言）。
+    title: RefCell<String>,
     /// 最近一帧 RGBA8 像素（行长 = `width * 4`）。
     frame: Option<(Vec<u8>, u32, u32)>,
 }
@@ -43,8 +45,14 @@ impl HeadlessWindow {
             scale: 1.0,
             cursor: Cell::new(Cursor::Default),
             fullscreen: Cell::new(false),
+            title: RefCell::new(String::new()),
             frame: None,
         }
+    }
+
+    /// 最近一次 [`PlatformWindow::set_title`] 设置的标题。
+    pub fn title(&self) -> String {
+        self.title.borrow().clone()
     }
 
     /// 最近一帧像素 `(data, width, height)`（RGBA8），未提交过帧则为 `None`。
@@ -98,6 +106,10 @@ impl PlatformWindow for HeadlessWindow {
         self.frame = Some((data.to_vec(), width, height));
     }
 
+    fn set_title(&self, title: &str) {
+        *self.title.borrow_mut() = title.to_string();
+    }
+
     fn handle_event(&mut self, _event: crate::input::InputEvent) -> bool {
         // W-3：无页面级命中测试，恒未消费。
         false
@@ -140,6 +152,8 @@ mod tests {
         w.request_repaint();
         w.set_cursor(Cursor::Pointer);
         w.set_fullscreen(true);
+        w.set_title("MusKitty — Tab 1/1");
+        assert_eq!(w.title(), "MusKitty — Tab 1/1");
         assert!(!w.handle_event(InputEvent::MouseMove {
             position: (0.0, 0.0),
             modifiers: Default::default(),
