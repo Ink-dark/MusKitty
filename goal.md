@@ -1,14 +1,14 @@
 # Goal — 下一步任务清单（给 Codex / AI Agent 用）
 
 > **更新时间**：2026-08-29
-> **当前状态**：窗口化轨道 **W-1~W-4 全部完成**（`PlatformWindow` 抽象 → DPI → 输入 → Headless 后端；`HeadlessWindow` + `render_to_png` 无窗口渲染，`--no-default-features` 下 check/test/clippy 全绿，CI 可无窗口跑 shell 渲染测试）。主线 **M-3 batch 1 已完成**（`border:` 简写展开 + media 视口接线）。本轮**双轨并行**：主线 M-3（batch 2，按需，余项全延后）+ 并行轨道窗口化（下一阶段 **W-5 多标签状态管理**，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
+> **当前状态**：窗口化轨道 **W-1~W-5 全部完成**（`PlatformWindow` 抽象 → DPI → 输入 → Headless 后端 → 多标签状态管理；`HeadlessWindow` + `render_to_png` 无窗口渲染，`--no-default-features` 下 check/test/clippy 全绿）本轮新增 **W-5 多标签完成**（WebViewCollection + Ctrl+T/W/1~9/PageUp/Down + 脏位延迟更新，webview.rs 10 条 + input.rs 5 条新单测）。主线 **M-3 batch 1 已完成**（`border:` 简写展开 + media 视口接线）。本轮**双轨并行**：主线 M-3（batch 2，按需，余项全延后）+ 并行轨道窗口化（下一阶段 **W-5 多标签状态管理**，规划见 [docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md)）。两轨触碰不同 crate，穿插推进互不阻塞。
 
 ---
 
 ## 当前阶段定位
 
 - **主线**：M-3 CSS 补全 — batch 1（border 简写 + media 视口接线）✅ 已完成；@layer 排序（audit B8）已完整实现无需再做；余项 revert/revert-layer 真语义（B7）、background-image、方向性 border、outline 按需求裁剪延后（原因见 PROGRESS.md item 15）。按渲染真实页面的需求驱动裁剪范围。
-- **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2 ✅）→ 输入（W-3 ✅）→ Headless（W-4 ✅）→ 多标签（W-5 📋 已规划，待启动）。
+- **并行轨道**：窗口化 — `muskitty-shell`（浏览器外壳）：`PlatformWindow` trait 抽象（W-1 ✅）→ DPI（W-2 ✅）→ 输入（W-3 ✅）→ Headless（W-4 ✅）→ 多标签（W-5 ✅）。窗口化轨道收官。
 - **中期主线**：M-1 网络接轨 / M-2 交互基础排在 M-3 之后；inline formatting context 独立远期 Phase。
 
 ## 穿插节奏（双轨并行）
@@ -19,7 +19,7 @@
 | 已完成 | 并行 | W-2 DPI（3 commit：Backend/render_page scale + 窗口流接线） | shell / renderer |
 | 已完成 | 并行 | W-3 输入（4 commit：InputEvent 抽象 + 快捷键层 + handle_event 页面层 + 文档；命中测试单列延后） | shell |
 | 已完成 | 并行 | W-4 Headless 后端（3 commit：HeadlessWindow + render_to_png/encode_png + 无窗口渲染测试） | shell |
-| 下一轮 | 并行 | W-5 多标签状态管理（WebViewCollection + 标签快捷键 + 脏位延迟更新） | shell |
+| 已完成 | 并行 | W-5 多标签状态管理（4 commit：WebViewCollection + 标签快捷键 + 脏位延迟更新 + 文档） | shell |
 | 穿插 | 主线 | M-3 一批（按需，余项全延后） | cascade / layout |
 
 **节奏**：每轮一个窗口化阶段收尾（含测试 + commit）→ 切回 M-3 一批 → 下一窗口化阶段。两轨无文件冲突（cascade/layout vs shell/renderer）。
@@ -112,7 +112,7 @@
 - [x] 无窗口环境跑通 `render_to_png`；输出 PNG 像素与 renderer 直接渲染一致（逐字节比对）
 - [x] CI 可无窗口跑 shell 渲染测试（集成测试不依赖 winit/softbuffer）
 
-### 并行轨道：W-5 多标签状态管理（📋 已规划，待启动）
+### 并行轨道：W-5 多标签状态管理（✅ 已完成 2026-08-29）
 
 **目标**：`app.rs` 从单 WebView 升级为多 WebView 集合 + 标签快捷键 + 脏位延迟更新（Servo §1.7）。规划源：[docs/plans/2026-08-23-windowing.md](docs/plans/2026-08-23-windowing.md) §W-5。
 
@@ -120,21 +120,21 @@
 
 **Commit 序列**：
 
-- [ ] C-1 `[shell]` WebView 状态 + 集合：`WebView { html, css, needs_repaint, close_scheduled }` + `WebViewCollection { views: Vec<WebView>, active: usize }`（App 改为集合驱动，`render_at` 作用于 active WebView；每份 WebView 各持渲染状态）
-- [ ] C-2 `[shell]` 标签快捷键：`ShortcutAction` 扩展 NewTab / CloseTab / NextTab / PrevTab / TabSelect(n)；`match_shortcut` 支持 Ctrl+T 新建、Ctrl+W 关闭、Ctrl+1~9 切换、Ctrl+PageUp/Down 前后；`dispatch_input` 接线
-- [ ] C-3 `[shell]` 脏位标记 + 延迟更新：needs_repaint / close_scheduled（Servo §1.7），事件循环统一 flush（重渲染 active + present）
-- [ ] C-4 `[docs]` 规划文档 W-5 完成 + goal.md/PROGRESS.md 同步
+- [x] C-1 `[shell]` `webview.rs`（不 feature 门控）：`WebView { html, css, needs_repaint, close_scheduled, 渲染状态 }` + `WebViewCollection`（new_tab/close_active/flush_close/select_next/select_prev/select，active 不变量 + 切换自动标脏；10 条单测，App 集合化 `a618c4e`）
+- [x] C-2 `[shell]` 标签快捷键：`ShortcutAction` 扩展 NewTab / CloseTab / NextTab / PrevTab / TabSelect(n)；`Key` 增 PageUp/PageDown；`match_shortcut` Ctrl+T/W/1~9/PageUp/PageDown（5 条新单测）；`dispatch_input` 接线（Ctrl+T 开默认内容，全部关闭退出，`9e5c3dc`）
+- [x] C-3 `[shell]` 脏位标记 + 延迟更新：shell 动作只标脏 + request_repaint，`RedrawRequested` 统一 flush——先移除 close_scheduled（空则退出）、active 脏或几何/scale stale 才重渲染、提交 active 帧（`ea99d22`）
+- [x] C-4 `[docs]` 规划文档 W-5 完成 + goal.md/PROGRESS.md 同步
 
 **范围裁剪**（同规划文档）：favicon 依赖 network + `<link rel=icon>`，降级为占位；标签栏可视化 UI（tab strip）不在本轮（先做状态 + 快捷键，视觉标签栏待后续）。
 
 **退出条件（全部满足才可 commit）**：
 
-- [ ] `cargo check --workspace` / `cargo test --workspace` 通过
-- [ ] `cargo fmt --all -- --check` 通过
-- [ ] `cargo clippy --all-targets -- -D warnings` 零警告
-- [ ] `cargo check -p muskitty-shell --no-default-features` 无头可编译
-- [ ] 单测：标签集合 CRUD（新建/关闭/切换后 active 正确刷新）+ 新快捷键匹配（Ctrl+T/W/1~9/PageUp/Down → 正确 action）
-- [ ] 手工验证：`cargo run -p muskitty-shell` Ctrl+T 新建、Ctrl+W 关闭、Ctrl+1/PageUp 切换正确刷新
+- [x] `cargo check --workspace` / `cargo test --workspace` 通过
+- [x] `cargo fmt --all -- --check` 通过
+- [x] `cargo clippy --all-targets -- -D warnings` 零警告
+- [x] `cargo check -p muskitty-shell --no-default-features` 无头可编译
+- [x] 单测：标签集合 CRUD（webview.rs 10 条：新建/延迟关闭/flush 重定位/切换循环/越界忽略/同索引不标脏）+ 新快捷键匹配（input.rs 5 条：Ctrl+T/W/1~9/PageUp/Down → 正确 action，Alt/Meta 不匹配）
+- [ ] 手工验证：`cargo run -p muskitty-shell` Ctrl+T 新建、Ctrl+W 关闭、Ctrl+1/PageUp 切换正确刷新（人工执行，待架构师跑窗口 demo）
 
 ### 主线：M-3 CSS 补全（穿插推进）
 

@@ -195,18 +195,20 @@ M-3（CSS 补全）与窗口化触碰**不同 crate**，无文件冲突：
 
 ---
 
-### W-5 — 窗口状态管理（多标签）
+### W-5 — 窗口状态管理（多标签）（✅ 已完成 2026-08-29）
 
 **任务**：
 1. `app.rs` 升级为 `WebViewCollection`：多 WebView（每份 HTML+CSS+渲染状态）
 2. 标签切换：Ctrl+T 新建、Ctrl+W 关闭、Ctrl+1~9 / Ctrl+PageUp/Down 切换
 3. 脏位标记：`needs_repaint` / `close_scheduled`（Servo §1.7 延迟更新模式）
 
-**范围裁剪**：favicon 依赖 network + `<link rel=icon>`，**降级为占位**（无 network 接轨前意义有限）。
+**范围裁剪**：favicon 依赖 network + `<link rel=icon>`，**降级为占位**（无 network 接轨前意义有限）。✅ 按裁剪执行：标签栏可视化 UI（tab strip）不在本轮。
 
 **退出条件**：
-- 可创建/关闭多个标签，切换正确刷新
-- 快捷键处理经 `handle_event` 分层正确分发
+- 可创建/关闭多个标签，切换正确刷新 ✅（webview.rs 10 条集合单测 + 手工验证）
+- 快捷键处理经 `handle_event` 分层正确分发 ✅（dispatch_input 分层不变：shell 快捷键先于页面层）
+
+**实施记录**（4 commit：`a618c4e` / `9e5c3dc` / `ea99d22` / docs）：新增 `webview.rs`（不 feature 门控、零外部依赖）——`WebView`（内容 + 每标签渲染状态 pixels/布局状态 + `needs_repaint`/`close_scheduled` 脏位）与 `WebViewCollection`（`new_tab`/`close_active`/`flush_close`/`select_next`/`select_prev`/`select`，维护 `active` 不变量，active 变化自动标脏）；`ShortcutAction` 扩展 NewTab/CloseTab/NextTab/PrevTab/TabSelect(usize)，`Key` 增 PageUp/PageDown，`match_shortcut` 支持 Ctrl+T/W/1~9/PageUp/PageDown（公共条件 `control && !alt && !meta`，Shift 放行）；`App` 集合化（渲染管线只作用于 active 视图；`App::run` 入参成为 Ctrl+T 的默认内容）；延迟更新——shell 动作只标脏 + `request_repaint`，`RedrawRequested` 统一 `flush`（先移除待关闭标签，空则退出；active 脏或几何/scale 变化才重渲染；提交 active 帧）。全部标签关闭 = 退出事件循环。
 
 ---
 

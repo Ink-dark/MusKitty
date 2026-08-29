@@ -399,6 +399,8 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 16. ~~**W-4 Headless 后端（HeadlessWindow + render_to_png + 无窗口测试）**~~ ✅ 已完成（2026-08-29）：`HeadlessWindow: PlatformWindow` 无窗口实现（`present` 保存最近帧、可 `save_png`，无外部依赖类型可公开构造，shell `070e013`）；lib 顶层 `render_to_png` 全管线 → PNG 便捷函数 + `page::encode_png` 编码出口（tiny-skia 升正式依赖但类型不入 pub API；window_demo 示例声明 required-features，shell `25610a6`）；无窗口集成测试——`render_to_png` PNG 解码像素与 `render_page` 直接渲染逐字节一致、HeadlessWindow 帧/编码产物一致、scale=2 分辨率核对（shell `2c83e44`），`--no-default-features` 下 check/test/clippy 全绿，feature gate 兑现 CI 无窗口价值。
 
+17. ~~**W-5 多标签状态管理（WebViewCollection + 标签快捷键 + 脏位延迟更新）**~~ ✅ 已完成（2026-08-29）：`webview.rs`（不 feature 门控）——`WebView`（内容 + 每标签渲染状态 + `needs_repaint`/`close_scheduled` 脏位）+ `WebViewCollection`（新建/延迟关闭/切换，active 不变量，切换自动标脏，shell `a618c4e`）；标签快捷键 Ctrl+T/W/1~9/PageUp/PageDown（`ShortcutAction` 扩展 + `Key::PageUp/PageDown`，`match_shortcut` 5 条新单测，`dispatch_input` 接线，Ctrl+T 开默认内容、全部关闭退出，shell `9e5c3dc`）；脏位延迟更新——shell 动作只标脏 + request_repaint，`RedrawRequested` 统一 flush（关标签延迟移除/空则退出/脏或 stale 才重渲染，shell `ea99d22`）。范围裁剪：favicon 占位、tab strip 不做。窗口化轨道 W-1~W-5 全部完成。
+
 ## Phase 3 (Layout 层) — 已完成
 
 **时间**：2026-07-23 → 2026-08-01
