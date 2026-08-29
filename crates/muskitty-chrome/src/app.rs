@@ -476,7 +476,9 @@ impl ApplicationHandler for App {
                 event,
                 is_synthetic,
                 ..
-            } if !is_synthetic && !event.repeat => {
+            } if !is_synthetic && !event.repeat && event.state == ElementState::Pressed => {
+                // 只吃按下：不过滤 Released 会让每次按键进两次字符
+                // （退格也删两次）。
                 let key = key_from_winit(&event.logical_key);
                 self.dispatch_key(event_loop, key);
             }
