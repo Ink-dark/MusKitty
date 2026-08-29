@@ -34,6 +34,7 @@
 
 pub mod chrome;
 pub mod compositor;
+pub mod headless;
 
 /// 浏览器窗口应用（winit 事件循环 + chrome 合成呈现，`winit-backend`
 /// feature 门控）。
