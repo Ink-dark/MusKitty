@@ -8,7 +8,9 @@
 //! 本模块仅在 `winit-backend` feature 下编译；纯函数部分
 //! （chrome::model/paint/input、compositor）无窗口可测。
 
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -28,6 +30,15 @@ use crate::compositor::compose_frame;
 /// 初始窗口尺寸（逻辑 px）。
 pub const DEFAULT_W: u32 = 1024;
 pub const DEFAULT_H: u32 = 768;
+
+/// 热重载轮询间隔（mtime 轮询；不引 notify 依赖，零 C 依赖约束）。
+pub const HOT_RELOAD_POLL: Duration = Duration::from_millis(200);
+
+/// 被监视的源文件（热重载）。
+struct SourceFile {
+    path: PathBuf,
+    mtime: Option<std::time::SystemTime>,
+}
 
 /// RGBA8 → softbuffer 0RGB u32（row-major，红在最低字节）。
 ///
@@ -88,6 +99,11 @@ pub struct App {
     /// 最后已知光标位置（物理 px；chrome 命中测试矩形同为物理坐标系。
     /// 页面层逻辑坐标转换待页面命中测试接入时再做）。
     cursor: (f32, f32),
+    /// 热重载源（`with_source_file` 模式才有；None = 内嵌 demo，不监视）。
+    source: Option<SourceFile>,
+    /// 源文件驱动的标签索引（v1 = 启动标签 0；无标签拖拽，仅受关闭影响，
+    /// 关闭后越界则停止重载）。
+    source_tab: usize,
 }
 
 /// Ctrl+T 新标签内容：大号 "Tab N"（可区分，切换可见）。
@@ -122,7 +138,76 @@ impl App {
             assets: ChromeAssets::new(),
             modifiers: input::Modifiers::default(),
             cursor: (0.0, 0.0),
+            source: None,
+            source_tab: 0,
         }
+    }
+
+    /// 文件模式：加载自包含 HTML 文件（含 `<style>`）为首标签并**监视
+    /// 变更（热重载）**——文件修改后 200ms 内自动重渲染，无需重启。
+    pub fn with_source_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let html = std::fs::read_to_string(path)?;
+        let mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+        let css = muskitty_shell::page::extract_inline_style(&html);
+        let mut app = Self::new("", "");
+        {
+            let view = app.views.active_mut();
+            view.html = html;
+            view.css = css;
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string());
+            view.set_title(name);
+            view.mark_needs_repaint();
+        }
+        app.source = Some(SourceFile {
+            path: PathBuf::from(path),
+            mtime,
+        });
+        Ok(app)
+    }
+
+    /// 启动已构造的应用（阻塞直到窗口关闭）。
+    pub fn start(mut self) {
+        let event_loop = EventLoop::new().expect("event loop");
+        event_loop.set_control_flow(ControlFlow::Wait);
+        event_loop.run_app(&mut self).expect("run app");
+    }
+
+    /// 轮询源文件：mtime 变化 → 重新读入内容到源标签并标脏。返回是否变化。
+    fn poll_source(&mut self) -> bool {
+        let Some(path) = self.source.as_ref().map(|s| s.path.clone()) else {
+            return false;
+        };
+        let mtime = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+        if mtime == self.source.as_ref().and_then(|s| s.mtime) {
+            return false;
+        }
+        // 文件读失败（编辑器原子写瞬间）保留旧内容，下轮再试。
+        let Ok(html) = std::fs::read_to_string(&path) else {
+            return false;
+        };
+        if let Some(src) = self.source.as_mut() {
+            src.mtime = mtime;
+        }
+        let css = muskitty_shell::page::extract_inline_style(&html);
+        let title = std::path::Path::new(&path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned());
+        let Some(view) = self.views.get_mut(self.source_tab) else {
+            return false;
+        };
+        let changed = view.html != html;
+        view.html = html;
+        view.css = css;
+        if let Some(t) = title {
+            view.set_title(t);
+        }
+        view.mark_needs_repaint();
+        changed
     }
 
     /// 启动浏览器窗口（阻塞直到关闭）。
@@ -341,6 +426,14 @@ impl ApplicationHandler for App {
         }
     }
 
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // 热重载轮询 + 定时唤醒（WaitUntil；无源文件时轮询为 no-op）。
+        if self.poll_source() {
+            self.request_flush();
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + HOT_RELOAD_POLL));
+    }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -409,5 +502,44 @@ mod tests {
         let page = url_placeholder_page("<script>x</script>");
         assert!(!page.contains("<script>"));
         assert!(page.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn hot_reload_picks_up_file_change() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("muskitty_hot_reload_test.html");
+        std::fs::write(
+            &path,
+            "<!doctype html><html><head><style>div{width:10px;height:10px}</style></head><body><div></div></body></html>",
+        )
+        .unwrap();
+        let path_str = path.to_string_lossy().into_owned();
+        let mut app = App::with_source_file(&path_str).expect("load file");
+        // 首标签内容/标题已加载。
+        assert!(app.views.active().html.contains("width:10px"));
+        assert_eq!(app.views.active().title, "muskitty_hot_reload_test.html");
+        assert!(app.source.is_some());
+        // 未变更：轮询返回 false。
+        assert!(!app.poll_source());
+        // 修改文件 → 轮询返回 true，内容更新 + 标脏。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            &path,
+            "<!doctype html><html><head><style>div{width:99px}</style></head><body><div></div></body></html>",
+        )
+        .unwrap();
+        assert!(app.poll_source());
+        assert!(app.views.active().html.contains("width:99px"));
+        assert!(app.views.active().needs_repaint());
+        // 无变更再轮询：false。
+        assert!(!app.poll_source());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn poll_source_without_source_is_noop() {
+        let mut app = App::new("<html></html>", "");
+        assert!(app.source.is_none());
+        assert!(!app.poll_source());
     }
 }

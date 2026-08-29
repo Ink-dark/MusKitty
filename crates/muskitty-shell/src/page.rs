@@ -73,7 +73,9 @@ pub fn render_html_file(
 ///
 /// 标签名与属性大小写不敏感（HTML），但当前按 ASCII 小写匹配即可覆盖
 /// 常见写法（`<style>`、`<style type="text/css">`）。无 `<style>` 时返回空串。
-pub(crate) fn extract_inline_style(html: &str) -> String {
+/// （`pub(crate)` → `pub`：chrome 层文件模式热重载复用；D-7 随 page.rs
+/// 迁入 chrome crate。）
+pub fn extract_inline_style(html: &str) -> String {
     const OPEN_TAG: &str = "<style";
     const CLOSE_TAG: &str = "</style>";
     let lower = html.to_ascii_lowercase();

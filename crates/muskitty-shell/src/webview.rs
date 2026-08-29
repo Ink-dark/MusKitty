@@ -232,6 +232,11 @@ impl WebViewCollection {
         &self.views[self.active]
     }
 
+    /// 按索引取标签（可变；热重载等需要更新非 active 标签的场景）。
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut WebView> {
+        self.views.get_mut(index)
+    }
+
     /// 全部标签标题（与标签索引对齐；chrome 标签栏绘制用）。
     pub fn titles(&self) -> Vec<&str> {
         self.views.iter().map(|v| v.title.as_str()).collect()
@@ -348,6 +353,17 @@ mod tests {
         c.select_next();
         c.select_prev();
         assert_eq!(c.active_index(), 0);
+    }
+
+    #[test]
+    fn get_mut_updates_by_index_without_touching_active() {
+        let mut c = WebViewCollection::new(HTML_A, CSS);
+        c.new_tab(HTML_B, CSS);
+        let v = c.get_mut(0).expect("index 0");
+        v.html = String::from("<html>C</html>");
+        assert_eq!(c.active_index(), 1, "get_mut must not change active");
+        assert_eq!(c.active().html, HTML_B);
+        assert!(c.get_mut(5).is_none(), "out of range must be None");
     }
 
     #[test]

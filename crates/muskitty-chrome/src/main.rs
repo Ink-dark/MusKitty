@@ -22,5 +22,18 @@ body { margin: 0; }
 "#;
 
 fn main() {
-    App::run(DEMO_HTML, DEMO_CSS);
+    // 无参数：内嵌 demo（不监视）。传 HTML 文件路径：文件模式 + 热重载
+    // （编辑保存后 ~200ms 内自动重渲染），如
+    // `cargo run -p muskitty-chrome -- chrome-demo.html`。
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first() {
+        Some(path) => match App::with_source_file(path) {
+            Ok(app) => app.start(),
+            Err(e) => {
+                eprintln!("failed to load {}: {e}", path);
+                std::process::exit(1);
+            }
+        },
+        None => App::run(DEMO_HTML, DEMO_CSS),
+    }
 }
