@@ -30,6 +30,20 @@
 //! `winit-backend` feature 门控真窗口（默认开）；`--no-default-features`
 //! 下纯函数层 + 无头渲染照常编译测试（CI 无窗口可跑）。
 //!
+//! 页面渲染管线（`page`）、标签状态（`webview`）与 shell 快捷键
+//! （`shortcut`）自 muskitty-shell 迁入（shell crate 已退役，其窗口
+//! 职责由本 crate 全面取代；见 git 历史与 W-1~W-5 规划记录）。
+//!
 //! 规划见 `docs/plans/2026-08-29-chrome-window-layer.md`。
 
 pub mod chrome;
+pub mod compositor;
+pub mod headless;
+pub mod page;
+pub mod shortcut;
+pub mod webview;
+
+/// 浏览器窗口应用（winit 事件循环 + chrome 合成呈现，`winit-backend`
+/// feature 门控）。
+#[cfg(feature = "winit-backend")]
+pub mod app;

@@ -1,7 +1,7 @@
 # 规划：muskitty-chrome — 浏览器 Chrome 窗口层（自绘非原生 UI）
 
 > **日期**：2026-08-29
-> **状态**：本轮执行
+> **状态**：✅ 已完成（2026-08-29，D-0~D-7 + 追加项）
 > **决策**：[ADR 2026-08-29-chrome-window-layer](../decisions/2026-08-29-chrome-window-layer.md)
 > **前置**：W-1~W-5（muskitty-shell 窗口轨道）已完成并被本规划**整体取代**；shell 的
 > page/webview/快捷键/headless 资产迁移进 chrome crate，shell crate 删除。
@@ -49,14 +49,14 @@ crates/muskitty-chrome/
 
 ## Commit 序列（每 commit 独立可编译 + 全门禁绿）
 
-- [ ] D-0 `[docs]` ADR + 本规划 + goal.md 重写
-- [ ] D-1 `[chrome]` crate 骨架 + workspace member（feature gate；过渡期 path 依赖 muskitty-shell；`--no-default-features` 可编译）
-- [ ] D-2 `[chrome]` `chrome::model`：ChromeState / ChromeRects / layout_chrome（纯函数 + 单测：矩形随窗口宽度/标签数/缩放变化，边界不越界）
-- [ ] D-3 `[chrome]` `chrome::paint` + `compositor`：chrome 绘制（标签/按钮/地址栏/文本）+ 页面合成；无窗口像素断言（chrome 背景色、活动标签白底、地址栏胶囊、文本墨迹、页面像素位置）
-- [ ] D-4 `[chrome]` `chrome::input`：hit_test + apply（纯函数 + 单测：点标签切换、点 × 关闭、点 + 新建、点地址栏聚焦、字符/退格/回车、空白区未命中）
-- [ ] D-5 `[chrome]` app.rs + main.rs：winit 循环 + 标签集合 + 脏位 flush + 快捷键（Ctrl+T/W/1~9/PageUp/Down/Esc）+ 地址栏提交（UrlSubmitted → 标签标题更新，观测闭环）；真窗口桌面自动化验证（截图断言 chrome 可见、快捷键、地址栏输入）
-- [ ] D-6 `[chrome]` headless：render_to_png（纯页面）+ render_window_to_png（页面+chrome 合成）无窗口测试（`--no-default-features` 全绿，W-4 CI 价值平移）
-- [ ] D-7 `[migration]` `git mv` page/webview/shortcut/headless 自 shell → chrome，删除 muskitty-shell crate（members 更新、引用修正）；windowing 规划文档标注"被 chrome 层取代"；goal.md/PROGRESS.md 同步
+- [x] D-0 `[docs]` ADR + 本规划 + goal.md 重写
+- [x] D-1 `[chrome]` crate 骨架 + workspace member（feature gate；过渡期 path 依赖 muskitty-shell；`--no-default-features` 可编译）
+- [x] D-2 `[chrome]` `chrome::model`：ChromeState / ChromeRects / layout_chrome（纯函数 + 单测：矩形随窗口宽度/标签数/缩放变化，边界不越界）
+- [x] D-3 `[chrome]` `chrome::paint` + `compositor`：chrome 绘制（标签/按钮/地址栏/文本）+ 页面合成；无窗口像素断言（chrome 背景色、活动标签白底、地址栏胶囊、文本墨迹、页面像素位置）
+- [x] D-4 `[chrome]` `chrome::input`：hit_test + apply（纯函数 + 单测：点标签切换、点 × 关闭、点 + 新建、点地址栏聚焦、字符/退格/回车、空白区未命中）
+- [x] D-5 `[chrome]` app.rs + main.rs：winit 循环 + 标签集合 + 脏位 flush + 快捷键（Ctrl+T/W/1~9/PageUp/Down/Esc）+ 地址栏提交（UrlSubmitted → 标签标题更新，观测闭环）；真窗口桌面自动化验证（截图断言 chrome 可见、快捷键、地址栏输入）
+- [x] D-6 `[chrome]` headless：render_to_png（纯页面）+ render_window_to_png（页面+chrome 合成）无窗口测试（`--no-default-features` 全绿，W-4 CI 价值平移）
+- [x] D-7 `[migration]` `git mv` page/webview/shortcut/headless 自 shell → chrome，删除 muskitty-shell crate（members 更新、引用修正）；windowing 规划文档标注"被 chrome 层取代"；goal.md/PROGRESS.md 同步
 
 ## 退出条件（每 commit 全部满足）
 
@@ -73,3 +73,11 @@ crates/muskitty-chrome/
 - 地址栏光标移动 / 选区 / IME / 自动补全
 - 后退/前进历史栈（按钮禁用态）、favicon、页面内命中测试（事件仍不进页面）
 - GPU 合成 / WebRender 式瓦片化
+
+## 实施记录（追加/修正）
+
+- **Commit 对应**：D-0 `cef6abb` / D-1 `7641790` / D-2 `681902f` / D-3 `5f7baad` / D-4 `505faf4` / D-5 `1630ab1` / D-5b 热重载 `79b4fcb` / Ctrl+L `8aeab96` / 按键双发修复 `839fc64` / D-6 `fe7519d` / D-7 迁移 `84b07a4`。
+- **真窗口验证**（桌面自动化 + 用户实测）：chrome 完整可见（标签条标题/×/＋、工具栏三键、地址栏占位符/聚焦描边/光标）；Ctrl+T 新建大字 "Tab N"、Ctrl+1 切回且各标签渲染状态独立、Ctrl+L 聚焦地址栏、输入 URL 回车 → 占位页回显 + 标签标题更新（用户实测 miao.com）；**文件热重载实测通过**（保存 chrome-demo.html 后 ~1s 自动更新颜色/文字）。
+- **真窗口发现并修复的 bug**：键盘分发漏 `ElementState::Pressed` 过滤——KeyDown/KeyUp 各处理一次，每字符进两次、退格删两次（`839fc64`）。另：自动化 `type()` 工具的合成字符不产生 winit KeyboardInput（工具通道限制，真实键盘正常）。
+- **过渡资产**：`WebView.title` + `WebViewCollection::get_mut/titles`、`Key::Backspace/Enter`、`ShortcutAction::FocusAddress`、`extract_inline_style` pub——均随文件迁入 chrome crate。
+- **shell 退役**：PlatformWindow 抽象随 crate 退役（chrome 直接持有 winit 窗口，第二个窗口形态出现再抽）；W-1~W-5 历史保留在 git。

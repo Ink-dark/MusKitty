@@ -1201,6 +1201,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "muskitty-chrome"
+version = "0.1.0"
+dependencies = [
+ "cosmic-text",
+ "muskitty-cascade",
+ "muskitty-css",
+ "muskitty-cssom",
+ "muskitty-dom",
+ "muskitty-html5-parser",
+ "muskitty-layout",
+ "muskitty-renderer",
+ "softbuffer",
+ "tiny-skia 0.12.0",
+ "winit",
+]
+
+[[package]]
 name = "muskitty-css"
 version = "0.6.0"
 dependencies = [
@@ -1284,22 +1301,6 @@ version = "0.2.0"
 dependencies = [
  "muskitty-css",
  "muskitty-dom",
-]
-
-[[package]]
-name = "muskitty-shell"
-version = "0.1.0"
-dependencies = [
- "muskitty-cascade",
- "muskitty-css",
- "muskitty-cssom",
- "muskitty-dom",
- "muskitty-html5-parser",
- "muskitty-layout",
- "muskitty-renderer",
- "softbuffer",
- "tiny-skia 0.12.0",
- "winit",
 ]
 
 [[package]]

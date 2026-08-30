@@ -1,6 +1,7 @@
 # 窗口化路线规划（muskitty-shell）
 
 > **创建时间**：2026-08-23
+> **⚠️ 已被取代（2026-08-29）**：用户决策为浏览器单独做自绘 chrome 窗口层，`muskitty-shell` crate 退役（见 [2026-08-29-chrome-window-layer](2026-08-29-chrome-window-layer.md)）。本文档保留为 W-1~W-5 的历史规划与实施记录（PlatformWindow/DPI/输入/Headless/多标签语义由 chrome crate 承接）。
 > **依据**：`docs/research/2026-08-23-servo-window-layer-analysis.md`（Servo 窗口层分析）
 > **用户决策**：① 新建 `muskitty-shell` workspace member 承载窗口抽象（按研究文档 §5）；② 窗口化作为独立轨道与 M-3（CSS 补全收尾）**并行穿插**推进
 > **当前状态**：W-1 / W-2（DPI）/ **W-3（输入）已完成**。`muskitty-shell` workspace member 落地：`PlatformWindow` trait + `WinitWindow`（pub(crate)，构造参数含 winit 类型不外泄）+ `page::render_page` 管线 + `App::run` 便捷入口 + 迁入的 `examples/window_demo.rs`。renderer 已回归纯净（删除 window_demo、移除 winit/softbuffer dev-deps）

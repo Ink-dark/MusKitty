@@ -27,6 +27,8 @@ pub struct WebView {
     pub html: String,
     /// 页面 CSS。
     pub css: String,
+    /// 标签标题（chrome 标签栏显示；地址栏提交后更新为 URL）。
+    pub title: String,
     /// 脏位：需要重渲染（内容/尺寸/scale 变化或显式 reload）。
     needs_repaint: bool,
     /// 脏位：已请求关闭（统一 flush 点移除，Servo §1.7 延迟更新）。
@@ -46,6 +48,7 @@ impl WebView {
         Self {
             html: html.into(),
             css: css.into(),
+            title: String::from("新标签页"),
             needs_repaint: true,
             close_scheduled: false,
             pixels: Vec::new(),
@@ -55,6 +58,11 @@ impl WebView {
             logical_height: 0,
             scale: 1.0,
         }
+    }
+
+    /// 更新标签标题。
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = title.into();
     }
 
     /// 标记需要重渲染（reload / 标签切换 / 内容变化）。
@@ -224,6 +232,16 @@ impl WebViewCollection {
         &self.views[self.active]
     }
 
+    /// 按索引取标签（可变；热重载等需要更新非 active 标签的场景）。
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut WebView> {
+        self.views.get_mut(index)
+    }
+
+    /// 全部标签标题（与标签索引对齐；chrome 标签栏绘制用）。
+    pub fn titles(&self) -> Vec<&str> {
+        self.views.iter().map(|v| v.title.as_str()).collect()
+    }
+
     /// active 视图（可变）。
     pub fn active_mut(&mut self) -> &mut WebView {
         &mut self.views[self.active]
@@ -335,6 +353,17 @@ mod tests {
         c.select_next();
         c.select_prev();
         assert_eq!(c.active_index(), 0);
+    }
+
+    #[test]
+    fn get_mut_updates_by_index_without_touching_active() {
+        let mut c = WebViewCollection::new(HTML_A, CSS);
+        c.new_tab(HTML_B, CSS);
+        let v = c.get_mut(0).expect("index 0");
+        v.html = String::from("<html>C</html>");
+        assert_eq!(c.active_index(), 1, "get_mut must not change active");
+        assert_eq!(c.active().html, HTML_B);
+        assert!(c.get_mut(5).is_none(), "out of range must be None");
     }
 
     #[test]

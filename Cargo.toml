@@ -6,7 +6,6 @@
 members = [
     "crates/muskitty-renderer",
     "crates/muskitty-network",
-    "crates/muskitty-shell",
     "crates/muskitty-chrome",
 ]
 # 以下 crate 都作为独立 git 仓库剥离，各自有自己的 [workspace] 根。

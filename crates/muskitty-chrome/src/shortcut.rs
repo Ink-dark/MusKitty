@@ -1,4 +1,4 @@
-//! 输入事件抽象（W-3）。
+//! 输入事件抽象与 shell 快捷键（W-3，自 muskitty-shell 迁入 D-7）。
 //!
 //! 定义与窗口后端无关的输入事件类型（[`InputEvent`] / [`Key`] /
 //! [`Modifiers`] / [`MouseButton`] / [`TouchPhase`]）与 shell 快捷键匹配
@@ -46,6 +46,10 @@ pub enum Key {
     PageUp,
     /// Page Down 键（Ctrl+PageDown → 下一个标签）。
     PageDown,
+    /// Backspace 键（chrome 地址栏删除；不参与快捷键匹配）。
+    Backspace,
+    /// Enter 键（chrome 地址栏提交；不参与快捷键匹配）。
+    Enter,
     /// 文本输入型字符。取 winit `Key::Character` 的首字符；空串归 [`Other`]。
     Character(char),
     /// 已识别但非快捷键相关（Named 非 Escape/PageUp/PageDown / Unidentified / Dead / 空字符）。
@@ -151,8 +155,9 @@ pub enum InputEvent {
 
 /// Shell 快捷键动作。
 ///
-/// 由 [`match_shortcut`] 匹配产生，在 `crate::app::App::dispatch_input`
-/// 中执行（事件分层的第一层：shell 快捷键先于页面层）。
+/// 由 [`match_shortcut`] 匹配产生，在 `crate::app::App` 的事件分发中
+/// 执行（事件分层第一层：shell 快捷键先于页面层；自 muskitty-shell
+/// 迁入，D-7）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShortcutAction {
     /// 关闭窗口（Esc）。
@@ -169,6 +174,8 @@ pub enum ShortcutAction {
     PrevTab,
     /// 切到第 `n` 个标签（0-based；Ctrl+1~9 → `TabSelect(0..=8)`）。
     TabSelect(usize),
+    /// 聚焦地址栏（Ctrl+L）。
+    FocusAddress,
 }
 
 /// Shell 快捷键匹配（纯函数，无窗口依赖）。
@@ -186,6 +193,8 @@ pub enum ShortcutAction {
 ///   [`ShortcutAction::TabSelect`]（0-based；Shift+数字产出其他字符，自然不匹配）；
 /// - `KeyDown { PageUp/PageDown, control && !alt && !meta }` →
 ///   [`ShortcutAction::PrevTab`] / [`ShortcutAction::NextTab`]；
+/// - `KeyDown { Character('l'|'L'), control && !alt && !meta }` →
+///   [`ShortcutAction::FocusAddress`]；
 /// - 其余 → `None`。
 ///
 /// 合成事件（`is_synthetic`）与按住重复（`repeat`）的过滤由调用方
@@ -205,6 +214,7 @@ pub fn match_shortcut(event: &InputEvent) -> Option<ShortcutAction> {
         Key::Character(c @ '1'..='9') if ctrl => {
             Some(ShortcutAction::TabSelect((*c as u8 - b'1') as usize))
         }
+        Key::Character('l' | 'L') if ctrl => Some(ShortcutAction::FocusAddress),
         Key::PageUp if ctrl => Some(ShortcutAction::PrevTab),
         Key::PageDown if ctrl => Some(ShortcutAction::NextTab),
         _ => None,
@@ -391,6 +401,14 @@ mod tests {
         assert_eq!(
             match_shortcut(&key_down(Key::Character('1'), Modifiers::default())),
             None
+        );
+    }
+
+    #[test]
+    fn match_shortcut_ctrl_l_focuses_address() {
+        assert_eq!(
+            match_shortcut(&key_down(Key::Character('l'), ctrl())),
+            Some(ShortcutAction::FocusAddress)
         );
     }
 

@@ -18,6 +18,12 @@ authors = ["MusCat / MusKitty Bit-Torch Community"]
 default = ["winit-backend"]
 winit-backend = ["dep:winit", "dep:softbuffer"]
 
+# 二进制演示入口依赖 winit 后端；--no-default-features 时仅 lib 可编译。
+[[bin]]
+name = "muskitty-chrome"
+path = "src/main.rs"
+required-features = ["winit-backend"]
+
 [dependencies]
 # 渲染管线（HTML+CSS → 像素；与 muskitty-shell 相同的输入侧依赖集）。
 muskitty-dom = { path = "../muskitty-dom", version = "0.2.0" }
@@ -27,8 +33,6 @@ muskitty-css = { path = "../muskitty-css", version = "0.6.0" }
 muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
 muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.2.0" }
 muskitty-renderer = { path = "../muskitty-renderer", version = "0.1.0" }
-# 过渡期复用 shell 的 page（渲染管线）/webview（标签状态）；D-7 迁移后移除。
-muskitty-shell = { path = "../muskitty-shell", version = "0.1.0" }
 # chrome 自绘（纯 Rust，与 renderer 同版本，避免树内重复版本）：
 # tiny-skia 画 chrome 像素；cosmic-text(+swash) 整形与提取文本轮廓。
 tiny-skia = "0.12"
