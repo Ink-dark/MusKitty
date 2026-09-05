@@ -102,19 +102,40 @@ impl Backend for TinySkiaBackend {
         let mut font_system: Option<FontSystem> = None;
         let mut swash_cache: Option<SwashCache> = None;
 
-        // 裁剪栈（L-2）：Clip/EndClip 维护，栈顶作为后续绘制的 clip_mask。
-        // clip mask 为物理尺寸（device 空间）；clip rect 为逻辑坐标，fill /
-        // intersect 时用 scale_xform 映射进 mask 空间，避免坐标空间错位。
-        let canvas_w = phys_w;
-        let canvas_h = phys_h;
-        let mut clip_stack: Vec<Mask> = Vec::new();
+        // 裁剪栈（L-2 / F-10 重构）：嵌套矩形裁剪的交集仍是矩形，故当前
+        // 裁剪区用单个逻辑 rect 表示——push/pop 是 O(1) 纯数学；Mask 只
+        // 保留一份懒缓存，仅当裁剪区（逻辑 rect）变化时才重建（O(画布)）。
+        // 修复前每层 Clip 克隆整幅画布 Mask（4K ≈ 8 MB）并全画布求交，
+        // N 层嵌套 overflow:hidden 即 O(N×画布) 内存/CPU——单页可 OOM/freeze
+        // （审计 S-1）。`clip_saved` 存每层 push 前的裁剪区供 EndClip 恢复。
+        let mut clip_saved: Vec<Option<Rect>> = Vec::new();
+        let mut clip_rect: Option<Rect> = None;
+        let mut clip_mask: Option<Mask> = None;
+        let mut mask_built_for: Option<Rect> = None;
 
         // W-2：逻辑坐标 → 物理坐标的向量缩放（清晰非模糊放大）。所有 rect /
         // border / clip path 均走此变换；文本用 scale∘translate（见 draw_text）。
         let scale_xform = Transform::from_scale(scale, scale);
 
         for cmd in commands {
-            let clip = clip_stack.last();
+            // 懒同步：裁剪区变化才重建 Mask。
+            if mask_built_for != clip_rect {
+                clip_mask = match clip_rect {
+                    Some(r) => {
+                        let mut m = Mask::new(pixmap.width(), pixmap.height()).expect("mask alloc");
+                        m.fill_path(
+                            &PathBuilder::from_rect(r),
+                            FillRule::Winding,
+                            false,
+                            scale_xform,
+                        );
+                        Some(m)
+                    }
+                    None => None,
+                };
+                mask_built_for = clip_rect;
+            }
+            let clip = clip_mask.as_ref();
             match cmd {
                 RenderCommand::Rect {
                     x,
@@ -184,28 +205,19 @@ impl Backend for TinySkiaBackend {
                     width,
                     height,
                 } => {
-                    // 用矩形 path 裁剪：有栈顶则与栈顶相交，否则新建 mask 填充。
-                    let rect = match Rect::from_xywh(*x, *y, *width, *height) {
-                        Some(r) => r,
-                        None => continue,
+                    // 用矩形 rect 表示裁剪：有当前裁剪区则求交（纯数学），
+                    // 否则直接作为新裁剪区。mask 由懒同步统一重建。
+                    let Some(rect) = Rect::from_xywh(*x, *y, *width, *height) else {
+                        continue;
                     };
-                    let path = PathBuilder::from_rect(rect);
-                    let mask = match clip {
-                        Some(top) => {
-                            let mut m = top.clone();
-                            m.intersect_path(&path, FillRule::Winding, false, scale_xform);
-                            m
-                        }
-                        None => {
-                            let mut m = Mask::new(canvas_w, canvas_h).expect("mask alloc");
-                            m.fill_path(&path, FillRule::Winding, false, scale_xform);
-                            m
-                        }
-                    };
-                    clip_stack.push(mask);
+                    clip_saved.push(clip_rect);
+                    clip_rect = Some(match clip_rect {
+                        Some(cur) => intersect_rect(cur, rect),
+                        None => rect,
+                    });
                 }
                 RenderCommand::EndClip => {
-                    clip_stack.pop();
+                    clip_rect = clip_saved.pop().flatten();
                 }
             }
         }
@@ -220,6 +232,23 @@ impl Backend for TinySkiaBackend {
             height: phys_h,
             data: p.data().to_vec(),
         }
+    }
+}
+
+/// 两个逻辑 rect 的交集（F-10）。
+///
+/// 空交集返回零面积退化 rect：`fill_path` 填出全零 mask → 后续绘制全部
+/// 被裁掉（与旧实现"空交集 mask 不可见"效果一致）。
+fn intersect_rect(a: Rect, b: Rect) -> Rect {
+    let degenerate = || Rect::from_xywh(0.0, 0.0, 0.0, 0.0).expect("degenerate rect");
+    let left = a.left().max(b.left());
+    let top = a.top().max(b.top());
+    let right = a.right().min(b.right());
+    let bottom = a.bottom().min(b.bottom());
+    if right > left && bottom > top {
+        Rect::from_xywh(left, top, right - left, bottom - top).unwrap_or_else(degenerate)
+    } else {
+        degenerate()
     }
 }
 
@@ -549,6 +578,121 @@ mod tests {
         assert_eq!(g, 0);
         assert_eq!(b, 0);
         assert_eq!(a, 255);
+    }
+
+    // —— F-10: 裁剪栈有界化 ——
+
+    #[test]
+    fn thousand_nested_clips_complete_and_restore() {
+        // 审计 S-1：1000 层嵌套 Clip。修复前每层克隆整幅画布 Mask 并全画布
+        // 求交（内存 O(N×画布)，4K 画布千层 ≈ 8 GB）；修复后内存 O(画布)。
+        // 本测试同时是隐式性能回归测试——每层整画布克隆/求交的回归会令
+        // CI 超时。
+        // 裁剪 rect (i, i, 100, 100)：i≥100 后交集为空（退化 rect）。
+        let mut backend = TinySkiaBackend::new();
+        let mut cmds = Vec::new();
+        for i in 0..1000i32 {
+            let o = i as f32;
+            cmds.push(RenderCommand::Clip {
+                x: o,
+                y: o,
+                width: 100.0,
+                height: 100.0,
+            });
+        }
+        // 空交集内画红 rect → 不可见。
+        cmds.push(RenderCommand::rect(
+            150.0,
+            150.0,
+            40.0,
+            40.0,
+            Color::rgb(255, 0, 0),
+        ));
+        for _ in 0..1000 {
+            cmds.push(RenderCommand::EndClip);
+        }
+        // 栈恢复后画红 rect → 可见（EndClip 恢复语义保持）。
+        cmds.push(RenderCommand::rect(
+            10.0,
+            10.0,
+            40.0,
+            40.0,
+            Color::rgb(255, 0, 0),
+        ));
+        let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 200, 1.0);
+        assert_eq!((width, height), (200, 200));
+        let count_red = |data: &[u8], width: u32| -> usize {
+            let mut n = 0;
+            for y in 0..height {
+                for x in 0..width {
+                    let (r, g, b, _) = pixel(data, width, x, y);
+                    if r == 255 && g == 0 && b == 0 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        // (150,150) 在空交集内被裁掉；(10,10) 在恢复后可见。40×40 = 1600。
+        assert_eq!(
+            count_red(&data, width),
+            1600,
+            "clipped-out rect must be invisible; post-restore rect must show"
+        );
+    }
+
+    #[test]
+    fn nested_shrinking_clips_intersect_geometrically() {
+        // 50 层递缩裁剪（每层 x/y+10、w/h-10）→ 交集 (490,490,260,260)。
+        // 交集内红 rect 可见，交集外保持白底。
+        let mut backend = TinySkiaBackend::new();
+        let mut cmds = Vec::new();
+        for i in 0..50i32 {
+            let o = (i * 10) as f32;
+            let s = 800.0 - o;
+            cmds.push(RenderCommand::Clip {
+                x: o,
+                y: o,
+                width: s,
+                height: s,
+            });
+        }
+        cmds.push(RenderCommand::rect(
+            500.0,
+            500.0,
+            40.0,
+            40.0,
+            Color::rgb(255, 0, 0),
+        ));
+        cmds.push(RenderCommand::rect(
+            100.0,
+            100.0,
+            40.0,
+            40.0,
+            Color::rgb(0, 255, 0),
+        ));
+        for _ in 0..50 {
+            cmds.push(RenderCommand::EndClip);
+        }
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 800, 800, 1.0);
+        let (r, g, b) = {
+            let (r, g, b, _) = pixel(&data, width, 510, 510);
+            (r, g, b)
+        };
+        assert_eq!(
+            (r, g, b),
+            (255, 0, 0),
+            "rect inside the intersection must render"
+        );
+        let (r, g, b) = {
+            let (r, g, b, _) = pixel(&data, width, 110, 110);
+            (r, g, b)
+        };
+        assert_eq!(
+            (r, g, b),
+            (255, 255, 255),
+            "rect outside the intersection must be clipped"
+        );
     }
 
     #[test]
