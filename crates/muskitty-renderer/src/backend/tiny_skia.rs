@@ -32,9 +32,19 @@ use crate::command::{Border, BorderStyle, RenderCommand, TextAlign};
 /// `render` 后渲染结果通过 [`RenderOutput::Pixels`] 返回，PNG 编码走
 /// [`encode_png`](Self::encode_png) / [`save_png`](Self::save_png)。
 /// 内部 [`Pixmap`] 为私有实现，不暴露 tiny-skia 类型。
-#[derive(Debug, Default)]
+///
+/// F-12（审计 R-M3）：文本光栅化上下文（cosmic-text `FontSystem` /
+/// `SwashCache`）随 backend 跨 `render` 调用持久化——修复前每次 render
+/// 重建并全量扫描系统字体（Windows 上数十至数百 ms），交互 resize 期间
+/// 每帧重扫导致明显卡顿。字段私有，cosmic-text 类型不进入公共 API
+/// （外部依赖解耦约定）。
+#[derive(Default)]
 pub struct TinySkiaBackend {
     pixmap: Option<Pixmap>,
+    /// 首个 Text 命令到达时懒创建，跨 render 复用。
+    font_system: Option<FontSystem>,
+    /// 与 `font_system` 同生命周期；swash 字形缓存依赖其复用。
+    swash_cache: Option<SwashCache>,
 }
 
 impl TinySkiaBackend {
@@ -106,10 +116,8 @@ impl Backend for TinySkiaBackend {
             pixmap.fill_rect(canvas, &white, Transform::identity(), None);
         }
 
-        // 文本光栅化上下文（懒创建：仅在遇首个 Text 命令时初始化，避免
-        // 纯色块场景下扫描系统字体）。
-        let mut font_system: Option<FontSystem> = None;
-        let mut swash_cache: Option<SwashCache> = None;
+        // F-12：文本光栅化上下文持久化在 backend 上（`self.font_system` /
+        // `self.swash_cache`），遇首个 Text 命令时懒创建，跨 render 复用。
 
         // 裁剪栈（L-2 / F-10 重构）：嵌套矩形裁剪的交集仍是矩形，故当前
         // 裁剪区用单个逻辑 rect 表示——push/pop 是 O(1) 纯数学；Mask 只
@@ -187,10 +195,8 @@ impl Backend for TinySkiaBackend {
                     text_align,
                     color,
                 } => {
-                    if font_system.is_none() {
-                        font_system = Some(FontSystem::new());
-                        swash_cache = Some(SwashCache::new());
-                    }
+                    let font_system = self.font_system.get_or_insert_with(FontSystem::new);
+                    let swash_cache = self.swash_cache.get_or_insert_with(SwashCache::new);
                     draw_text(
                         &mut pixmap,
                         *x,
@@ -203,8 +209,8 @@ impl Backend for TinySkiaBackend {
                         *text_align,
                         *color,
                         scale,
-                        font_system.as_mut().expect("font_system just initialized"),
-                        swash_cache.as_mut().expect("swash_cache just initialized"),
+                        font_system,
+                        swash_cache,
                         clip,
                     );
                 }
@@ -587,6 +593,49 @@ mod tests {
         assert_eq!(g, 0);
         assert_eq!(b, 0);
         assert_eq!(a, 255);
+    }
+
+    // —— F-10: 裁剪栈有界化 ——
+
+    #[test]
+    fn font_system_lazily_created_and_persisted() {
+        // F-12（审计 R-M3）：文本上下文仅随首个 Text 命令创建，跨 render
+        // 持久化（修复前每次 render 重建并重扫系统字体）。
+        let mut backend = TinySkiaBackend::new();
+        let cmds_rect = vec![RenderCommand::rect(
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            Color::rgb(255, 0, 0),
+        )];
+        let _ = render_pixels(&mut backend, &cmds_rect, 10, 10, 1.0);
+        assert!(
+            backend.font_system.is_none(),
+            "rect-only render must not create font context"
+        );
+        let cmds_text = vec![RenderCommand::Text {
+            x: 1.0,
+            y: 1.0,
+            width: 40.0,
+            text: "T".to_string(),
+            font_size: 12.0,
+            font_family: "serif".to_string(),
+            font_weight: 400,
+            text_align: TextAlign::Left,
+            color: Color::rgb(0, 0, 0),
+        }];
+        let _ = render_pixels(&mut backend, &cmds_text, 50, 20, 1.0);
+        assert!(
+            backend.font_system.is_some() && backend.swash_cache.is_some(),
+            "text render must create font context"
+        );
+        // 后续 render（无 Text）不销毁已有上下文。
+        let _ = render_pixels(&mut backend, &cmds_rect, 10, 10, 1.0);
+        assert!(
+            backend.font_system.is_some(),
+            "font context must persist across renders"
+        );
     }
 
     // —— F-10: 裁剪栈有界化 ——
