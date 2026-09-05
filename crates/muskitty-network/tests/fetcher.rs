@@ -129,6 +129,32 @@ async fn fetch_connection_refused_returns_error() {
 }
 
 #[tokio::test]
+async fn fetch_body_over_limit_errors_with_body_too_large() {
+    // F-14（审计 S-6）：响应体超过上限 → NetworkError::BodyTooLarge，
+    // 不再无上限缓冲（敌意服务器可借 chunked 流 OOM abort 进程）。
+    let server = spawn_ok_server("0123456789abcdef0123456789abcdef").await; // 32 字节
+    let fetcher = ReqwestFetcher::with_max_body_bytes(16).expect("client build");
+    let result = fetcher.fetch(&(server.uri() + "/")).await;
+    let err = result.expect_err("over-limit body must error");
+    assert!(
+        matches!(err, muskitty_network::NetworkError::BodyTooLarge { .. }),
+        "expected BodyTooLarge, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn fetch_body_at_limit_succeeds() {
+    // 恰好等于上限的响应体应完整送达（上限是 ≤ 语义）。
+    let server = spawn_ok_server("0123456789abcdef").await; // 16 字节
+    let fetcher = ReqwestFetcher::with_max_body_bytes(16).expect("client build");
+    let resp = fetcher
+        .fetch(&(server.uri() + "/"))
+        .await
+        .expect("at-limit body must succeed");
+    assert_eq!(resp.body_bytes().len(), 16);
+}
+
+#[tokio::test]
 async fn fetcher_is_clone_and_reuses() {
     let server = spawn_ok_server("clone").await;
     let fetcher = ReqwestFetcher::new().expect("client build");

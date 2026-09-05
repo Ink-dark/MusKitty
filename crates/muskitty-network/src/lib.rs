@@ -30,6 +30,18 @@ pub use error::{NetworkError, NetworkResult};
 pub use fetcher::NetworkFetcher;
 pub use response::NetworkResponse;
 
+/// 默认响应体上限（F-14，审计 S-6）：64 MiB，与 html5-parser 的输入
+/// 上限（`MAX_INPUT_BYTES`）对齐。敌意服务器可无限流式发送响应体
+/// （chunked 无需 Content-Length），无上限缓冲 = OOM abort。
+pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+/// 默认总超时（F-14，审计 S-6）：`NetworkFetcher` trait 契约（fetcher.rs）
+/// 承诺超时错误，实现必须兑现——slow-loris 服务器不得无限挂起 fetch。
+pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 默认连接超时（F-14，审计 S-6）。
+pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[cfg(feature = "reqwest-backend")]
 mod reqwest_impl;
 
