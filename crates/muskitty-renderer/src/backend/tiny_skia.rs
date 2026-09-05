@@ -82,11 +82,20 @@ impl Backend for TinySkiaBackend {
         let scale = if scale > 0.0 { scale } else { 1.0 };
 
         // 物理分辨率 = round(逻辑 × scale)。Pixmap::new 返回 None 当 width/height
-        // 为 0 或超过 i32::MAX/4 → 回退 1x1 像素以避免 panic（此时命令通常也无法绘制）。
-        let phys_w = ((width as f32) * scale).round() as u32;
-        let phys_h = ((height as f32) * scale).round() as u32;
-        let mut pixmap = Pixmap::new(phys_w, phys_h)
-            .unwrap_or_else(|| Pixmap::new(1, 1).expect("1x1 pixmap always succeeds"));
+        // 为 0 或超过 i32::MAX/4 → 回退 1x1 像素以避免 panic。
+        // F-11（审计 R-M1）：回退时**同步**钳制 phys_w/phys_h——修复前
+        // `width=1, scale=0.4` 产出 0×0 的报告尺寸配 1×1 像素缓冲（长度
+        // 自相矛盾），且首个 Clip 命令按 0×0 建 Mask → `.expect` panic。
+        let mut phys_w = ((width as f32) * scale).round() as u32;
+        let mut phys_h = ((height as f32) * scale).round() as u32;
+        let mut pixmap = match Pixmap::new(phys_w, phys_h) {
+            Some(p) => p,
+            None => {
+                phys_w = 1;
+                phys_h = 1;
+                Pixmap::new(1, 1).expect("1x1 pixmap always succeeds")
+            }
+        };
 
         // P3-5: 画布默认填白（根元素背景传播的简化近似，见审计文档）。
         // 元素指令按序覆盖其上；未覆盖区域呈现白色而非透明。
@@ -581,6 +590,27 @@ mod tests {
     }
 
     // —— F-10: 裁剪栈有界化 ——
+
+    #[test]
+    fn subpixel_scale_zero_phys_dims_stay_consistent() {
+        // F-11（审计 R-M1）：width=1、scale=0.4 → round(0.4)=0。修复前
+        // pixmap 回退 1×1 但报告尺寸仍为 0×0（与 4 字节缓冲自相矛盾），
+        // 且首个 Clip 按 canvas 0×0 建 Mask → `.expect` panic。
+        let mut backend = TinySkiaBackend::new();
+        let cmds = vec![
+            RenderCommand::Clip {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            RenderCommand::rect(0.0, 0.0, 1.0, 1.0, Color::rgb(255, 0, 0)),
+            RenderCommand::EndClip,
+        ];
+        let (w, h, data) = render_pixels(&mut backend, &cmds, 1, 1, 0.4);
+        assert_eq!((w, h), (1, 1), "reported dims must match the buffer");
+        assert_eq!(data.len(), 4);
+    }
 
     #[test]
     fn thousand_nested_clips_complete_and_restore() {
