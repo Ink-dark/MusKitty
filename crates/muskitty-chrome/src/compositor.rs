@@ -65,7 +65,7 @@ mod tests {
     const CSS: &str = "div { display: block; } body { margin: 0; }";
 
     fn page() -> (Vec<u8>, u32, u32) {
-        let out = crate::page::render_page(HTML, CSS, 200, 100, 1.0);
+        let out = crate::page::render_page(HTML, CSS, 200, 100, 1.0).expect("render_page ok");
         let muskitty_renderer::RenderOutput::Pixels {
             width,
             height,
