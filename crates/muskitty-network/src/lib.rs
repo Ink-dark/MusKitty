@@ -67,3 +67,31 @@ pub use reqwest_impl::ReqwestFetcher;
 pub async fn fetch(url: &str) -> NetworkResult<NetworkResponse> {
     ReqwestFetcher::new()?.fetch(url).await
 }
+
+/// 便捷函数：**同步（阻塞）** fetch 一个 URL。
+///
+/// 内部在当前线程上自建一次性 current_thread 运行时执行异步 fetch，供
+/// 没有异步上下文的上层使用（如 chrome 的 winit 事件循环后台线程）。
+/// 需启用 `reqwest-backend` feature（默认开启）。
+///
+/// # 限制
+///
+/// - 每次调用构建并销毁一个运行时，仅适合导航级别的低频调用；高频批量
+///   请求应复用 [`NetworkFetcher`] + 调用方自管的运行时。
+/// - **不得在异步上下文内调用**（在运行时线程上嵌套 `block_on` 会 panic）。
+///
+/// # 示例
+///
+/// ```no_run
+/// let resp = muskitty_network::fetch_blocking("https://example.com")?;
+/// assert!(resp.is_success());
+/// # Ok::<(), muskitty_network::NetworkError>(())
+/// ```
+#[cfg(feature = "reqwest-backend")]
+pub fn fetch_blocking(url: &str) -> NetworkResult<NetworkResponse> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| NetworkError::Http(format!("build tokio runtime: {e}")))?
+        .block_on(ReqwestFetcher::new()?.fetch(url))
+}

@@ -171,3 +171,25 @@ async fn fetcher_is_clone_and_reuses() {
     assert_eq!(r1.text(), "clone");
     assert_eq!(r2.text(), "clone");
 }
+
+#[test]
+fn fetch_blocking_success_and_error() {
+    // 服务器搭在独立的多线程运行时上（worker 线程在 block_on 返回后仍
+    // 持续驱动任务，存活到本测试结束）；fetch_blocking 自建运行时与之
+    // 通信——验证同步便捷入口的端到端行为。
+    let server_rt = tokio::runtime::Runtime::new().expect("server runtime");
+    let server = server_rt.block_on(spawn_ok_server("blocking hello"));
+
+    let resp = muskitty_network::fetch_blocking(&(server.uri() + "/")).expect("fetch ok");
+    assert_eq!(resp.status, 200);
+    assert!(resp.is_success());
+    assert_eq!(resp.text(), "blocking hello");
+
+    // 连接失败同样经同步 API 返回 NetworkError::Http（trait 契约的超时/
+    // 连接错误语义对 blocking 入口同样成立）。
+    let err = muskitty_network::fetch_blocking("http://127.0.0.1:1/").expect_err("refused");
+    assert!(
+        matches!(err, muskitty_network::NetworkError::Http(_)),
+        "expected Http error variant, got {err:?}"
+    );
+}

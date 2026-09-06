@@ -15,8 +15,8 @@ authors = ["MusCat / MusKitty Bit-Torch Community"]
 [features]
 # reqwest 后端实现（默认开启）。关闭后仅保留 trait 抽象，
 # 上层自行实现 NetworkFetcher 或选用其他后端（如未来自研栈）。
+reqwest-backend = ["dep:reqwest", "dep:tokio"]
 default = ["reqwest-backend"]
-reqwest-backend = ["dep:reqwest"]
 
 [dependencies]
 # reqwest: HTTP 客户端，作为 NetworkFetcher 的一个可选实现。
@@ -24,6 +24,10 @@ reqwest-backend = ["dep:reqwest"]
 # http2 启用 HTTP/2，charset 启用响应编码处理。
 # default-features = false 去掉 macOS 系统配置等无关特性。
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset"], optional = true }
+# tokio: 仅 `fetch_blocking` 便捷函数需要——在调用方线程上自建一次性
+# current_thread 运行时执行异步 fetch（net/time 驱动由 reqwest 一并启用，
+# 此处显式声明保证 enable_all 可用）。
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"], optional = true }
 
 [dev-dependencies]
 # wiremock: 离线 mock HTTP server（基于 hyper，纯 Rust，零 C 依赖），

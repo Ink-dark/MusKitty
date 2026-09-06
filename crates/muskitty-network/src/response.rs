@@ -14,8 +14,12 @@ pub struct NetworkResponse {
 }
 
 impl NetworkResponse {
-    #[allow(dead_code)]
-    pub(crate) fn new(
+    /// 构造响应。
+    ///
+    /// reqwest 后端内部使用；也是无 reqwest 后端的自定义实现与上层
+    /// 测试构造 [`NetworkResponse`] 的公开入口（字段 `body_bytes` 不公开，
+    /// 只能经此处注入）。
+    pub fn new(
         status: u16,
         headers: Vec<(String, String)>,
         url: String,
