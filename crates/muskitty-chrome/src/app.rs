@@ -41,13 +41,14 @@ struct SourceFile {
     mtime: Option<std::time::SystemTime>,
 }
 
-/// RGBA8 → softbuffer 0RGB u32（row-major，红在最低字节）。
+/// RGBA8 → softbuffer 0RGB u32（row-major；softbuffer 0.4 契约 =
+/// `0x00RRGGBB`，红在位 16-23）。
 ///
 /// 与 shell 后端同款纯函数（shell 退役后由本 crate 持有）。
 pub(crate) fn rgba_to_0rgb(data: &[u8]) -> Vec<u32> {
     let mut out = Vec::with_capacity(data.len() / 4);
     for px in data.chunks_exact(4) {
-        out.push(((px[2] as u32) << 16) | ((px[1] as u32) << 8) | (px[0] as u32));
+        out.push(((px[0] as u32) << 16) | ((px[1] as u32) << 8) | (px[2] as u32));
     }
     out
 }
@@ -601,8 +602,11 @@ mod tests {
 
     #[test]
     fn rgba_to_0rgb_byte_order() {
+        // softbuffer 0.4 契约（lib.rs "Data representation"）：u32 = 0x00RRGGBB，
+        // 红在位 16-23。曾把 B 放进高位导致窗口整帧 R/B 互换（实测 demo 页
+        // 蓝 #2196f3 显示为橙）。
         let data = [255u8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255];
-        assert_eq!(rgba_to_0rgb(&data), vec![0x0000FF, 0x00FF00, 0xFF0000]);
+        assert_eq!(rgba_to_0rgb(&data), vec![0xFF0000, 0x00FF00, 0x0000FF]);
     }
 
     #[test]
