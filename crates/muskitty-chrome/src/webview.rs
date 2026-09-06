@@ -20,15 +20,20 @@
 /// 分辨率，present 用）；`logical_width` / `logical_height` / `scale`
 /// 为最近一次渲染的布局状态（脏检查用，避免每帧全量渲染）。
 /// `html` / `css` 为页面内容（持有 `String`：标签内容需可区分/可变，
-/// 接加载器后由加载方填充）。
+/// 由导航（`crate::navigation`）或文件加载填充）。
 #[derive(Debug, Clone)]
 pub struct WebView {
     /// 页面 HTML。
     pub html: String,
     /// 页面 CSS。
     pub css: String,
-    /// 标签标题（chrome 标签栏显示；地址栏提交后更新为 URL）。
+    /// 标签标题（chrome 标签栏显示；导航提交后先更新为 URL，到站后为
+    /// 最终 URL / 文件名）。
     pub title: String,
+    /// 导航代数：本标签每发起一次地址栏导航 +1；到站结果只有代数匹配
+    /// 才应用——用户改址 / 关签后索引复用导致的过期导航静默丢弃
+    /// （结果携带提交时的 `(tab, epoch)` 快照）。
+    pub navigation_epoch: u64,
     /// 脏位：需要重渲染（内容/尺寸/scale 变化或显式 reload）。
     needs_repaint: bool,
     /// 脏位：已请求关闭（统一 flush 点移除，Servo §1.7 延迟更新）。
@@ -49,6 +54,7 @@ impl WebView {
             html: html.into(),
             css: css.into(),
             title: String::from("新标签页"),
+            navigation_epoch: 0,
             needs_repaint: true,
             close_scheduled: false,
             pixels: Vec::new(),

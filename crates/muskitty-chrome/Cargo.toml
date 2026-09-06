@@ -33,6 +33,9 @@ muskitty-css = { path = "../muskitty-css", version = "0.6.0" }
 muskitty-cssom = { path = "../muskitty-cssom", version = "0.1.0" }
 muskitty-html5-parser = { path = "../muskitty-html5-parser", version = "0.2.0" }
 muskitty-renderer = { path = "../muskitty-renderer", version = "0.1.0" }
+# 网络层（Phase 5 接驳）：地址栏 http/https 顶级文档导航经
+# NetworkFetcher trait（fetch_blocking 同步入口）抓取。
+muskitty-network = { path = "../muskitty-network", version = "0.1.0" }
 # chrome 自绘（纯 Rust，与 renderer 同版本，避免树内重复版本）：
 # tiny-skia 画 chrome 像素；cosmic-text(+swash) 整形与提取文本轮廓。
 tiny-skia = "0.12"

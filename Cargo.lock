@@ -1211,6 +1211,7 @@ dependencies = [
  "muskitty-dom",
  "muskitty-html5-parser",
  "muskitty-layout",
+ "muskitty-network",
  "muskitty-renderer",
  "softbuffer",
  "tiny-skia 0.12.0",

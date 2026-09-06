@@ -34,11 +34,16 @@
 //! （`shortcut`）自 muskitty-shell 迁入（shell crate 已退役，其窗口
 //! 职责由本 crate 全面取代；见 git 历史与 W-1~W-5 规划记录）。
 //!
+//! 地址栏导航（Phase 5 接驳）在 `navigation`：http/https 抓取在独立
+//! 线程完成（结果经 channel 回填 `webview`），渲染管线入口仍是
+//! `page::render_page`。
+//!
 //! 规划见 `docs/plans/2026-08-29-chrome-window-layer.md`。
 
 pub mod chrome;
 pub mod compositor;
 pub mod headless;
+pub mod navigation;
 pub mod page;
 pub mod shortcut;
 pub mod webview;
