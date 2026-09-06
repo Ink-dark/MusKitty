@@ -1,54 +1,55 @@
-# Goal — WPT 测试套件补全 + 规范合规度实测轮（2026-09-06）
+# Goal — 网络层接驳（Phase 5 → chrome 导航，2026-09-06）
 
 > **更新时间**：2026-09-06
-> **当前状态**：已完成。合规度全部以 harness 实测为准（不采信文档声明），
-> 数字与差距归档于 [docs/wpt-compliance-2026-09-06.md](docs/wpt-compliance-2026-09-06.md)。
-> 上一轮（审计修复 F-0~F-15）已收尾推送。
-
----
+> **当前状态**：已完成。T-1~T-4 全部落地（commits `412aa68` / `6c7c3b7` / `215ffc9`
+> / docs），测试 10+4（network）与 85+3（chrome，`--no-default-features` 75+3）全绿。
+> **上一轮**（WPT 套件补全 + 合规度实测）已完成推送。
+> **用户指令**：接驳网络层——把 Phase 5 的 `muskitty-network`（trait + reqwest 后端）
+> 接进 chrome 地址栏导航，结束"地址栏提交只回显占位页"的状态
+> （前置条件 F-14 体积上限/超时已修，见 audit S-6）。
 
 ## 当前阶段定位
 
-- **本轮主线**：把 WPT 测试套件补全到此前零覆盖的 CSS 系 crate，刷新 html5
-  夹具到 WPT 上游，并以实跑数字出具合规度报告。
-- **方法**：每 crate 一个数据驱动 harness（信息性报告模式，同 html5lib 约定）；
-  套件当场抓出的规范缺陷按 failing-test → 修 → 全绿 流程独立 commit。
+- **接驳点**：chrome `app.rs` 的 `ChromeEffect::UrlSubmitted`（目前占位页，注释"M-1 延后"）。
+- **方式**：chrome 新增 `navigation` 模块（URL 分类 + 后台线程抓取 + 响应→文档转换）；
+  `muskitty-network` 补同步便捷入口 `fetch_blocking`——chrome 是同步 UI 层，异步运行时
+  细节留在网络 crate，未来换自研后端时 chrome 零改动（trait 抽象初衷）。
+- **范围**：**顶级文档 GET 导航**（HTML Standard §7.2 navigation 的极简子集）。
+  子资源（`<link>`/`<img>`）、历史栈、刷新语义不在本轮。
 
-## 任务清单（每项 = 1 个 commit，均已完成）
+## 任务清单（每项 = 1 个 commit）
 
-- [x] T-1 `[html5-parser]` tree-construction 夹具同步 WPT 上游（7 更新 +
-      scripted_foster01 新增）。**退出**：62/62 文件与上游逐字节一致；套件实跑
-      出新基线（1903/1924，98.9%）。
-- [x] T-2 `[html5-parser]` §13.2.4 adjusted-current-node fragment 规则
-      （dispatcher + CDATA 判定 + breakout reprocess 防回环）。**退出**：
-      plain-text-unsafe 2 个 NUL-in-foreign 用例转绿且无回退（1905/1924，99.0%）。
-- [x] T-3 `[selectors]` WPT css/selectors/parsing 套件（26 夹具 / 508 用例，
-      含 css-syntax 派生 4 份）。**退出**：harness 报表 + 实测 74.8%；
-      `cargo test` 全绿；fmt/clippy 零警告。
-- [x] T-4 `[css-tokenizer]` WPT css/css-syntax tokenizer 套件（6 夹具 / 99 用例）
-      + 三项规范修复（escaped-EOF→U+FFFD、§5.3 NULL 预处理、§4.2 ident 白名单）。
-      **退出**：实测 100%；既有单测更新后全绿。
-- [x] T-5 `[css-parser]` WPT css/css-syntax parser 套件（6 夹具 / 27 用例）
-      + §5.5.1 @charset 丢弃修复。**退出**：实测 100%；下游 cssom 两个固化
-      旧行为的单测同步更新，cssom 104/104 绿。
-- [x] T-6 `[css-values]` 数值语法 WPT 用例（decimal-points + inclusive-ranges，
-      16 用例）。**退出**：全绿。
-- [x] T-7 `[docs]` 合规度实测报告 + goal/PROGRESS 同步。**退出**：
-      docs/wpt-compliance-2026-09-06.md 落盘，数字全部来自实跑。
+- [x] T-1 `[network]` `fetch_blocking` 同步便捷函数 + `NetworkResponse::new` 转正为
+      pub（chrome 层测试需构造响应）。**退出（`412aa68`）**：wiremock 离线测试
+      （blocking 成功 + 连接拒绝）全绿，10 + 4 doc-tests；check/fmt/clippy 零警告。
+- [x] T-2 `[chrome]` `navigation` 模块：`classify_url`（http/https/file/不支持 scheme
+      分发；无 scheme 补 https，localhost 补 http）、`document_from_response`
+      （Content-Type 分发：html / plain→pre / 其他→提示页；4xx/5xx 正文照常渲染）、
+      `error_page`、`spawn_http_navigation`（独立线程 + channel 回传，不阻塞 UI）；
+      `WebView` 加导航代数字段（过期结果丢弃）。**退出（`6c7c3b7`）**：纯函数单测 +
+      原生 TcpListener 离线端到端全绿（真 reqwest → 真线程 → 转换），
+      `--no-default-features` 下照常编译测试。
+- [x] T-3 `[chrome]` app 接线：地址栏提交按分类导航（加载期间保留旧页、标题先更新、
+      到站后回填 + 重绘）；事件循环 `about_to_wait` 吸干结果；过期导航/已关标签
+      静默丢弃。**退出（`215ffc9`）**：app 层 5 个新单测（到站应用 / 过期丢弃 /
+      错误页 / file 加载 / 占位页 / 入队）全绿，85+3。
+- [x] T-4 `[docs]` goal / PROGRESS / phase5 计划 / AGENTS 同步。**退出**：
+      四处文档与实况一致（"暂不接轨"表述清除）。
 
-## 实测合规度基线（2026-09-06）
+## 显式排除（后续轮）
 
-| 套件 | 通过率 |
-|------|-------:|
-| html5lib tree-construction | 99.0% (1905/1924) |
-| html5lib tokenizer | 99.8% (7022/7036) |
-| WPT css/selectors/parsing | 74.8% (380/508) |
-| WPT css/css-syntax（tokenizer/parser/数值三层） | 100% (142/142) |
+- 子资源加载（`<link rel=stylesheet>` / `<img>`）、相对 URL 解析、历史栈
+  （后退/前进按钮仍为占位）、MIME 嗅探、cookie、cache。
+- 自研 HTTP 栈（N-1~N-7 路线图不变）。
 
-## 不在本轮范围（显式排除）
+## 验证
 
-- selectors 128 个失败用例的修复（::part/::state/:heading/:host()/An+B 语法
-  保真等）——已在报告归档，进后续轮。
-- css/cssom、css/css-cascade、dom/ 主体（需 JS API 面 / layout）。
-- 序列化层（selectorText / cssText / 数值序列化）落地后回填 JSON 中已记录的
-  序列化断言。
+```bash
+cargo check --workspace
+cargo test -p muskitty-network
+cargo test -p muskitty-chrome        # 含 --no-default-features（CI 无窗口）
+cargo fmt -p muskitty-network -p muskitty-chrome -- --check
+cargo clippy -p muskitty-network -p muskitty-chrome --all-targets -- -D warnings
+# 人工验证（架构师，需窗口环境）：
+cargo run -p muskitty-chrome   # 地址栏输入 example.com → 渲染真实页面
+```

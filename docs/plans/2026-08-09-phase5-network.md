@@ -251,3 +251,31 @@ cargo fmt -p muskitty-network -- --check
 cargo clippy -p muskitty-network --all-targets -- -D warnings
 cargo run -p muskitty-network --example fetch_demo -- https://example.com
 ```
+
+---
+
+## 接驳（2026-09-06，用户指令）
+
+原计划"N-6（WHATWG Fetch 集成）启动时才接轨"；架构师于 2026-09-06 指令提前接驳，
+范围收窄为**顶级文档 GET 导航**（HTML Standard §7.2 navigation 极简子集），
+子资源 / 历史栈 / 刷新语义仍待后续：
+
+- `muskitty-network`：补 [`fetch_blocking`] 同步便捷入口（内部一次性
+  current_thread 运行时）——chrome 是同步 UI 层，异步运行时细节留在网络 crate，
+  未来换自研后端上层零改动；`NetworkResponse::new` 转正为 pub（上层测试构造入口）。
+- `muskitty-chrome` 新增 `navigation` 模块：`classify_url`（http/https / file:// /
+  本地绝对路径 / scheme 白名单判定不支持；无 scheme 补 https，localhost 补 http）、
+  `document_from_response`（Content-Type 分发，4xx/5xx 正文照常渲染）、
+  `spawn_http_navigation`（独立线程 + channel 回传，不阻塞 winit UI 线程）。
+- chrome `app.rs` 接线：地址栏提交 → 导航（加载期间保留旧页、标题先更新）；
+  `(tab, epoch)` 导航代数使改址/关签后的过期结果静默丢弃。
+- 上层依赖仍是 [`NetworkFetcher`] trait 语义（`fetch_blocking` 是 trait 的同步
+  镜像），trait 抽象决策不变；自研栈路线 N-1~N-7 不变。
+
+验证（新增）：
+
+```bash
+cargo test -p muskitty-chrome          # 含 navigation 离线 e2e（原生 TcpListener）
+cargo test -p muskitty-chrome --no-default-features
+cargo run -p muskitty-chrome           # 人工：地址栏输入 example.com → 渲染真实页面
+```

@@ -1,6 +1,6 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-09-06 | WPT 套件补全轮完成：CSS 系 crate（tokenizer/parser/values/selectors）新增 650 个 WPT 派生数据用例并实测合规度（selectors/parsing 74.8%、css-syntax 三层 100%），html5 夹具同步 WPT 上游并修复 §13.2.4 adjusted-current-node fragment 缺陷；实测报告见 [docs/wpt-compliance-2026-09-06.md](docs/wpt-compliance-2026-09-06.md)。上一轮（2026-09-05 审计修复 F-0~F-14）已完成
+> 最后更新: 2026-09-06 | 网络层接驳轮完成：`muskitty-network` 补 `fetch_blocking` 同步入口，`muskitty-chrome` 新增 `navigation` 模块并把地址栏导航接上网络层（http/https 顶级文档抓取 + file 加载 + Content-Type 分发 + `(tab, epoch)` 过期导航丢弃），"Network not wired yet" 占位状态结束。上一轮（WPT 套件补全 + 合规度实测）已完成
 >
 > Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
 > Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
@@ -23,7 +23,7 @@
 | **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 集成 | 46 测试全绿 | 本地 v0.1.0 (未发布) | 🔗 muskitty-dev/muskitty-layout (已剥离) |
 | **muskitty-renderer** | ✅ Phase 4 B-3/B-4 | tiny-skia 后端：DOM→CSS→Layout→Render 全链路 + HTML+CSS→PNG demo | — | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | DOM 完整 API (Events/Style/innerHTML) | ✅ 完成 (2026-08-09) | Events → dom `event.rs` · element.style → cssom `element_style.rs` · innerHTML/outerHTML → html5-parser `serialize.rs`+`parse_fragment` | dom/cssom 全绿 + html5-parser WPT 99.0% (1889/1908) | — | — |
-| **muskitty-network** | 🚧 Phase 5 启动 | NetworkFetcher trait 抽象 + reqwest 后端（远期自研 HTTP/1.1+2+3 栈，见 [plan](docs/plans/2026-08-09-phase5-network.md)） | 7 测试全绿 (wiremock 离线) | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
+| **muskitty-network** | 🚧 Phase 5 接驳 | NetworkFetcher trait 抽象 + reqwest 后端 + `fetch_blocking` 同步入口；chrome 地址栏导航已接驳（顶级文档 GET，远期自研 HTTP/1.1+2+3 栈，见 [plan](docs/plans/2026-08-09-phase5-network.md)） | 10 + 4 doc-tests 全绿 (wiremock 离线)；chrome navigation 离线 e2e 全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 
 **14 个 html5lib tokenizer 失败说明**：3 个 xmlViolation（infoset 强制转换，规范范围外）+ 11 个 `<?...>` PI 边界（test2/test3，html5lib 测试套件过时，期望 `Comment` 但现行 WHATWG §13.2.5.72-76 规定产生 `ProcessingInstruction`）。代码遵循现行 WHATWG 规范，测试套件过时。对浏览器级应用无影响（真实网页几乎不会触发这些边界）。
 
