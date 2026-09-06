@@ -8,8 +8,18 @@
 use muskitty_cascade::{compute_styles, StyleTreeOptions};
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
-use muskitty_layout::{build_layout_tree, compute_layout};
+use muskitty_layout::{build_layout_tree_with_fonts, compute_layout, SharedFontSystem};
 use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
+
+thread_local! {
+    /// LAY-2：会话级共享字体系统。
+    ///
+    /// `FontSystem::new()` 枚举系统字体需 50–300 ms；render_page 每次调用
+    ///（真窗口每帧 resize / 文件热重载）此前都随建树重复支付。线程级持有一
+    /// 份（渲染单线程，Rc 语义即可），经 [`build_layout_tree_with_fonts`]
+    /// 注入每次建树。
+    static FONT_SYSTEM: SharedFontSystem = SharedFontSystem::new();
+}
 
 /// 渲染 HTML + CSS 到 RGBA 像素（[`RenderOutput::Pixels`]）。
 ///
@@ -49,7 +59,8 @@ pub fn render_page(
         viewport_height: height as f64,
     };
     let styles = compute_styles(&dom, &[sheet], &opts);
-    let mut tree = build_layout_tree(&dom, &styles);
+    // LAY-2：注入会话级共享字体系统（系统字体只枚举一次）。
+    let mut tree = FONT_SYSTEM.with(|fonts| build_layout_tree_with_fonts(&dom, &styles, fonts));
     // 布局用逻辑尺寸（CSS px）；scale 只影响栅格化，不改变布局。
     let layout = compute_layout(&mut tree, width as f32, height as f32)?;
     let input = PaintInput {

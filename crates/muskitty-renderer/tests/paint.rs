@@ -12,7 +12,7 @@ use muskitty_dom::Node;
 use muskitty_layout::{build_layout_tree, compute_layout, LayoutResult};
 use muskitty_renderer::{
     paint, Backend, Border, BorderStyle, Color, MockBackend, PaintInput, RenderCommand,
-    RenderOutput,
+    RenderOutput, TinySkiaBackend,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -597,4 +597,87 @@ fn paint_viewport_culling_skips_out_of_viewport() {
         None,
     );
     assert_eq!(cmds.len(), 1, "None viewport disables culling");
+}
+
+// —— RN-1：空 Clip 对的 Mask 懒构建 ——
+
+/// RN-1：10 万个 `[Clip, EndClip]` 空对（paint 层对有布局盒的 overflow
+/// 元素无条件生成）不得触发整画布 Mask 构建。修复前每个空对在 EndClip
+/// 迭代做一次全画布 `Mask::new` + `fill_path`——10 万 × 800×600 ≈
+/// 192 GB 无效 memset，CPU 挂起；修复后空对零成本，输出为纯白画布。
+/// 本测试同时是隐式性能回归测试——回归会令 CI 超时。
+#[test]
+fn empty_clip_pairs_cost_nothing() {
+    let mut cmds = Vec::with_capacity(200_000);
+    for _ in 0..100_000 {
+        cmds.push(RenderCommand::Clip {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        });
+        cmds.push(RenderCommand::EndClip);
+    }
+    let mut backend = TinySkiaBackend::new();
+    let out = backend.render(&cmds, 800, 600, 1.0);
+    let RenderOutput::Pixels {
+        width,
+        height,
+        data,
+    } = out
+    else {
+        panic!("expected Pixels output");
+    };
+    assert_eq!((width, height), (800, 600));
+    assert!(
+        data.iter().all(|&b| b == 255),
+        "no paint commands: canvas must stay pure white (RGBA 255)"
+    );
+}
+
+/// RN-1：Mask 移到消费点懒构建后，裁剪语义不变——clip 外的绘制被裁掉，
+/// EndClip 恢复后的绘制不受影响。
+#[test]
+fn clip_semantics_unchanged_after_lazy_mask() {
+    let cmds = vec![
+        RenderCommand::Clip {
+            x: 10.0,
+            y: 10.0,
+            width: 50.0,
+            height: 50.0,
+        },
+        // 覆盖全画布的红色矩形：clip 外全部被裁掉。
+        RenderCommand::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+            background: Some(Color::rgb(255, 0, 0)),
+            border: None,
+        },
+        RenderCommand::EndClip,
+        // clip 结束后的蓝色小矩形：完整绘制。
+        RenderCommand::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 5.0,
+            height: 5.0,
+            background: Some(Color::rgb(0, 0, 255)),
+            border: None,
+        },
+    ];
+    let mut backend = TinySkiaBackend::new();
+    let RenderOutput::Pixels { data, .. } = backend.render(&cmds, 800, 600, 1.0) else {
+        panic!("expected Pixels output");
+    };
+    let px = |x: u32, y: u32| {
+        let i = ((y * 800 + x) * 4) as usize;
+        (data[i], data[i + 1], data[i + 2])
+    };
+    // clip 区域中心：红色。
+    assert_eq!(px(30, 30), (255, 0, 0), "inside clip: red");
+    // clip 外（原本会被红矩形覆盖）：白色。
+    assert_eq!(px(200, 200), (255, 255, 255), "outside clip: white");
+    // EndClip 后的蓝色小矩形：完整绘制。
+    assert_eq!(px(2, 2), (0, 0, 255), "after EndClip: blue");
 }

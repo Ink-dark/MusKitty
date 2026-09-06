@@ -125,6 +125,13 @@ impl Backend for TinySkiaBackend {
         // 修复前每层 Clip 克隆整幅画布 Mask（4K ≈ 8 MB）并全画布求交，
         // N 层嵌套 overflow:hidden 即 O(N×画布) 内存/CPU——单页可 OOM/freeze
         // （审计 S-1）。`clip_saved` 存每层 push 前的裁剪区供 EndClip 恢复。
+        //
+        // RN-1：Mask 构建**延迟到绘制命令实际消费 clip 时**（Rect/Text
+        // 分支调用 [`clip_mask_for`]）。修复前在命令循环顶同步：paint 层
+        // 对有布局盒的 overflow 元素无条件生成 `[Clip, EndClip]` 空对，
+        // 每个空对在 EndClip 迭代触发一次整画布 `Mask::new` + `fill_path`
+        // ——10 万个兄弟空 `overflow:hidden` div × 1080p ≈ 200 GB 无效
+        // memset（CPU 挂起）；空对现在零成本。
         let mut clip_saved: Vec<Option<Rect>> = Vec::new();
         let mut clip_rect: Option<Rect> = None;
         let mut clip_mask: Option<Mask> = None;
@@ -135,24 +142,6 @@ impl Backend for TinySkiaBackend {
         let scale_xform = Transform::from_scale(scale, scale);
 
         for cmd in commands {
-            // 懒同步：裁剪区变化才重建 Mask。
-            if mask_built_for != clip_rect {
-                clip_mask = match clip_rect {
-                    Some(r) => {
-                        let mut m = Mask::new(pixmap.width(), pixmap.height()).expect("mask alloc");
-                        m.fill_path(
-                            &PathBuilder::from_rect(r),
-                            FillRule::Winding,
-                            false,
-                            scale_xform,
-                        );
-                        Some(m)
-                    }
-                    None => None,
-                };
-                mask_built_for = clip_rect;
-            }
-            let clip = clip_mask.as_ref();
             match cmd {
                 RenderCommand::Rect {
                     x,
@@ -166,6 +155,20 @@ impl Backend for TinySkiaBackend {
                     if *width <= 0.0 || *height <= 0.0 {
                         continue;
                     }
+                    // RN-1：无背景且无边框的矩形不产生任何绘制，跳过
+                    // （同时免去 Mask 构建）。
+                    let has_border = border.as_ref().is_some_and(|b| b.width > 0.0);
+                    if background.is_none() && !has_border {
+                        continue;
+                    }
+                    // RN-1：实际消费 clip 时才懒构建 Mask。
+                    let clip = clip_mask_for(
+                        &pixmap,
+                        clip_rect,
+                        &mut clip_mask,
+                        &mut mask_built_for,
+                        scale_xform,
+                    );
 
                     // 填充背景
                     if let Some(bg) = background {
@@ -197,6 +200,14 @@ impl Backend for TinySkiaBackend {
                 } => {
                     let font_system = self.font_system.get_or_insert_with(FontSystem::new);
                     let swash_cache = self.swash_cache.get_or_insert_with(SwashCache::new);
+                    // RN-1：实际消费 clip 时才懒构建 Mask。
+                    let clip = clip_mask_for(
+                        &pixmap,
+                        clip_rect,
+                        &mut clip_mask,
+                        &mut mask_built_for,
+                        scale_xform,
+                    );
                     draw_text(
                         &mut pixmap,
                         *x,
@@ -265,6 +276,34 @@ fn intersect_rect(a: Rect, b: Rect) -> Rect {
     } else {
         degenerate()
     }
+}
+
+/// RN-1：按需构建（或复用）当前裁剪区的 Mask。
+///
+/// 仅在绘制命令（Rect/Text）实际消费 clip 时调用：`built_for` 与当前
+/// 裁剪区一致则直接复用缓存；变化才重建（O(画布)）；无裁剪区返回
+/// `None`。`[Clip, EndClip]` 空对不再触发任何 Mask 分配。
+fn clip_mask_for<'a>(
+    pixmap: &Pixmap,
+    clip_rect: Option<Rect>,
+    clip_mask: &'a mut Option<Mask>,
+    built_for: &mut Option<Rect>,
+    scale_xform: Transform,
+) -> Option<&'a Mask> {
+    if *built_for != clip_rect {
+        *clip_mask = clip_rect.map(|r| {
+            let mut m = Mask::new(pixmap.width(), pixmap.height()).expect("mask alloc");
+            m.fill_path(
+                &PathBuilder::from_rect(r),
+                FillRule::Winding,
+                false,
+                scale_xform,
+            );
+            m
+        });
+        *built_for = clip_rect;
+    }
+    clip_mask.as_ref()
 }
 
 /// 绘制矩形边框（沿 border-box 内边缘描边）。
