@@ -32,9 +32,19 @@ use crate::command::{Border, BorderStyle, RenderCommand, TextAlign};
 /// `render` 后渲染结果通过 [`RenderOutput::Pixels`] 返回，PNG 编码走
 /// [`encode_png`](Self::encode_png) / [`save_png`](Self::save_png)。
 /// 内部 [`Pixmap`] 为私有实现，不暴露 tiny-skia 类型。
-#[derive(Debug, Default)]
+///
+/// F-12（审计 R-M3）：文本光栅化上下文（cosmic-text `FontSystem` /
+/// `SwashCache`）随 backend 跨 `render` 调用持久化——修复前每次 render
+/// 重建并全量扫描系统字体（Windows 上数十至数百 ms），交互 resize 期间
+/// 每帧重扫导致明显卡顿。字段私有，cosmic-text 类型不进入公共 API
+/// （外部依赖解耦约定）。
+#[derive(Default)]
 pub struct TinySkiaBackend {
     pixmap: Option<Pixmap>,
+    /// 首个 Text 命令到达时懒创建，跨 render 复用。
+    font_system: Option<FontSystem>,
+    /// 与 `font_system` 同生命周期；swash 字形缓存依赖其复用。
+    swash_cache: Option<SwashCache>,
 }
 
 impl TinySkiaBackend {
@@ -82,11 +92,20 @@ impl Backend for TinySkiaBackend {
         let scale = if scale > 0.0 { scale } else { 1.0 };
 
         // 物理分辨率 = round(逻辑 × scale)。Pixmap::new 返回 None 当 width/height
-        // 为 0 或超过 i32::MAX/4 → 回退 1x1 像素以避免 panic（此时命令通常也无法绘制）。
-        let phys_w = ((width as f32) * scale).round() as u32;
-        let phys_h = ((height as f32) * scale).round() as u32;
-        let mut pixmap = Pixmap::new(phys_w, phys_h)
-            .unwrap_or_else(|| Pixmap::new(1, 1).expect("1x1 pixmap always succeeds"));
+        // 为 0 或超过 i32::MAX/4 → 回退 1x1 像素以避免 panic。
+        // F-11（审计 R-M1）：回退时**同步**钳制 phys_w/phys_h——修复前
+        // `width=1, scale=0.4` 产出 0×0 的报告尺寸配 1×1 像素缓冲（长度
+        // 自相矛盾），且首个 Clip 命令按 0×0 建 Mask → `.expect` panic。
+        let mut phys_w = ((width as f32) * scale).round() as u32;
+        let mut phys_h = ((height as f32) * scale).round() as u32;
+        let mut pixmap = match Pixmap::new(phys_w, phys_h) {
+            Some(p) => p,
+            None => {
+                phys_w = 1;
+                phys_h = 1;
+                Pixmap::new(1, 1).expect("1x1 pixmap always succeeds")
+            }
+        };
 
         // P3-5: 画布默认填白（根元素背景传播的简化近似，见审计文档）。
         // 元素指令按序覆盖其上；未覆盖区域呈现白色而非透明。
@@ -97,24 +116,43 @@ impl Backend for TinySkiaBackend {
             pixmap.fill_rect(canvas, &white, Transform::identity(), None);
         }
 
-        // 文本光栅化上下文（懒创建：仅在遇首个 Text 命令时初始化，避免
-        // 纯色块场景下扫描系统字体）。
-        let mut font_system: Option<FontSystem> = None;
-        let mut swash_cache: Option<SwashCache> = None;
+        // F-12：文本光栅化上下文持久化在 backend 上（`self.font_system` /
+        // `self.swash_cache`），遇首个 Text 命令时懒创建，跨 render 复用。
 
-        // 裁剪栈（L-2）：Clip/EndClip 维护，栈顶作为后续绘制的 clip_mask。
-        // clip mask 为物理尺寸（device 空间）；clip rect 为逻辑坐标，fill /
-        // intersect 时用 scale_xform 映射进 mask 空间，避免坐标空间错位。
-        let canvas_w = phys_w;
-        let canvas_h = phys_h;
-        let mut clip_stack: Vec<Mask> = Vec::new();
+        // 裁剪栈（L-2 / F-10 重构）：嵌套矩形裁剪的交集仍是矩形，故当前
+        // 裁剪区用单个逻辑 rect 表示——push/pop 是 O(1) 纯数学；Mask 只
+        // 保留一份懒缓存，仅当裁剪区（逻辑 rect）变化时才重建（O(画布)）。
+        // 修复前每层 Clip 克隆整幅画布 Mask（4K ≈ 8 MB）并全画布求交，
+        // N 层嵌套 overflow:hidden 即 O(N×画布) 内存/CPU——单页可 OOM/freeze
+        // （审计 S-1）。`clip_saved` 存每层 push 前的裁剪区供 EndClip 恢复。
+        let mut clip_saved: Vec<Option<Rect>> = Vec::new();
+        let mut clip_rect: Option<Rect> = None;
+        let mut clip_mask: Option<Mask> = None;
+        let mut mask_built_for: Option<Rect> = None;
 
         // W-2：逻辑坐标 → 物理坐标的向量缩放（清晰非模糊放大）。所有 rect /
         // border / clip path 均走此变换；文本用 scale∘translate（见 draw_text）。
         let scale_xform = Transform::from_scale(scale, scale);
 
         for cmd in commands {
-            let clip = clip_stack.last();
+            // 懒同步：裁剪区变化才重建 Mask。
+            if mask_built_for != clip_rect {
+                clip_mask = match clip_rect {
+                    Some(r) => {
+                        let mut m = Mask::new(pixmap.width(), pixmap.height()).expect("mask alloc");
+                        m.fill_path(
+                            &PathBuilder::from_rect(r),
+                            FillRule::Winding,
+                            false,
+                            scale_xform,
+                        );
+                        Some(m)
+                    }
+                    None => None,
+                };
+                mask_built_for = clip_rect;
+            }
+            let clip = clip_mask.as_ref();
             match cmd {
                 RenderCommand::Rect {
                     x,
@@ -157,10 +195,8 @@ impl Backend for TinySkiaBackend {
                     text_align,
                     color,
                 } => {
-                    if font_system.is_none() {
-                        font_system = Some(FontSystem::new());
-                        swash_cache = Some(SwashCache::new());
-                    }
+                    let font_system = self.font_system.get_or_insert_with(FontSystem::new);
+                    let swash_cache = self.swash_cache.get_or_insert_with(SwashCache::new);
                     draw_text(
                         &mut pixmap,
                         *x,
@@ -173,8 +209,8 @@ impl Backend for TinySkiaBackend {
                         *text_align,
                         *color,
                         scale,
-                        font_system.as_mut().expect("font_system just initialized"),
-                        swash_cache.as_mut().expect("swash_cache just initialized"),
+                        font_system,
+                        swash_cache,
                         clip,
                     );
                 }
@@ -184,28 +220,19 @@ impl Backend for TinySkiaBackend {
                     width,
                     height,
                 } => {
-                    // 用矩形 path 裁剪：有栈顶则与栈顶相交，否则新建 mask 填充。
-                    let rect = match Rect::from_xywh(*x, *y, *width, *height) {
-                        Some(r) => r,
-                        None => continue,
+                    // 用矩形 rect 表示裁剪：有当前裁剪区则求交（纯数学），
+                    // 否则直接作为新裁剪区。mask 由懒同步统一重建。
+                    let Some(rect) = Rect::from_xywh(*x, *y, *width, *height) else {
+                        continue;
                     };
-                    let path = PathBuilder::from_rect(rect);
-                    let mask = match clip {
-                        Some(top) => {
-                            let mut m = top.clone();
-                            m.intersect_path(&path, FillRule::Winding, false, scale_xform);
-                            m
-                        }
-                        None => {
-                            let mut m = Mask::new(canvas_w, canvas_h).expect("mask alloc");
-                            m.fill_path(&path, FillRule::Winding, false, scale_xform);
-                            m
-                        }
-                    };
-                    clip_stack.push(mask);
+                    clip_saved.push(clip_rect);
+                    clip_rect = Some(match clip_rect {
+                        Some(cur) => intersect_rect(cur, rect),
+                        None => rect,
+                    });
                 }
                 RenderCommand::EndClip => {
-                    clip_stack.pop();
+                    clip_rect = clip_saved.pop().flatten();
                 }
             }
         }
@@ -220,6 +247,23 @@ impl Backend for TinySkiaBackend {
             height: phys_h,
             data: p.data().to_vec(),
         }
+    }
+}
+
+/// 两个逻辑 rect 的交集（F-10）。
+///
+/// 空交集返回零面积退化 rect：`fill_path` 填出全零 mask → 后续绘制全部
+/// 被裁掉（与旧实现"空交集 mask 不可见"效果一致）。
+fn intersect_rect(a: Rect, b: Rect) -> Rect {
+    let degenerate = || Rect::from_xywh(0.0, 0.0, 0.0, 0.0).expect("degenerate rect");
+    let left = a.left().max(b.left());
+    let top = a.top().max(b.top());
+    let right = a.right().min(b.right());
+    let bottom = a.bottom().min(b.bottom());
+    if right > left && bottom > top {
+        Rect::from_xywh(left, top, right - left, bottom - top).unwrap_or_else(degenerate)
+    } else {
+        degenerate()
     }
 }
 
@@ -549,6 +593,185 @@ mod tests {
         assert_eq!(g, 0);
         assert_eq!(b, 0);
         assert_eq!(a, 255);
+    }
+
+    // —— F-10: 裁剪栈有界化 ——
+
+    #[test]
+    fn font_system_lazily_created_and_persisted() {
+        // F-12（审计 R-M3）：文本上下文仅随首个 Text 命令创建，跨 render
+        // 持久化（修复前每次 render 重建并重扫系统字体）。
+        let mut backend = TinySkiaBackend::new();
+        let cmds_rect = vec![RenderCommand::rect(
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            Color::rgb(255, 0, 0),
+        )];
+        let _ = render_pixels(&mut backend, &cmds_rect, 10, 10, 1.0);
+        assert!(
+            backend.font_system.is_none(),
+            "rect-only render must not create font context"
+        );
+        let cmds_text = vec![RenderCommand::Text {
+            x: 1.0,
+            y: 1.0,
+            width: 40.0,
+            text: "T".to_string(),
+            font_size: 12.0,
+            font_family: "serif".to_string(),
+            font_weight: 400,
+            text_align: TextAlign::Left,
+            color: Color::rgb(0, 0, 0),
+        }];
+        let _ = render_pixels(&mut backend, &cmds_text, 50, 20, 1.0);
+        assert!(
+            backend.font_system.is_some() && backend.swash_cache.is_some(),
+            "text render must create font context"
+        );
+        // 后续 render（无 Text）不销毁已有上下文。
+        let _ = render_pixels(&mut backend, &cmds_rect, 10, 10, 1.0);
+        assert!(
+            backend.font_system.is_some(),
+            "font context must persist across renders"
+        );
+    }
+
+    // —— F-10: 裁剪栈有界化 ——
+
+    #[test]
+    fn subpixel_scale_zero_phys_dims_stay_consistent() {
+        // F-11（审计 R-M1）：width=1、scale=0.4 → round(0.4)=0。修复前
+        // pixmap 回退 1×1 但报告尺寸仍为 0×0（与 4 字节缓冲自相矛盾），
+        // 且首个 Clip 按 canvas 0×0 建 Mask → `.expect` panic。
+        let mut backend = TinySkiaBackend::new();
+        let cmds = vec![
+            RenderCommand::Clip {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            RenderCommand::rect(0.0, 0.0, 1.0, 1.0, Color::rgb(255, 0, 0)),
+            RenderCommand::EndClip,
+        ];
+        let (w, h, data) = render_pixels(&mut backend, &cmds, 1, 1, 0.4);
+        assert_eq!((w, h), (1, 1), "reported dims must match the buffer");
+        assert_eq!(data.len(), 4);
+    }
+
+    #[test]
+    fn thousand_nested_clips_complete_and_restore() {
+        // 审计 S-1：1000 层嵌套 Clip。修复前每层克隆整幅画布 Mask 并全画布
+        // 求交（内存 O(N×画布)，4K 画布千层 ≈ 8 GB）；修复后内存 O(画布)。
+        // 本测试同时是隐式性能回归测试——每层整画布克隆/求交的回归会令
+        // CI 超时。
+        // 裁剪 rect (i, i, 100, 100)：i≥100 后交集为空（退化 rect）。
+        let mut backend = TinySkiaBackend::new();
+        let mut cmds = Vec::new();
+        for i in 0..1000i32 {
+            let o = i as f32;
+            cmds.push(RenderCommand::Clip {
+                x: o,
+                y: o,
+                width: 100.0,
+                height: 100.0,
+            });
+        }
+        // 空交集内画红 rect → 不可见。
+        cmds.push(RenderCommand::rect(
+            150.0,
+            150.0,
+            40.0,
+            40.0,
+            Color::rgb(255, 0, 0),
+        ));
+        for _ in 0..1000 {
+            cmds.push(RenderCommand::EndClip);
+        }
+        // 栈恢复后画红 rect → 可见（EndClip 恢复语义保持）。
+        cmds.push(RenderCommand::rect(
+            10.0,
+            10.0,
+            40.0,
+            40.0,
+            Color::rgb(255, 0, 0),
+        ));
+        let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 200, 1.0);
+        assert_eq!((width, height), (200, 200));
+        let count_red = |data: &[u8], width: u32| -> usize {
+            let mut n = 0;
+            for y in 0..height {
+                for x in 0..width {
+                    let (r, g, b, _) = pixel(data, width, x, y);
+                    if r == 255 && g == 0 && b == 0 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        // (150,150) 在空交集内被裁掉；(10,10) 在恢复后可见。40×40 = 1600。
+        assert_eq!(
+            count_red(&data, width),
+            1600,
+            "clipped-out rect must be invisible; post-restore rect must show"
+        );
+    }
+
+    #[test]
+    fn nested_shrinking_clips_intersect_geometrically() {
+        // 50 层递缩裁剪（每层 x/y+10、w/h-10）→ 交集 (490,490,260,260)。
+        // 交集内红 rect 可见，交集外保持白底。
+        let mut backend = TinySkiaBackend::new();
+        let mut cmds = Vec::new();
+        for i in 0..50i32 {
+            let o = (i * 10) as f32;
+            let s = 800.0 - o;
+            cmds.push(RenderCommand::Clip {
+                x: o,
+                y: o,
+                width: s,
+                height: s,
+            });
+        }
+        cmds.push(RenderCommand::rect(
+            500.0,
+            500.0,
+            40.0,
+            40.0,
+            Color::rgb(255, 0, 0),
+        ));
+        cmds.push(RenderCommand::rect(
+            100.0,
+            100.0,
+            40.0,
+            40.0,
+            Color::rgb(0, 255, 0),
+        ));
+        for _ in 0..50 {
+            cmds.push(RenderCommand::EndClip);
+        }
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 800, 800, 1.0);
+        let (r, g, b) = {
+            let (r, g, b, _) = pixel(&data, width, 510, 510);
+            (r, g, b)
+        };
+        assert_eq!(
+            (r, g, b),
+            (255, 0, 0),
+            "rect inside the intersection must render"
+        );
+        let (r, g, b) = {
+            let (r, g, b, _) = pixel(&data, width, 110, 110);
+            (r, g, b)
+        };
+        assert_eq!(
+            (r, g, b),
+            (255, 255, 255),
+            "rect outside the intersection must be clipped"
+        );
     }
 
     #[test]

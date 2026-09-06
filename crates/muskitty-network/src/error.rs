@@ -12,6 +12,14 @@ pub enum NetworkError {
     Http(String),
     /// URL 解析或格式错误。
     InvalidUrl(String),
+    /// 响应体超过上限（F-14，审计 S-6）：敌意服务器可无限流式发送
+    /// 响应体（chunked 无需 Content-Length），无上限缓冲 = OOM abort。
+    BodyTooLarge {
+        /// 已接收 / 声明的字节数。
+        actual: usize,
+        /// 配置的上限（[`crate::MAX_BODY_BYTES`] 或自定义）。
+        limit: usize,
+    },
 }
 
 impl fmt::Display for NetworkError {
@@ -19,6 +27,9 @@ impl fmt::Display for NetworkError {
         match self {
             NetworkError::Http(e) => write!(f, "HTTP error: {e}"),
             NetworkError::InvalidUrl(u) => write!(f, "invalid URL: {u}"),
+            NetworkError::BodyTooLarge { actual, limit } => {
+                write!(f, "response body too large: {actual} bytes (limit {limit})")
+            }
         }
     }
 }

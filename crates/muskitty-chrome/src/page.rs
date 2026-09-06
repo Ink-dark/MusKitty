@@ -25,7 +25,17 @@ use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBacken
 /// 4. layout → LayoutResult（视口 = width × height）
 /// 5. paint → RenderCommand[]
 /// 6. TinySkiaBackend::render → `RenderOutput::Pixels`（RGBA8，物理分辨率）
-pub fn render_page(html: &str, css: &str, width: u32, height: u32, scale: f32) -> RenderOutput {
+///
+/// F-13（审计 S-7）：layout 失败以 `Err` 上抛而非 `.expect` panic——
+/// layout crate 的约定明确要求调用方**不得**跨模块 expect（旧实现任何
+/// taffy `Err` 都会 abort 整个浏览器进程）。调用方自行决定降级策略。
+pub fn render_page(
+    html: &str,
+    css: &str,
+    width: u32,
+    height: u32,
+    scale: f32,
+) -> Result<RenderOutput, Box<dyn std::error::Error>> {
     let dom = muskitty_html5_parser::parse(html);
     let parsed = parse_stylesheet(css);
     let sheet = {
@@ -41,7 +51,7 @@ pub fn render_page(html: &str, css: &str, width: u32, height: u32, scale: f32) -
     let styles = compute_styles(&dom, &[sheet], &opts);
     let mut tree = build_layout_tree(&dom, &styles);
     // 布局用逻辑尺寸（CSS px）；scale 只影响栅格化，不改变布局。
-    let layout = compute_layout(&mut tree, width as f32, height as f32).expect("layout failed");
+    let layout = compute_layout(&mut tree, width as f32, height as f32)?;
     let input = PaintInput {
         dom: &dom,
         styles: &styles,
@@ -50,7 +60,7 @@ pub fn render_page(html: &str, css: &str, width: u32, height: u32, scale: f32) -
     };
     let commands = paint(&input);
     let mut backend = TinySkiaBackend::new();
-    backend.render(&commands, width, height, scale)
+    Ok(backend.render(&commands, width, height, scale))
 }
 
 /// 渲染自包含 HTML 文件（含 `<style>`）到 RGBA 像素。
@@ -66,7 +76,7 @@ pub fn render_html_file(
 ) -> Result<RenderOutput, Box<dyn std::error::Error>> {
     let html = std::fs::read_to_string(path)?;
     let css = extract_inline_style(&html);
-    Ok(render_page(&html, &css, width, height, scale))
+    render_page(&html, &css, width, height, scale)
 }
 
 /// 从自包含 HTML 提取所有 `<style>...</style>` 块内容，拼接为 CSS。
@@ -147,7 +157,8 @@ mod tests {
             200,
             100,
             1.0,
-        );
+        )
+        .expect("render_page ok");
         let RenderOutput::Pixels {
             width,
             height,
@@ -175,7 +186,7 @@ mod tests {
   <p style="font-size:24px;color:#000000">Hello</p>
 </body></html>
 "#;
-        let out = render_page(html, "body { margin: 0; }", 200, 80, 1.0);
+        let out = render_page(html, "body { margin: 0; }", 200, 80, 1.0).expect("render_page ok");
         let RenderOutput::Pixels {
             width,
             height,
@@ -264,7 +275,8 @@ mod tests {
             200,
             100,
             2.0,
-        );
+        )
+        .expect("render_page ok");
         let RenderOutput::Pixels {
             width,
             height,

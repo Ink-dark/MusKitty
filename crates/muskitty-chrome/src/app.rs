@@ -261,15 +261,30 @@ impl App {
                 let a = self.views.active();
                 crate::page::render_page(&a.html, &a.css, vw, vh, scale)
             };
-            if let muskitty_renderer::RenderOutput::Pixels {
-                width,
-                height,
-                data,
-            } = out
-            {
-                self.views
-                    .active_mut()
-                    .store_render(data, width, height, vw, vh, scale);
+            match out {
+                Ok(muskitty_renderer::RenderOutput::Pixels {
+                    width,
+                    height,
+                    data,
+                }) => {
+                    self.views
+                        .active_mut()
+                        .store_render(data, width, height, vw, vh, scale);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    // F-13（审计 S-7）：layout 失败降级——保留上一帧并把
+                    // 本次视口记为已渲染（更新 layout_state），避免每个
+                    // flush 点重复失败刷屏；绝不 abort 浏览器进程。
+                    eprintln!("muskitty-chrome: page render failed: {e}");
+                    let last = {
+                        let (px, w, h) = self.views.active().frame();
+                        (px.to_vec(), w, h)
+                    };
+                    self.views
+                        .active_mut()
+                        .store_render(last.0, last.1, last.2, vw, vh, scale);
+                }
             }
         }
 

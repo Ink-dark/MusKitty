@@ -20,7 +20,7 @@ pub fn render_page_to_png(
     scale: f32,
     path: impl AsRef<Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let out = crate::page::render_page(html, css, width, height, scale);
+    let out = crate::page::render_page(html, css, width, height, scale)?;
     let muskitty_renderer::RenderOutput::Pixels {
         width,
         height,
@@ -55,7 +55,7 @@ pub fn render_window_to_png(
     let viewport_logical_w = ((window_width as f32) / scale).max(1.0) as u32;
     let viewport_logical_h =
         (((window_height as f32) - chrome_height(scale)) / scale).max(1.0) as u32;
-    let out = crate::page::render_page(html, css, viewport_logical_w, viewport_logical_h, scale);
+    let out = crate::page::render_page(html, css, viewport_logical_w, viewport_logical_h, scale)?;
     let (page_data, page_w, page_h) = match out {
         muskitty_renderer::RenderOutput::Pixels {
             width,

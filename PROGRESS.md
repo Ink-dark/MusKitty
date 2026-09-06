@@ -1,23 +1,23 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-08-29 | M-3 batch 1 完成（border 简写展开 → border-width/style/color + media 视口接线：`@media (min-width)` 等条件现按真实窗口逻辑视口求值）；下一里程碑 W-4 Headless 后端 + M-3 batch 2
+> 最后更新: 2026-09-06 | WPT 套件补全轮完成：CSS 系 crate（tokenizer/parser/values/selectors）新增 650 个 WPT 派生数据用例并实测合规度（selectors/parsing 74.8%、css-syntax 三层 100%），html5 夹具同步 WPT 上游并修复 §13.2.4 adjusted-current-node fragment 缺陷；实测报告见 [docs/wpt-compliance-2026-09-06.md](docs/wpt-compliance-2026-09-06.md)。上一轮（2026-09-05 审计修复 F-0~F-14）已完成
 >
 > Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
 > Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
-> 主仓库 workspace `members = ["crates/muskitty-renderer", "crates/muskitty-network"]`；renderer/network 在主仓库内（未剥离），其余 11 个 crate 已剥离为独立 git 仓库（muskitty-dev org），由 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
+> 主仓库 workspace `members = ["crates/muskitty-renderer", "crates/muskitty-network", "crates/muskitty-chrome"]`；renderer/network/chrome 在主仓库内（未剥离），其余 11 个 crate 已剥离为独立 git 仓库（muskitty-dev org），由 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
 
 ## 总览
 
 | 模块 | 状态 | 规范覆盖 | 测试通过率 | crates.io | 独立仓库 |
 |------|------|---------|-----------|-----------|---------|
 | **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | v0.1.2 | muskitty-dev/muskitty-html5-tokenizer |
-| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | 100% (1716/1716, 204 skipped) | v0.1.2 | muskitty-dev/muskitty-html5-parser |
+| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | WPT tree-construction 99.0% (1905/1924, 14 script-on skipped) | v0.1.2 | muskitty-dev/muskitty-html5-parser |
 | **muskitty-dom** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | v0.1.0 | muskitty-dev/muskitty-dom |
-| **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking | 单元测试全绿 | v0.2.0 | muskitty-dev/muskitty-css-tokenizer |
-| **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 74 单元 + 3 source-text | v0.2.0 | muskitty-dev/muskitty-css-parser |
+| **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking | 单元全绿 + WPT css/css-syntax tokenizer 层 100% (99/99) | v0.2.0 | muskitty-dev/muskitty-css-tokenizer |
+| **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 单元全绿 + WPT css/css-syntax parser 层 100% (27/27) | v0.2.0 | muskitty-dev/muskitty-css-parser |
 | **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.5.0 | muskitty-dev/muskitty-css |
-| **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 145 测试全绿 | v0.1.0 | muskitty-dev/muskitty-selectors |
-| **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 148 测试全绿 | v0.1.0 | muskitty-dev/muskitty-css-values |
+| **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 单元全绿 + WPT selectors/parsing 74.8% (380/508) | v0.1.0 | muskitty-dev/muskitty-selectors |
+| **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 单元全绿 + WPT 数值语法 100% (16/16) | v0.1.0 | muskitty-dev/muskitty-css-values |
 | **muskitty-cssom** | ✅ 完成 | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | 81 测试全绿 | v0.1.0 | muskitty-dev/muskitty-cssom |
 | **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 | 71 测试全绿 | 本地 v0.1.0 (未发布) | muskitty-dev/muskitty-cascade (已剥离) |
 | **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 集成 | 46 测试全绿 | 本地 v0.1.0 (未发布) | 🔗 muskitty-dev/muskitty-layout (已剥离) |
@@ -699,3 +699,27 @@ DOM (DomElement) + CssStyleSheet[]
 - **Shorthand 展开为 longhand**：未实现（如 `background: red` 不展开为 `background-color: red`）。需要属性数据库。
 
 crate 已剥离为独立 git 仓库（[muskitty-dev/muskitty-cascade](https://github.com/muskitty-dev/muskitty-cascade)），未发布到 crates.io。
+
+## 审计修复轮（2026-09-05）✅
+
+来源：[docs/audit-2026-09-05-perf-security.md](docs/audit-2026-09-05-perf-security.md)（7 高危 + 中危若干，威胁模型：敌意网页 → panic = 远程 DoS）。本轮按 [goal.md](goal.md) F-0~F-15 完成 **P0 + P1** 全部修复，P2/P3（纯性能/加固）显式延后。各 crate 仓库独立 commit + push，每项退出条件含新回归测试 + 全量测试绿 + clippy/fmt 零告警。
+
+| # | 修复 | 仓库 | 审计项 |
+|---|------|------|--------|
+| F-0 | h2 0.4.15→0.4.19（RUSTSEC-2026-0258） | 主仓库 | 依赖漏洞 |
+| F-1 | taffy 边界钳制（NaN→0、±inf→±2^25px）+ 修正"taffy 拒绝 NaN/Inf"的错误文档 | muskitty-layout | S-5 |
+| F-2 | var() 解析深度上限 32（线性链栈溢出 DoS） | muskitty-cascade | S-2 |
+| F-3 | CSS 嵌套限深 1024→200（浏览器平齐） | muskitty-css-parser | S-M1 |
+| F-4 | An+B i128 运算 + 复杂选择器单元数上限 1024 | muskitty-selectors | S-M2 / S-3 |
+| F-5+F-6 | 重复属性 HashSet 化（T3 O(n²)）+ 步数兜底降级 EOF、上限随输入缩放 | muskitty-html5-tokenizer | T3 / H-M6 + **新发现**：合法大 tag（10 万属性）触发固定 1M 步 panic |
+| F-7 | AFE 列表硬上限 256（Noah's Ark 绕过 O(n²)） | muskitty-html5-parser | S-4b |
+| F-8 | selectedness 增量备忘录（`<select>`+65k `<option>` O(n²)） | muskitty-html5-parser | S-4a |
+| F-9 | 非 Element fragment 上下文兜底 `<div>`（不再 expect panic） | muskitty-html5-parser | H-M2 |
+| F-10 | 裁剪栈单 rect 表示 + Mask 懒重建（内存 O(画布)，原 O(N×画布)） | 主仓库 renderer | S-1 |
+| F-11 | 1×1 回退时同步钳制物理尺寸（报告尺寸与缓冲一致） | 主仓库 renderer | R-M1 |
+| F-12 | FontSystem/SwashCache 随 backend 持久化（每次 render 重扫系统字体） | 主仓库 renderer | R-M3 |
+| F-13 | `render_page` Result 化 + flush 优雅降级（不跨模块 expect） | 主仓库 chrome | S-7 |
+| F-14 | 响应体 64 MiB 流式上限 + 30s/10s 超时 | 主仓库 network | S-6 |
+| F-15 | goal.md/PROGRESS.md 同步 + 审计报告修复标注 | 主仓库 | — |
+
+Mimosa 深度扫描（scan-2026-09-05T13-39-49）：424 依赖包 0 命中漏洞；5 个发现均在非引擎源码（rustdoc 生成物 `target/doc/static.files/*.js` ×3 误报、根目录工具脚本 `.ghlogin.py`/`gen_entities.py` 路径穿越提示 ×2），引擎源码零发现。
