@@ -1,6 +1,6 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-09-05 | 审计修复轮完成：P0+P1 安全修复 F-0~F-14 全部落地（var() 深度上限、AFE/option O(n²) DoS、taffy NaN/Inf 边界钳制、裁剪栈有界化、tokenizer 步数兜底降级、network 响应体上限+超时、h2 RUSTSEC-2026-0258 升级等），详见 [goal.md](goal.md) 与 [docs/audit-2026-09-05-perf-security.md](docs/audit-2026-09-05-perf-security.md)；P2/P3 性能项留待下一轮
+> 最后更新: 2026-09-06 | WPT 套件补全轮完成：CSS 系 crate（tokenizer/parser/values/selectors）新增 650 个 WPT 派生数据用例并实测合规度（selectors/parsing 74.8%、css-syntax 三层 100%），html5 夹具同步 WPT 上游并修复 §13.2.4 adjusted-current-node fragment 缺陷；实测报告见 [docs/wpt-compliance-2026-09-06.md](docs/wpt-compliance-2026-09-06.md)。上一轮（2026-09-05 审计修复 F-0~F-14）已完成
 >
 > Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
 > Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
@@ -11,13 +11,13 @@
 | 模块 | 状态 | 规范覆盖 | 测试通过率 | crates.io | 独立仓库 |
 |------|------|---------|-----------|-----------|---------|
 | **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | v0.1.2 | muskitty-dev/muskitty-html5-tokenizer |
-| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | 100% (1716/1716, 204 skipped) | v0.1.2 | muskitty-dev/muskitty-html5-parser |
+| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | WPT tree-construction 99.0% (1905/1924, 14 script-on skipped) | v0.1.2 | muskitty-dev/muskitty-html5-parser |
 | **muskitty-dom** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | v0.1.0 | muskitty-dev/muskitty-dom |
-| **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking | 单元测试全绿 | v0.2.0 | muskitty-dev/muskitty-css-tokenizer |
-| **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 74 单元 + 3 source-text | v0.2.0 | muskitty-dev/muskitty-css-parser |
+| **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking | 单元全绿 + WPT css/css-syntax tokenizer 层 100% (99/99) | v0.2.0 | muskitty-dev/muskitty-css-tokenizer |
+| **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 单元全绿 + WPT css/css-syntax parser 层 100% (27/27) | v0.2.0 | muskitty-dev/muskitty-css-parser |
 | **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.5.0 | muskitty-dev/muskitty-css |
-| **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 145 测试全绿 | v0.1.0 | muskitty-dev/muskitty-selectors |
-| **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 148 测试全绿 | v0.1.0 | muskitty-dev/muskitty-css-values |
+| **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 单元全绿 + WPT selectors/parsing 74.8% (380/508) | v0.1.0 | muskitty-dev/muskitty-selectors |
+| **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 单元全绿 + WPT 数值语法 100% (16/16) | v0.1.0 | muskitty-dev/muskitty-css-values |
 | **muskitty-cssom** | ✅ 完成 | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | 81 测试全绿 | v0.1.0 | muskitty-dev/muskitty-cssom |
 | **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 | 71 测试全绿 | 本地 v0.1.0 (未发布) | muskitty-dev/muskitty-cascade (已剥离) |
 | **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 集成 | 46 测试全绿 | 本地 v0.1.0 (未发布) | 🔗 muskitty-dev/muskitty-layout (已剥离) |
