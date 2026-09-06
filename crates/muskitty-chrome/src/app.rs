@@ -19,6 +19,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{Window, WindowId};
 
+use crate::navigation::{self, NavigationKind, NavigationOutcome};
 use crate::shortcut::{self, InputEvent, Key, ShortcutAction};
 use crate::webview::WebViewCollection;
 
@@ -104,6 +105,10 @@ pub struct App {
     /// 源文件驱动的标签索引（v1 = 启动标签 0；无标签拖拽，仅受关闭影响，
     /// 关闭后越界则停止重载）。
     source_tab: usize,
+    /// 在途导航结果的接收器（每条地址栏 http(s) 导航一个；结果在
+    /// `about_to_wait` 统一吸干应用——网络 IO 在抓取线程完成，事件循环
+    /// 只做无阻塞消费）。
+    nav_results: Vec<std::sync::mpsc::Receiver<NavigationOutcome>>,
 }
 
 /// Ctrl+T 新标签内容：大号 "Tab N"（可区分，切换可见）。
@@ -113,18 +118,13 @@ fn new_tab_content(n: usize) -> String {
     )
 }
 
-/// 地址栏提交后的占位页（网络未接入，M-1 延后）：回显 URL 作为观测闭环。
+/// 不支持 scheme（data:/about:/javascript: 等）的占位页：回显 URL 作为
+/// 观测闭环。http/https/file 已由 [`App::navigate_active`] 分流。
 fn url_placeholder_page(url: &str) -> String {
     format!(
-        "<!doctype html><html><body><h1 style=\"font-size:40px\">{}</h1><p style=\"font-size:16px\">Network not wired yet (M-1 deferred). URL submitted via address bar.</p></body></html>",
-        html_escape(url)
+        "<!doctype html><html><body><h1 style=\"font-size:40px\">{}</h1><p style=\"font-size:16px\">Scheme not supported (http/https/file are). URL submitted via address bar.</p></body></html>",
+        navigation::escape_html(url)
     )
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 impl App {
@@ -140,6 +140,7 @@ impl App {
             cursor: (0.0, 0.0),
             source: None,
             source_tab: 0,
+            nav_results: Vec::new(),
         }
     }
 
@@ -343,16 +344,106 @@ impl App {
                 self.after_tab_change();
             }
             ChromeEffect::ReloadPage => self.after_tab_change(),
-            ChromeEffect::UrlSubmitted(url) if !url.is_empty() => {
-                // 网络未接入（M-1 延后）：占位页回显 URL，标签标题
-                // 更新为 URL——观测闭环。
-                let active = self.views.active_mut();
-                active.html = url_placeholder_page(&url);
-                active.set_title(&url);
-                self.after_tab_change();
-            }
+            ChromeEffect::UrlSubmitted(url) if !url.is_empty() => self.navigate_active(&url),
             ChromeEffect::UrlSubmitted(_) => {}
         }
+    }
+
+    /// 地址栏提交 → 导航（Phase 5 接驳，HTML Standard §7.2 极简子集：
+    /// 顶级文档 GET）。
+    ///
+    /// 分类见 [`navigation::classify_url`]。加载期间保留旧页，标题先更新
+    /// 为输入（观测闭环），到站后由 [`Self::drain_navigation_results`]
+    /// 回填。file 加载同步完成；http(s) 在独立线程抓取。所有分支推进
+    /// 导航代数——同标签先发的在途结果因此全部失效。
+    fn navigate_active(&mut self, input: &str) {
+        match navigation::classify_url(input) {
+            NavigationKind::Http(url) => {
+                let tab = self.views.active_index();
+                let epoch = {
+                    let view = self.views.active_mut();
+                    view.navigation_epoch += 1;
+                    view.navigation_epoch
+                };
+                self.views.active_mut().set_title(&url);
+                self.nav_results
+                    .push(navigation::spawn_http_navigation(url, tab, epoch));
+                self.after_tab_change();
+            }
+            NavigationKind::File(path) => {
+                {
+                    let view = self.views.active_mut();
+                    view.navigation_epoch += 1;
+                    match std::fs::read_to_string(&path) {
+                        Ok(html) => {
+                            view.css = crate::page::extract_inline_style(&html);
+                            view.html = html;
+                            let name = std::path::Path::new(&path)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.clone());
+                            view.set_title(name);
+                        }
+                        Err(e) => {
+                            view.css = String::new();
+                            view.html = navigation::error_page(&path, &e.to_string());
+                            view.set_title(&path);
+                        }
+                    }
+                }
+                self.after_tab_change();
+            }
+            NavigationKind::Unsupported(url) => {
+                {
+                    let view = self.views.active_mut();
+                    view.navigation_epoch += 1;
+                    view.css = String::new();
+                    view.html = url_placeholder_page(&url);
+                    view.set_title(&url);
+                }
+                self.after_tab_change();
+            }
+        }
+    }
+
+    /// 吸干在途导航结果并应用到目标标签。返回是否有页面变化。
+    ///
+    /// 结果携带提交时的 `(tab, epoch)`：标签不存在（已关）或代数不匹配
+    /// （改址后的过期导航）静默丢弃；channel 断开（线程已发完退出）→
+    /// 移除接收器。
+    fn drain_navigation_results(&mut self) -> bool {
+        let mut outcomes = Vec::new();
+        self.nav_results.retain_mut(|rx| loop {
+            match rx.try_recv() {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break false,
+            }
+        });
+        let mut changed = false;
+        for outcome in outcomes {
+            let Some(view) = self.views.get_mut(outcome.tab) else {
+                continue;
+            };
+            if view.navigation_epoch != outcome.epoch {
+                continue;
+            }
+            match outcome.result {
+                Ok(doc) => {
+                    view.html = doc.html;
+                    view.css = doc.css;
+                    view.set_title(doc.final_url);
+                }
+                Err(message) => {
+                    view.css = String::new();
+                    view.html = navigation::error_page(&outcome.url, &message);
+                    view.set_title(&outcome.url);
+                }
+            }
+            view.mark_needs_repaint();
+            changed = true;
+        }
+        changed
     }
 
     /// 键盘分发：地址栏 Esc 取焦点 > shell 快捷键（Ctrl+T/W/1~9/
@@ -446,8 +537,10 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // 热重载轮询 + 定时唤醒（WaitUntil；无源文件时轮询为 no-op）。
-        if self.poll_source() {
+        // 在途导航结果 + 热重载轮询（WaitUntil 定时唤醒；无源文件时轮询
+        // 为 no-op）。有变化 → 请求重绘（RedrawRequested 统一 flush）。
+        let nav_changed = self.drain_navigation_results();
+        if nav_changed || self.poll_source() {
             self.request_flush();
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + HOT_RELOAD_POLL));
@@ -523,6 +616,116 @@ mod tests {
         let page = url_placeholder_page("<script>x</script>");
         assert!(!page.contains("<script>"));
         assert!(page.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn navigation_result_applies_to_tab_and_stale_dropped() {
+        use crate::navigation::NavigationDoc;
+        let mut app = App::new("<html>old</html>", "");
+        // 模拟已提交导航：标签代数推进到 1。
+        app.views.active_mut().navigation_epoch = 1;
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(NavigationOutcome {
+            tab: 0,
+            epoch: 1,
+            url: "https://example.com".to_string(),
+            result: Ok(NavigationDoc {
+                final_url: "https://example.com/".to_string(),
+                html: "<html>new</html>".to_string(),
+                css: "p{color:red}".to_string(),
+            }),
+        })
+        .unwrap();
+        drop(tx);
+        app.nav_results.push(rx);
+
+        // 到站：应用 + 重绘；断开的接收器被清理。
+        assert!(app.drain_navigation_results());
+        assert_eq!(app.views.active().html, "<html>new</html>");
+        assert_eq!(app.views.active().css, "p{color:red}");
+        assert_eq!(app.views.active().title, "https://example.com/");
+        assert!(app.views.active().needs_repaint());
+        assert!(app.nav_results.is_empty());
+        assert!(!app.drain_navigation_results(), "no pending results");
+
+        // 代数不匹配（改址后的过期导航）：不应用，接收器照样清理。
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(NavigationOutcome {
+            tab: 0,
+            epoch: 99,
+            url: "https://stale.example".to_string(),
+            result: Ok(NavigationDoc {
+                final_url: "https://stale.example/".to_string(),
+                html: "<html>stale</html>".to_string(),
+                css: String::new(),
+            }),
+        })
+        .unwrap();
+        drop(tx);
+        app.nav_results.push(rx);
+        assert!(!app.drain_navigation_results());
+        assert_eq!(app.views.active().html, "<html>new</html>");
+        assert!(app.nav_results.is_empty());
+    }
+
+    #[test]
+    fn navigation_error_result_renders_error_page() {
+        let mut app = App::new("<html>old</html>", "");
+        app.views.active_mut().navigation_epoch = 3;
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(NavigationOutcome {
+            tab: 0,
+            epoch: 3,
+            url: "https://down.example".to_string(),
+            result: Err("connection refused".to_string()),
+        })
+        .unwrap();
+        drop(tx);
+        app.nav_results.push(rx);
+
+        assert!(app.drain_navigation_results());
+        assert!(app.views.active().html.contains("Navigation failed"));
+        assert!(app.views.active().html.contains("connection refused"));
+        assert!(app.views.active().css.is_empty());
+        assert_eq!(app.views.active().title, "https://down.example");
+    }
+
+    #[test]
+    fn navigate_active_file_scheme_loads_local_html() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("muskitty_nav_file_test.html");
+        std::fs::write(
+            &path,
+            "<!doctype html><html><head><style>p{color:blue}</style></head><body><p>nav-file</p></body></html>",
+        )
+        .unwrap();
+        let mut app = App::new("<html>old</html>", "");
+        app.navigate_active(&format!("file:///{}", path.to_string_lossy()));
+        assert!(app.views.active().html.contains("nav-file"));
+        assert_eq!(app.views.active().css, "p{color:blue}\n");
+        assert_eq!(app.views.active().title, "muskitty_nav_file_test.html");
+        assert!(app.views.active().needs_repaint());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn navigate_active_unsupported_shows_placeholder() {
+        let mut app = App::new("<html>old</html>", "");
+        app.navigate_active("data:text/html,<b>hi</b>");
+        assert!(app.views.active().html.contains("Scheme not supported"));
+        assert_eq!(app.views.active().title, "data:text/html,<b>hi</b>");
+    }
+
+    #[test]
+    fn navigate_active_http_queues_result_and_bumps_epoch() {
+        let mut app = App::new("<html>old</html>", "");
+        // 必然快速连接失败的地址（同 network crate 策略）：只验证入队与
+        // 代数推进，不等结果（结果应用已有专门用例）。
+        app.navigate_active("https://127.0.0.1:1/");
+        assert_eq!(app.views.active().navigation_epoch, 1);
+        assert_eq!(app.views.active().title, "https://127.0.0.1:1/");
+        assert_eq!(app.nav_results.len(), 1);
+        assert!(app.views.active().needs_repaint());
     }
 
     #[test]
