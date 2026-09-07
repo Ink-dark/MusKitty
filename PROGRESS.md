@@ -1,6 +1,6 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-09-06 | 网络层接驳轮完成：`muskitty-network` 补 `fetch_blocking` 同步入口，`muskitty-chrome` 新增 `navigation` 模块并把地址栏导航接上网络层（http/https 顶级文档抓取 + file 加载 + Content-Type 分发 + `(tab, epoch)` 过期导航丢弃），"Network not wired yet" 占位状态结束。上一轮（WPT 套件补全 + 合规度实测）已完成
+> 最后更新: 2026-09-07 | P0 止血批核查与集成轮：审计 2026-09-06 的 4 项 P0（V-1 var() 输出预算 / CSS-P1 规则级嵌套守卫 / SEL-1 匹配记忆化+预算 / SEL-2 :has 嵌套禁止）已由架构师在 muskitty-dev 各 crate 远端落地（附 SEL-3、CAS-1/2/3），本轮合并 cascade 并行实现冲突、三仓库全量验证（cascade 197 / css-parser 84 / selectors 169 全绿）+ 主仓库 workspace 集成全绿；真机 GUI 检测（导航分流/过期导航/颜色真机确认）因控制台锁定暂挂，另修复 rgba_to_0rgb R/B 互换（9562f0f）。上一轮（网络层接驳）已完成
 >
 > Phase 3（Layout 层）已完成并剥离：`muskitty-layout` v0.1.0 已拆为独立 git 仓库（muskitty-dev org）。
 > Phase 4（Renderer）B-3 / B-4 已完成：`muskitty-renderer`（tiny-skia 后端）DOM→CSS→Layout→Render 全链路打通，最小 demo（HTML+CSS → PNG）工作。
