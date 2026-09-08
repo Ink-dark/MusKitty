@@ -22,6 +22,8 @@ is the workspace coordinator and project-level documentation hub.
 | `muskitty-cssom` | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | v0.1.0 | [muskitty-dev/muskitty-cssom](https://github.com/muskitty-dev/muskitty-cssom) |
 | `muskitty-cascade` | CSS Cascade L5 §4.1–§4.4/§5/§6.1/§7 | local v0.1.0 | [muskitty-dev/muskitty-cascade](https://github.com/muskitty-dev/muskitty-cascade) |
 | `muskitty-layout` | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 | local v0.1.0 | [muskitty-dev/muskitty-layout](https://github.com/muskitty-dev/muskitty-layout) |
+| `muskitty-network` | NetworkFetcher trait abstraction + reqwest (rustls) backend; top-level document GET wired to the browser chrome | local v0.1.0 | in this repo (workspace member) |
+| `muskitty-chrome` | Self-drawn browser chrome (tab strip / toolbar / address bar) + winit/softbuffer windowing + navigation | local v0.1.0 | in this repo (workspace member) |
 
 Test status (latest CI): each independent repo runs 6 jobs (Check / Unit
 Tests / Integration Tests / Format / Clippy / MSRV 1.82). See PROGRESS.md for
@@ -32,7 +34,9 @@ the per-crate test matrix.
 - Rendering / compositing / GPU integration
 - JavaScript engine (no V8, no Blink)
 - Browser UI / Chrome / extensions
-- Networking stack (deferred to a later layer)
+- Networking beyond top-level document GET (the network layer covers plain
+  `http(s)` document fetches today; CORS / cookies / cache and full WHATWG
+  Fetch semantics are future work)
 
 The project has completed Phase 2 (CSS parsing layer: tokenizer, parser,
 selectors, values, CSSOM, and cascade), Phase 3 (Layout: taffy 0.12
@@ -40,15 +44,17 @@ integration with CSS Cascade + DOM), and Phase 4 (Renderer: DOM → CSS →
 Layout → Render to PNG/window, including text rendering via cosmic-text).
 Recent work added position/overflow/grid layout support and decoupled
 external dependencies (taffy / tiny-skia / cosmic-text / reqwest) from the
-public APIs of their crates. Layer 5 (Network) has a `NetworkFetcher` trait
-abstraction + reqwest backend as a foundation — see
-[PROGRESS.md](PROGRESS.md) for the layer roadmap.
+public APIs of their crates. Layer 5 (Network) provides a `NetworkFetcher`
+trait abstraction + reqwest backend and is wired to the browser shell: the
+chrome window's address bar navigates `http(s)` and `file` URLs through
+muskitty-network (top-level document GET) — see [PROGRESS.md](PROGRESS.md)
+for the layer roadmap and the native HTTP stack plan.
 
 ## Repository layout
 
 ```
 MusKitty/                              # this repo — workspace coordinator
-├── Cargo.toml                         # members = [renderer, network], exclude = [11 extracted crates]
+├── Cargo.toml                         # members = [renderer, network, chrome], exclude = [11 extracted crates]
 ├── PROGRESS.md                        # project-wide progress dashboard
 ├── CLAUDE.md / AGENTS.md              # engineering rules / hard constraints
 ├── README.md                          # this file
@@ -57,6 +63,7 @@ MusKitty/                              # this repo — workspace coordinator
 ├── crates/
 │   ├── muskitty-renderer/             # 📦 workspace member (tiny-skia backend)
 │   ├── muskitty-network/              # 📦 workspace member (NetworkFetcher trait + reqwest)
+│   ├── muskitty-chrome/               # 📦 workspace member (self-drawn chrome + winit window)
 │   ├── muskitty-cascade/              # 🔗 extracted → muskitty-dev/muskitty-cascade
 │   ├── muskitty-layout/               # 🔗 extracted → muskitty-dev/muskitty-layout
 │   ├── muskitty-css/                  # 🔗 extracted → muskitty-dev/muskitty-css
@@ -79,9 +86,10 @@ MusKitty/                              # this repo — workspace coordinator
 📦 = workspace member, tracked in this repo.
 🔗 = extracted as independent repo (gitignored here); use `fetch-crates.ps1` to pull.
 
-The 2 workspace members (`muskitty-renderer`, `muskitty-network`) depend on the
-extracted crates via `path = "..."`. The extracted crates are listed in
-`Cargo.toml → exclude` (not `members`) and are each their own `[workspace]` root.
+The 3 workspace members (`muskitty-renderer`, `muskitty-network`,
+`muskitty-chrome`) depend on the extracted crates via `path = "..."`. The
+extracted crates are listed in `Cargo.toml → exclude` (not `members`) and are
+each their own `[workspace]` root.
 
 ## Using the published crates
 
@@ -101,10 +109,11 @@ MSRV: Rust 1.82+ across all crates.
 
 ## Building locally
 
-The workspace members (`muskitty-renderer`, `muskitty-network`) depend on crates
-that are **not** tracked in this repo because each has been extracted to its
-own repository under [`muskitty-dev`](https://github.com/muskitty-dev). A fresh
-clone will be missing those directories — run the fetch script first.
+The workspace members (`muskitty-renderer`, `muskitty-network`,
+`muskitty-chrome`) depend on crates that are **not** tracked in this repo
+because each has been extracted to its own repository under
+[`muskitty-dev`](https://github.com/muskitty-dev). A fresh clone will be
+missing those directories — run the fetch script first.
 
 ### One-time setup
 

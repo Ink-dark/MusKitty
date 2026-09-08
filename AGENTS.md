@@ -6,13 +6,13 @@ This file provides guidance to AI coding agents (Codex CLI / Claude Code / etc.)
 
 从零用 Rust 重写浏览器核心模块。独立实现，不 fork Chromium。Chromium 源码仅作参考，WHATWG 规范和 WPT 测试套件是行为 ground truth。
 
-当前阶段：Phase 4（Renderer）B-3 / B-4 已完成，DOM→CSS→Layout→Render 全链路打通，最小可运行 demo 工作（HTML+CSS → PNG）。HTML 解析层（tokenizer + tree construction + DOM）、CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配 + CSS Values + CSSOM + Cascade + Layout + tiny-skia Renderer 均已完成。Phase 5（Network）已启动基础搭建（`NetworkFetcher` trait 抽象 + reqwest 后端，远期自研 HTTP 栈，见 [docs/plans/2026-08-09-phase5-network.md](docs/plans/2026-08-09-phase5-network.md)）；2026-09-06 已接驳 chrome 地址栏导航（顶级文档 GET：http/https 抓取 + file 加载，chrome `navigation` 模块 + `fetch_blocking` 同步入口），子资源/历史栈待后续。全项目审计（[docs/audit-2026-08-08-full-scan.md](docs/audit-2026-08-08-full-scan.md)）B1-B14 已全部完成、P0/P1/P2 清零。当前焦点：文本渲染（cosmic-text 集成）→ 布局增强（position/overflow/grid）→ 窗口化（winit + softbuffer 真窗口）→ 外部依赖解耦（layout/renderer/network，见 [docs/decisions/2026-08-16-external-dependency-decoupling.md](docs/decisions/2026-08-16-external-dependency-decoupling.md)）均已完成；T-3 换行待后续；Network 已接驳 chrome 导航（保持 trait 抽象 + reqwest 基础，自研栈路线不变）。
+当前阶段：Phase 4（Renderer）B-3 / B-4 已完成，DOM→CSS→Layout→Render 全链路打通，最小可运行 demo 工作（HTML+CSS → PNG）。HTML 解析层（tokenizer + tree construction + DOM）、CSS Syntax tokenizer/parser/grammar hooks + Selectors Level 4 解析与匹配 + CSS Values + CSSOM + Cascade + Layout + tiny-skia Renderer 均已完成。Phase 5（Network）已启动基础搭建（`NetworkFetcher` trait 抽象 + reqwest 后端，远期自研 HTTP 栈，见 [docs/plans/2026-08-09-phase5-network.md](docs/plans/2026-08-09-phase5-network.md)）；2026-09-06 已接驳 chrome 地址栏导航（顶级文档 GET：http/https 抓取 + file 加载，chrome `navigation` 模块 + `fetch_blocking` 同步入口），子资源/历史栈待后续。全项目审计（[docs/audit-2026-08-08-full-scan.md](docs/audit-2026-08-08-full-scan.md)）B1-B14 已全部完成、P0/P1/P2 清零。2026-09-06 漏洞/架构/性能全量审计（[docs/audit-2026-09-06-vuln-arch-perf.md](docs/audit-2026-09-06-vuln-arch-perf.md)）的 4 项 P0（V-1 var() 输出预算 / CSS-P1 规则级嵌套守卫 / SEL-1 匹配记忆化+预算 / SEL-2 :has 嵌套禁止）已修复落地于 muskitty-dev 的 cascade/css-parser/selectors（修复记录见该审计第十节），并顺带完成 P1 的 SEL-3 与 CAS-1/2/3；其余 P1/P2/P3 按审计批次建议排后续轮。当前焦点：文本渲染（cosmic-text 集成）→ 布局增强（position/overflow/grid）→ 窗口化（winit + softbuffer 真窗口）→ 外部依赖解耦（layout/renderer/network，见 [docs/decisions/2026-08-16-external-dependency-decoupling.md](docs/decisions/2026-08-16-external-dependency-decoupling.md)）均已完成；T-3 换行待后续；Network 已接驳 chrome 导航（保持 trait 抽象 + reqwest 基础，自研栈路线不变）。
 
 本主仓库 (`Ink-dark/MusKitty`) 作 workspace 协调中心：`members = ["crates/muskitty-renderer", "crates/muskitty-network", "crates/muskitty-chrome"]`，11 个已剥离 crate 列在 `exclude` 中并各自独立 git 仓库于 `muskitty-dev/` org 下，新设备 clone 主仓库后通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
 
 ## Build & Test Commands
 
-主仓库 `members = ["crates/muskitty-renderer", "crates/muskitty-cascade", "crates/muskitty-cssom"]`，可直接 `cargo check --workspace` 一次性检查所有 in-tree crate。其他 11 个独立 crate 在各自目录里构建。
+主仓库 `members = ["crates/muskitty-renderer", "crates/muskitty-network", "crates/muskitty-chrome"]`，可直接 `cargo check --workspace` 一次性检查所有 in-tree crate。其他 11 个独立 crate 在各自目录里构建。
 
 ```bash
 # 在工作区根（主仓库）一次性检查/测试所有 in-tree crate
@@ -43,7 +43,7 @@ bash ./fetch-crates.sh           # Linux/macOS
 
 ```
 MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，workspace 协调中心
-├── Cargo.toml                          # members = [renderer, network], exclude = [11 个已剥离 crate]
+├── Cargo.toml                          # members = [renderer, network, chrome], exclude = [11 个已剥离 crate]
 ├── PROGRESS.md                         # 项目进度面板
 ├── CLAUDE.md / AGENTS.md               # 硬约束指南（本文件）
 ├── goal.md                             # 当轮任务清单与退出条件
@@ -51,7 +51,8 @@ MusKitty/                               # 主仓库 (Ink-dark/MusKitty)，worksp
 ├── fetch-crates.ps1 / .sh              # 一次性拉取 11 个独立 crate 的脚本
 ├── crates/                             # workspace member + 独立 git 仓库
 │   ├── muskitty-renderer/              # 📦 workspace member (tiny-skia backend, 未剥离)
-│   ├── muskitty-network/               # 📦 workspace member (NetworkFetcher trait + reqwest 后端, 远期自研 HTTP 栈)
+│   ├── muskitty-network/               # 📦 workspace member (NetworkFetcher trait + reqwest 后端 + fetch_blocking, 已接驳 chrome 导航)
+│   ├── muskitty-chrome/                # 📦 workspace member (自绘 chrome + winit 窗口 + 地址栏导航)
 │   ├── muskitty-cascade/               # 🔗 已剥离 (CSS Cascade L5)
 │   ├── muskitty-cssom/                 # 🔗 已剥离 (CSSOM)
 │   ├── muskitty-layout/                # 🔗 已剥离 (taffy 0.12 layout)

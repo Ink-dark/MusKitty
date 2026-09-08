@@ -16,10 +16,10 @@
 | **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking | 单元全绿 + WPT css/css-syntax tokenizer 层 100% (99/99) | v0.2.0 | muskitty-dev/muskitty-css-tokenizer |
 | **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 单元全绿 + WPT css/css-syntax parser 层 100% (27/27) | v0.2.0 | muskitty-dev/muskitty-css-parser |
 | **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.5.0 | muskitty-dev/muskitty-css |
-| **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 单元全绿 + WPT selectors/parsing 74.8% (380/508) | v0.1.0 | muskitty-dev/muskitty-selectors |
+| **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 | 单元全绿 + WPT selectors/parsing 75.6% (384/508，has 夹具 33/33 硬断言) | v0.1.0 | muskitty-dev/muskitty-selectors |
 | **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 单元全绿 + WPT 数值语法 100% (16/16) | v0.1.0 | muskitty-dev/muskitty-css-values |
 | **muskitty-cssom** | ✅ 完成 | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | 81 测试全绿 | v0.1.0 | muskitty-dev/muskitty-cssom |
-| **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 | 71 测试全绿 | 本地 v0.1.0 (未发布) | muskitty-dev/muskitty-cascade (已剥离) |
+| **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 | 197 测试全绿 (89 lib + 108 集成) | 本地 v0.1.0 (未发布) | muskitty-dev/muskitty-cascade (已剥离) |
 | **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3 + Flexbox L1 §4-§8 + taffy 0.12 集成 | 46 测试全绿 | 本地 v0.1.0 (未发布) | 🔗 muskitty-dev/muskitty-layout (已剥离) |
 | **muskitty-renderer** | ✅ Phase 4 B-3/B-4 | tiny-skia 后端：DOM→CSS→Layout→Render 全链路 + HTML+CSS→PNG demo | — | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | DOM 完整 API (Events/Style/innerHTML) | ✅ 完成 (2026-08-09) | Events → dom `event.rs` · element.style → cssom `element_style.rs` · innerHTML/outerHTML → html5-parser `serialize.rs`+`parse_fragment` | dom/cssom 全绿 + html5-parser WPT 99.0% (1889/1908) | — | — |
@@ -306,11 +306,11 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 源代码结构
 
-主仓库作为 workspace 协调中心；11 个 crate 各自独立 git 仓库（在 `exclude` 列表中），`muskitty-renderer` / `muskitty-network` 作为 workspace member 在主仓库内开发（未剥离）。具体每个独立 crate 的内部结构见各自仓库的 README。
+主仓库作为 workspace 协调中心；11 个 crate 各自独立 git 仓库（在 `exclude` 列表中），`muskitty-renderer` / `muskitty-network` / `muskitty-chrome` 作为 workspace member 在主仓库内开发（未剥离）。具体每个独立 crate 的内部结构见各自仓库的 README。
 
 ```
 d:\Muskitty\                              # 主仓库 (Ink-dark/MusKitty)
-├── Cargo.toml                           # workspace 根：members = [renderer, network], exclude = [11 个已剥离 crate]
+├── Cargo.toml                           # workspace 根：members = [renderer, network, chrome], exclude = [11 个已剥离 crate]
 ├── .gitignore                           # 排除已剥离 crate 目录
 ├── fetch-crates.ps1 / .sh              # 一次性拉取 11 个独立 crate 的脚本
 ├── PROGRESS.md                          # 本文件
@@ -401,7 +401,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 17. ~~**W-5 多标签状态管理（WebViewCollection + 标签快捷键 + 脏位延迟更新）**~~ ✅ 已完成（2026-08-29）：`webview.rs`（不 feature 门控）——`WebView`（内容 + 每标签渲染状态 + `needs_repaint`/`close_scheduled` 脏位）+ `WebViewCollection`（新建/延迟关闭/切换，active 不变量，切换自动标脏，shell `a618c4e`）；标签快捷键 Ctrl+T/W/1~9/PageUp/PageDown（`ShortcutAction` 扩展 + `Key::PageUp/PageDown`，`match_shortcut` 5 条新单测，`dispatch_input` 接线，Ctrl+T 开默认内容、全部关闭退出，shell `9e5c3dc`）；脏位延迟更新——shell 动作只标脏 + request_repaint，`RedrawRequested` 统一 flush（关标签延迟移除/空则退出/脏或 stale 才重渲染，shell `ea99d22`）。范围裁剪：favicon 占位、tab strip 不做。窗口化轨道 W-1~W-5 全部完成。
 
-18. ~~**muskitty-chrome 窗口层（自绘 chrome，取代 shell）**~~ ✅ 已完成（2026-08-29）：决策见 ADR `2026-08-29-chrome-window-layer`（egui GPU 管线冲突 / iced 框架开销，选 Chromium Views 式自绘合成）。`chrome::model`（布局纯函数 9 测）/ `paint`（tiny-skia + cosmic-text 0.13 + swash outline，7 像素测）/ `input`（hit_test/apply 6 测）/ `compositor`（页面+chrome 同帧合成）/ `app`（winit + softbuffer、标签集合、脏位 flush）。功能：多标签快捷键、地址栏（Ctrl+L/输入/回车提交 → 占位页 + 标签标题）、**文件热重载**（mtime 200ms 轮询）、`render_window_to_png` 无窗口 CI 测试（62 条，`--no-default-features` 全绿）。真窗口验证（自动化 + 用户实测）发现并修复按键双发（漏 Pressed 过滤）。`muskitty-shell` 退役删除（`84b07a4`，git rename 保留历史），W-1~W-5 语义由 chrome 承接。
+18. ~~**muskitty-chrome 窗口层（自绘 chrome，取代 shell）**~~ ✅ 已完成（2026-08-29）：决策见 ADR `2026-08-29-chrome-window-layer`（egui GPU 管线冲突 / iced 框架开销，选 Chromium Views 式自绘合成）。`chrome::model`（布局纯函数 9 测）/ `paint`（tiny-skia + cosmic-text 0.13 + swash outline，7 像素测）/ `input`（hit_test/apply 6 测）/ `compositor`（页面+chrome 同帧合成）/ `app`（winit + softbuffer、标签集合、脏位 flush）。功能：多标签快捷键、地址栏（Ctrl+L/输入/回车提交 → http/https/file 顶级文档导航，`navigation` 模块 2026-09-06 接驳 muskitty-network；不支持 scheme 留占位页；`(tab, epoch)` 过期导航丢弃）、**文件热重载**（mtime 200ms 轮询）、`render_window_to_png` 无窗口 CI 测试（62 条，`--no-default-features` 全绿）。真窗口验证（自动化 + 用户实测）发现并修复按键双发（漏 Pressed 过滤）与首帧 R/B 通道互换（`rgba_to_0rgb` 与 softbuffer `0x00RRGGBB` 契约不符，`9562f0f`）。`muskitty-shell` 退役删除（`84b07a4`，git rename 保留历史），W-1~W-5 语义由 chrome 承接。
 
 ## Phase 3 (Layout 层) — 已完成
 
@@ -723,3 +723,18 @@ crate 已剥离为独立 git 仓库（[muskitty-dev/muskitty-cascade](https://gi
 | F-15 | goal.md/PROGRESS.md 同步 + 审计报告修复标注 | 主仓库 | — |
 
 Mimosa 深度扫描（scan-2026-09-05T13-39-49）：424 依赖包 0 命中漏洞；5 个发现均在非引擎源码（rustdoc 生成物 `target/doc/static.files/*.js` ×3 误报、根目录工具脚本 `.ghlogin.py`/`gen_entities.py` 路径穿越提示 ×2），引擎源码零发现。
+
+## 审计修复轮（2026-09-06 P0 止血）✅
+
+按 [audit-2026-09-06-vuln-arch-perf.md](docs/audit-2026-09-06-vuln-arch-perf.md)（第八节批次 1）由架构师在 muskitty-dev 各 crate 仓库落地（`ink-dark/p0-fixes` 分支 → PR），主仓库侧完成合并、全量验证与集成（goal.md 2026-09-07 轮）：
+
+| # | 修复 | 仓库 | 审计项 |
+|---|------|------|--------|
+| V-1 | var() 替换输出 token 预算 100k/属性（emitted 全局计数 + extend 前预检，超限 guaranteed-invalid；缓存构建同受约束） | muskitty-cascade `34f94b5`（PR #1） | V-1 |
+| CSS-P1 | 规则级嵌套守卫：consume_a_block enter/leave_nesting + 花括号平衡恢复 | muskitty-css-parser `efbdfb8`（PR #1） | CSS-P1 |
+| SEL-1 | 祖先链记忆化（D^k→D×k）+ 100k 匹配步数预算（正道方案，优于纯计数器止血） | muskitty-selectors `271fd50`（PR #1） | SEL-1 |
+| SEL-2 | :has 嵌套解析禁止（has_depth 全链穿透）+ 裸参数化伪类拒绝 + 候选上限 10k；WPT has 夹具硬断言（380→384，75.6%） | muskitty-selectors `95388df`（PR #1） | SEL-2 |
+| SEL-3（P1） | 逻辑组合嵌套 parse/match 双侧 bound | muskitty-selectors `27646a5`（PR #2） | SEL-3 |
+| CAS-1/2/3（P1） | ComputedValue/声明值 Arc 化 + registry 哈希化 + 未声明属性盲算消除 | muskitty-cascade `8515331`（PR #2） | CAS-1/2/3 |
+
+验证：cascade 197 / css-parser 84 / selectors 169 测试全绿（fmt/clippy 零警告），主仓库 `cargo test --workspace` 集成全绿；审计勘误（:not 内 :has 实为合法，以 WPT 夹具为准）记录于该审计第十节。

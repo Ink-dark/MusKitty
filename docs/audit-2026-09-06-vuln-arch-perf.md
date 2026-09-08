@@ -250,3 +250,28 @@ R-M2（paint 递归无深度上限，parser 512 兜底）、R-M4（**viewport: N
 - cargo-audit 不可用（环境未安装），advisory 层面仅静态确认 h2 0.4.19；rustybuzz/ttf-parser unmaintained 链沿用上轮结论。
 - 4 个独立 crate 为浅克隆，修复回归审查基于源码内 F 系列注释 + 回归测试核对，未逐 commit 回溯 diff。
 - 未含 WPT 语义实跑（本轮纯静态扫描 + 抽查验证）；selectors 74.8% 的已知差距见 [wpt-compliance-2026-09-06.md](wpt-compliance-2026-09-06.md)。
+
+---
+
+## 十、修复记录（2026-09-07 核查）
+
+止血批（第八节批次 1）已由架构师在 muskitty-dev 各 crate 仓库落地
+（`ink-dark/p0-fixes` 分支 → PR），主仓库侧完成合并、全量验证与集成：
+
+| 项 | 状态 | 修复 | 仓库 |
+|---|---|---|---|
+| V-1 | ✅ 已修复 | `34f94b5` VarResolver 输出预算 100k token/属性（emitted 全局计数 + extend 前预检，超限按 guaranteed-invalid；缓存构建同受约束，超限缓冲不分配） | muskitty-dev/muskitty-cascade（PR #1） |
+| CSS-P1 | ✅ 已修复 | `efbdfb8` consume_a_block 规则级 enter/leave_nesting + 花括号平衡恢复（skip_to_matching_close_brace） | muskitty-dev/muskitty-css-parser（PR #1） |
+| SEL-1 | ✅ 已修复（超止血） | `271fd50` 祖先链记忆化（D^k → D×k）+ 100k 匹配步数预算兜底兄弟组合遍历 | muskitty-dev/muskitty-selectors（PR #1） |
+| SEL-2 | ✅ 已修复 | `95388df` has_depth 解析全链穿透（:has/:not 内 Err、:is/:where 内丢弃）+ 裸参数化伪类拒绝 + 候选上限 10k；WPT has 夹具硬断言 | muskitty-dev/muskitty-selectors（PR #1） |
+
+附带落地（P1）：SEL-3 逻辑组合深度 bound（`27646a5`）、cascade CAS-1/2/3
+Arc 化 + registry 哈希化 + 盲算消除（`8515331`）。
+
+**勘误**：SEL-2 一节"`:has/:not` 参数内出现 `:has` 直接 Err"与 WPT 夹具不符——
+`parse-has.json` 明确 `.a:not(:has(.b))` 为 valid。落地实现以 WPT 为准：仅 `:has`
+参数内经非 forgiving 路径出现 `:has` 才 invalid，`:is`/`:where` 内丢弃。
+
+验证：cascade 197 / css-parser 84 / selectors 169 测试全绿（fmt/clippy 零警告），
+主仓库 `cargo test --workspace` 集成全绿；WPT selectors/parsing 75.6% (384/508)。
+其余 P1/P2/P3 未动，按第八节批次建议排后续轮。

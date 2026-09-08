@@ -16,7 +16,8 @@
 //! - 异步（tokio 生态），符合浏览器网络层并发本质
 //! - 零 C/C++ 依赖（TLS 用 rustls，不用 native-tls / OpenSSL）
 //! - trait 抽象，便于剥离为独立 crate 后被多种上层复用
-//! - API 极简，仅暴露 [`NetworkFetcher`] + [`NetworkResponse`] + 便捷 [`fetch`]
+//! - API 极简，仅暴露 [`NetworkFetcher`] + [`NetworkResponse`] + 便捷
+//!   [`fetch`]（异步）/[`fetch_blocking`](crate::fetch_blocking)（同步）
 //!
 //! ## 远期自研路线
 //!

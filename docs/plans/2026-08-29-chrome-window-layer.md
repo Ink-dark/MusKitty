@@ -65,7 +65,7 @@ crates/muskitty-chrome/
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` 零警告
 - [ ] `cargo check -p muskitty-chrome --no-default-features` / `cargo test -p muskitty-chrome --no-default-features` 无头可编译可测（D-6 起）
 - [ ] chrome 公共 API 零 winit/softbuffer/tiny-skia/cosmic-text 类型泄漏（decoupling ADR）
-- [ ] 真窗口验证：chrome 可见（标签条/工具栏/地址栏）、Ctrl+T/W/1/PageUp、地址栏输入回车后标签标题更新、×/+ 按钮点击生效（D-5）
+- [x] 真窗口验证：chrome 可见（标签条/工具栏/地址栏）、Ctrl+T/W/1/PageUp、地址栏输入回车后标签标题更新、×/+ 按钮点击生效（D-5；记录见下方"真窗口验证"，2026-09-06 起回车提交升级为真实导航）
 
 ## 不在本轮范围（显式排除）
 
@@ -78,6 +78,7 @@ crates/muskitty-chrome/
 
 - **Commit 对应**：D-0 `cef6abb` / D-1 `7641790` / D-2 `681902f` / D-3 `5f7baad` / D-4 `505faf4` / D-5 `1630ab1` / D-5b 热重载 `79b4fcb` / Ctrl+L `8aeab96` / 按键双发修复 `839fc64` / D-6 `fe7519d` / D-7 迁移 `84b07a4`。
 - **真窗口验证**（桌面自动化 + 用户实测）：chrome 完整可见（标签条标题/×/＋、工具栏三键、地址栏占位符/聚焦描边/光标）；Ctrl+T 新建大字 "Tab N"、Ctrl+1 切回且各标签渲染状态独立、Ctrl+L 聚焦地址栏、输入 URL 回车 → 占位页回显 + 标签标题更新（用户实测 miao.com）；**文件热重载实测通过**（保存 chrome-demo.html 后 ~1s 自动更新颜色/文字）。
+- **2026-09-06 地址栏接驳网络**（Phase 5 接驳，见 `2026-08-09-phase5-network.md` 接驳节）：`navigation` 模块上线——地址栏回车提交升级为真实导航（http/https 顶级文档 GET + file 加载，不支持 scheme 留占位页），`(tab, epoch)` 导航代数丢弃改址/关签后的过期结果；真机桌面自动化另发现并修复窗口整帧 R/B 通道互换（`rgba_to_0rgb` 与 softbuffer `0x00RRGGBB` 契约不符，`9562f0f`）。真机导航端到端确认因测试机控制台锁定暂挂（工具就绪于 `Temp\muskitty-nav\`）。
 - **真窗口发现并修复的 bug**：键盘分发漏 `ElementState::Pressed` 过滤——KeyDown/KeyUp 各处理一次，每字符进两次、退格删两次（`839fc64`）。另：自动化 `type()` 工具的合成字符不产生 winit KeyboardInput（工具通道限制，真实键盘正常）。
 - **过渡资产**：`WebView.title` + `WebViewCollection::get_mut/titles`、`Key::Backspace/Enter`、`ShortcutAction::FocusAddress`、`extract_inline_style` pub——均随文件迁入 chrome crate。
 - **shell 退役**：PlatformWindow 抽象随 crate 退役（chrome 直接持有 winit 窗口，第二个窗口形态出现再抽）；W-1~W-5 历史保留在 git。
