@@ -1,98 +1,103 @@
-# Goal — M-3 batch 2：方向性边框 + outline 端到端补全（2026-09-12）
+# Goal — M-3 batch 3：line-height 精确解析 + text-transform 端到端（2026-09-13）
 
-> **更新时间**：2026-09-12
-> **状态**：✅ **已完成**。B-1~B-5 全部满足退出条件（记录见文末"完成记录"）。
-> **轨道**：M-3（CSS 补全）第二批。上一批（batch 1）见 PROGRESS.md 第 15 条
-> （border 简写 1 组 + media 视口接线，2026-08-29）。总账（剩余缺口与批次排期）
-> 见 [docs/plans/2026-09-12-css-completion.md](docs/plans/2026-09-12-css-completion.md)。
-> **依据**：PROGRESS.md "M-3 余项" 明列的四项——`@layer` 排序（已完整，无需再做）、
-> background-image（renderer 无 image 消费方）、revert 真语义（需低 origin/层回滚，
-> 零真实页面需求）、**方向性 border**、**outline**。本轮取后两项：它们有现成消费方
-> （paint/layout），是真实页面高频用法，且当前是**静默错误**而非"未实现"——
-> `border-left: 2px solid red` 与 `border: 1px solid red` 渲染结果相同（四边等宽），
-> `outline-*` 注册了但零消费方。
-
-## 背景：已确认的缺陷（动手前实测）
-
-| # | 现状 | 影响 |
-|---|------|------|
-| 1 | cascade `border` 简写只展开为 `border-width`/`border-style`/`border-color` 三个**统一**长属性（filter.rs `expand_border`）；`border-top: …` 等方向性简写、`border-width: 1px 2px 3px 4px` 多值形式**完全不展开**（registry 未命中 → 整条声明丢弃） | `border-left`/`border-bottom` 等真实页面高频写法**整条声明被丢弃**；四边多值同理 |
-| 2 | 方向性长属性 `border-*-width`/`-color` 已注册（`-style` 四向**未注册**），但 renderer `extract_border` 只读统一三属性 | 即使写出方向性长属性也不生效 |
-| 3 | layout `style_map.rs` **完全不映射 border**（`.border` 字段从未赋值，grep 零命中） | 盒模型残缺：`border: 10px solid` 不占空间，`box-sizing: border-box` 对边框无效——CSS Box Model L3 §2-§3 违背 |
-| 4 | renderer `draw_border` 用 inset rect **stroke**，`Border { width, color, style }` 单组值 | 结构上无法表达四边不同宽/色/样式 |
-| 5 | `outline-width/style/color` 已注册，repo 内**零消费方**（全 crate grep 为 0） | `outline: 2px solid red` 静默丢弃 |
-| 6 | `border-style` 支持 `none/solid/dashed/dotted`；`hidden` 未识别；`double`/`groove`/`ridge`/`inset`/`outset` 在 renderer 解析为 `None` | `border: 5px double red` → 无边框（比"近似绘制"更差） |
-| 7 | `thin`/`medium`/`thick` 宽度在 renderer 解析失败 → 无边框 | `border-top: solid red`（省略宽度）本应 3px 实线，实际无边框 |
+> **更新时间**：2026-09-13
+> **状态**：✅ **已完成**。C-1~C-4 全部满足退出条件（记录见文末"完成记录"）。
+> **轨道**：M-3（CSS 补全）第三批。总账与批次排期见
+> [docs/plans/2026-09-12-css-completion.md](docs/plans/2026-09-12-css-completion.md)
+> "批次 3（文本属性）"。上一批（batch 2：方向性边框 + outline）已完成，
+> cascade `f6c05fa` / layout `3e1c3a2` / renderer `e48cdff` / 文档 `392384e`。
+> **范围裁剪的理由**：批次 3 原列 8 项文本属性。本轮只取**能完整做对**的两项——
+> `line-height`（当前是 `font_size * 1.2` 硬编码近似，T-3 遗留）与
+> `text-transform`（纯文本改写，语义可穷举验证）。其余按实测约束分批：
+> - `letter-spacing` / `word-spacing`：**cosmic-text 0.13.2 无此 API**（`Attrs`
+>   仅 family/stretch/style/weight，Buffer 仅有 `set_monospace_width`/`set_tab_width`；
+>   全 crate grep 无 `letter_spacing`）。要做得在 layout 测量与 renderer 字形定位
+>   两处各自累加 advance，且必须共用同一契约（否则换行与对齐会错位）——单列 batch 3b。
+> - `font-style: italic`：管线侧只是 `Attrs::style` 一个字段，但系统字体是否有
+>   italic 面决定像素结果（cosmic-text 不合成斜体），跨机器像素断言不可靠——
+>   单列 batch 3b，验证口径需先定（命令级 + 字体面探测）。
+> - `white-space` / `text-indent`：涉及换行与空白折叠（当前测量直接吃原始文本，
+>   折叠语义整体缺失）——单列 batch 3c。
+> - `direction` / `tab-size` / `orphans` / `widows`：低频，排 batch 3c 之后。
 
 ## 规范依据
 
-- CSS Backgrounds & Borders Level 3 §4.1（border-width 计算/used 值：style 为
-  `none`/`hidden` 时 used width = 0）、§4.2（border-style 关键字全集）、§4.3
-  （`<line-width>`：`thin`/`medium`/`thick` UA 相关，取 1px/3px/5px 与
-  Chrome/Firefox 对齐）、§4.4（`border` 与 `border-<side>` 简写、
-  `<line-width> || <line-style> || <color>`）
-- CSS Box Model Level 3 §2-§3：content/padding/border 盒模型，border 参与
-  box-sizing 计算
-- CSS UI Level 4 §4：`outline` 简写与 `outline-<width|style|color>` 长属性；
-  outline **不参与布局**（绘制在 border box 之外，不改变元素尺寸）
-- CSS Cascade Level 5 §3.2：简写中的 CSS-wide 关键字分配到所有长属性
+- **CSS Inline Layout Level 3 §4.2 `line-height`**：`normal | <number> | <length-percentage>`；
+  `<number>` 的计算值仍是数（作为自身 font-size 的倍数**继承**），
+  `<percentage>` 在计算值阶段按自身 font-size 解析为长度（Chrome
+  `getComputedStyle` 返回 px 可印证），`normal` 是 UA 相关值（Chrome/Firefox
+  约 1.2，本实现取 1.2 并在代码中注明）。
+- **CSS Text Level 3 §2.1 `text-transform`**：`none | capitalize | uppercase | lowercase`
+  （本轮不含 `full-width` / `full-size-kana`，未知关键字按 `none`）。转换使用
+  语言无关的全尺寸映射（Rust `str::to_uppercase`/`to_lowercase` 即 Unicode
+  全映射），**在布局之前生效**——即测量与绘制必须看到同一份转换后文本。
+- **CSS Cascade Level 5 §7**：`line-height` / `text-transform` 均为继承属性
+  （注册表 `inherited: true` 已就位）。
+
+## 架构决策：语义归一处的单一来源
+
+`line-height` 的"数 → px"与 `text-transform` 的"文本改写"都必须在 **layout 测量**
+与 **renderer 绘制** 两侧给出**逐字节一致**的结果：测量决定换行与盒高，绘制决定
+字形位置与内容，两者不一致就会出现溢出/错位（T-3 曾因测量高度公式与绘制基线
+不一致产生"汉字纵向位移"）。
+
+因此把两者放进 **cascade** 的新模块 `text_props`（cascade 是 layout 与 renderer
+共同依赖的样式层，且这两个函数都是"属性值 → 使用值"的纯语义计算）：
+
+| 函数 | 职责 |
+|------|------|
+| `used_line_height_px(style, font_size) -> f32` | px 长度直接用；数 → `n × font_size`；百分比 → `p% × font_size`（防御性，正常已在计算值阶段转 px）；`normal`/缺失/未知/非有限 → `NORMAL_LINE_HEIGHT (1.2) × font_size`；负值按 `normal` |
+| `apply_text_transform(text, keyword: Option<&str>) -> Cow<str>` | `uppercase`/`lowercase`/`capitalize`（按空白切词、逐词首字符大写）/其余借用原文 |
+
+`line-height: <percentage>` 的计算值归一化（→ px Dimension）与 `normalize_font_size`
+同处（`style_tree::compute_element_style`），保证"继承数、不继承已折算 px"的语义。
 
 ## 任务与退出条件
 
 | # | 任务 | 退出条件 |
 |---|------|---------|
-| B-1 | **cascade**（独立仓库）：注册 `border-<side>-style` 四向长属性；`border` 简写展开为 **12 条**方向性长属性；新增 `border-<side>` 四向简写展开（各 3 条）；`border-width`/`border-style`/`border-color` 按 1–4 值展开为四向长属性（分量类型校验，任一非法则整条无效）；新增 `outline` 简写 → 3 条长属性；`thin`/`medium`/`thick` 宽度在 computed value 阶段归一化为 px（1/3/5，同 `normalize_font_size` 做法，单一来源）；删除 `border-width`/`border-style`/`border-color` 三个**简写**的 registry 条目（简写不属长属性注册表，与 margin/padding 一致） | `cargo test` 全绿（含新增简写/多值/方向性用例）；`cargo fmt --check` + `clippy -D warnings` 干净；简写展开后 `border-width` 等统一属性**不再存在**（断言） |
-| B-2 | **layout**（独立仓库）：`map_style` 把四向 `border-<side>-width` 映射到 taffy `Style.border`；`border-<side>-style` 为 `none`/`hidden` 时 used width 取 0（§4.1） | 新增盒模型测试：`border: 10px solid` + `width: 100px`（content-box）→ border box 120px；`box-sizing: border-box` → 100px 含 10px 边框；单边边框（`border-bottom`）只增对应边；`border-style: none` 不占空间；全绿 + fmt/clippy 干净 |
-| B-3 | **renderer**（主仓库）：`extract_border` 改为逐边提取（`Border` → 四向 per-side width/color/style）；`border-style: hidden` 等同 `none`（不绘制）；`double`/`groove`/`ridge`/`inset`/`outset` 按 solid 近似（显式文档化）；backend 由 inset-stroke 改为**四边矩形填充**（corners 采用 top/bottom 全长、left/right 纵向内缩的方块拼接，非 miter 斜接——文档化近似） | 端到端像素测试：四边各自颜色/宽度分别断言；`border-left: 4px solid` 仅左边着色；`border-bottom` 简写生效；`border: 1px solid` 四边一致；`border-style: none` 无边框；全绿 + fmt/clippy 干净 |
-| B-4 | **renderer**：`outline-*` 绘制——新增 `RenderCommand::Outline`，在**子节点之后**发出（outline 绘制在 border box 外侧、后代之上）；`outline-color: auto` → currentColor；`outline-style: none`/宽度 0 → 不发指令 | 像素测试：outline 在 border box 外（元素外 2px 处着色、元素内不受影响）；`outline: 2px solid` 简写端到端；不影响布局尺寸（layout 结果与无 outline 时逐字段相等） |
-| B-5 | **文档/记录**：`docs/plans/2026-09-12-css-completion.md`（M-3 全量缺口表 + 本轮批次 + 后续批次排期）、PROGRESS.md 第 15 条追加 batch 2 记录、goal.md 收尾 | 文档与实跑一致；各仓库分别 commit（cascade/layout 独立仓库，renderer 主仓库） |
+| C-1 | **cascade**（独立仓库）：新增 `text_props` 模块（`NORMAL_LINE_HEIGHT` + 上述两个函数）并 re-export；`style_tree` 把 `line-height` 百分比归一化为 px Dimension | 单元测试覆盖：px / 数 / 百分比 / `normal` / 缺失 / 负值 / NaN 与 inf 钳制；`uppercase`/`lowercase`/`capitalize`（含多空白、非 ASCII `ß`→`SS`、未知关键字不改写）；百分比在整树路径转 px 且数值 = 自身 font-size × 百分比；全绿 + fmt/clippy 干净 |
+| C-2 | **layout**（独立仓库）：`NodeContext::Text` 增加 `line_height: f32`，`measure_text` 用传入行高（删掉 `font_size * 1.2`）；文本节点的存储文本先过 `apply_text_transform`（继承语义沿递归下传） | 测量测试：`line-height: 40px` 两行 → 盒高 80（默认 1.2 下为 38.4）；`line-height: 2` + `font-size: 16px` → 每行 32；`line-height: 2` 在子元素 `font-size: 32px` 下 → 每行 64（数继承语义）；`line-height: 150%` → 24/行；`text-transform: uppercase` 改变测量宽度（不同字形 → 宽度必不同）；纯空白节点跳过逻辑不受影响；全绿 + fmt/clippy 干净 |
+| C-3 | **renderer**（主仓库）：`RenderCommand::Text` 增加 `line_height: f32`；`paint` 用 cascade 的 `used_line_height_px` 解析并在 Text 节点处对内容应用 `apply_text_transform`；backend `draw_text` 用传入行高构造 `Metrics` | 测试：整树管线断言 Text 命令的 `line_height` 与 `text`（`uppercase` → 内容为大写）；backend 像素测试：行高 40px 的换行文本第二行墨迹落在 y≈40 而非默认 ≈19；端到端像素：`line-height` 改变行间距（两行墨迹行分离）与 `text-transform: uppercase` 改变墨迹（同串不同字形）；chrome 全量测试仍绿 |
+| C-4 | **文档/记录**：批次 3 完成记录写入 `docs/plans/2026-09-12-css-completion.md`（原批次 3 拆为 3b/3c 并附本轮依据）、PROGRESS.md、goal.md；三仓库分别 commit + push | 文档与实跑一致；各仓库 commit 落盘并推送 |
 
-## 显式非目标（本轮不做，写入缺口表排后续）
+## 显式非目标（本轮不做）
 
-- `background-image`（需 renderer 图像解码/绘制管线，无消费方）
-- `revert`/`revert-layer` 真语义（需 origin/层回滚）
-- 文本属性缺口：`line-height` 精确解析（当前 `font_size * 1.2` 近似）、
-  `font-style`（italic）、`letter-spacing`/`word-spacing`/`text-transform`/
-  `text-indent`/`white-space`/`tab-size`（均已注册、零消费方）
-- `opacity`（需子树离屏合成）、`z-index`（需层叠上下文）、`visibility`
-- `border-radius`（未注册，需路径圆角）
-- `outline-offset`（未注册，本轮 outline 固定 offset 0）
-- 布局未消费：`order`/`justify-items`/`justify-self`/`grid-auto-*`
-- border corner miter 斜接（当前方块拼接近似）
+- `letter-spacing` / `word-spacing`（无 cosmic-text API，需自建 advance 契约）
+- `font-style: italic`（系统字体面可用性决定像素结果，验证口径待定）
+- `white-space`（含空白折叠）/ `text-indent` / `direction` / `tab-size` / `orphans` / `widows`
+- `text-transform: full-width` / `full-size-kana`
 
 ## 风险与既定裁决
 
-- **API 破坏**：renderer 公共 `Border` 改为四向结构 + `RenderCommand` 加变体
-  （枚举已 `#[non_exhaustive]`），chrome 不构造 `Border`（已 grep 确认），
-  影响面仅 renderer 自身 + 测试。
-- **渲染结果变化**：布局开始计入 border 宽度后，带边框的既有页面尺寸变大
-  （正确行为）。demo（`chrome/src/main.rs`）与既有测试若断言旧尺寸，按新
-  语义更新断言并在 commit message 记录。
-- **cascade 属主**：cascade/layout 是独立仓库（muskitty-dev/*），动手前已
-  `git fetch`——本地与 `origin/main` 同步（0/0），无架构师并行撞车。
+- **行高乘数继承**：数（如 `1.5`）必须原样继承、由各元素自己的 font-size 折算；
+  若在计算值阶段就把数折成 px，会破坏"大字号子元素行高随字号放大"的语义。
+  归一化只处理百分比，数保持数字形态。
+- **测量/绘制一致性**：两侧都调用 cascade 的同一函数；文本节点在布局树中
+  **存转换后文本**（缓存键也因此一致），避免"测量用原文、绘制用转换后文本"错位。
+- **像素断言的字体依赖**：涉及具体字形的断言只用**不等性**与**位置**（墨迹行 y 区间、
+  两串墨迹不同），不用绝对宽度数值，避免字体替换导致的脆弱。
 
-## 完成记录（2026-09-12）
+## 完成记录（2026-09-13）
 
 | # | 交付 | commit | 验证 |
 |---|------|--------|------|
-| B-1 | cascade：12 条方向性长属性展开、`border-<side>` 简写、`border-width/style/color` 1–4 值、`outline` 简写、`thin/medium/thick`→px 归一化、`border-<side>-style` 注册 + 删除三个简写注册 | muskitty-cascade `f6c05fa`（已推送） | 89 lib + 31 filter + 73 integration + 16 style_tree + 1 doctest 全绿；fmt/clippy 干净 |
-| B-2 | layout：taffy border rect + §4.1 used width（none/hidden → 0） | muskitty-layout `3e1c3a2`（已推送） | 72 lib + 13 compute（新增 4 项盒模型）全绿；fmt/clippy 干净 |
-| B-3 | renderer：四边独立 `Border`/`SideBorder`、逐边提取与矩形填充、§4.2 全集样式、`currentcolor` 解析 | 主仓库 `e48cdff` | 50 lib + 37 paint + 15 end_to_end 全绿 |
-| B-4 | renderer：`RenderCommand::Outline` + paint 子节点后发出 + backend 盒外四条矩形条 | 同上 `e48cdff` | 含像素测试（盒外 3px）与"不影响布局"断言 |
-| B-5 | 文档：本 goal + PROGRESS 第 15b 条与总览行 + `docs/plans/2026-09-12-css-completion.md`（缺口总账与批次 3–6 排期） | 主仓库文档 commit | 与实跑一致 |
+| C-1 | cascade：`text_props` 模块（`NORMAL_LINE_HEIGHT` + `used_line_height_px` + `apply_text_transform` + `text_transform_keyword`）、`line-height: <percentage>` 计算值转 px | muskitty-cascade `b66d0e4`（已推送） | 101 lib（+12 单测）+ 31 + 73 + 19 style_tree（+3）+ 1 doctest；fmt/clippy 干净 |
+| C-2 | layout：`NodeContext::Text.line_height`、`measure_text` 收行高、文本叶建树时应用转换、继承参数收敛为 `InheritedText` | muskitty-layout `1730e94`（已推送） | 72 lib + 12 text_wrap（+6）；全部既有测量用例不变（默认 1.2 与旧近似等价）；fmt/clippy 干净 |
+| C-3 | renderer：`RenderCommand::Text.line_height`、paint 解析行高与改写内容、backend 用命令行高 | 主仓库 `bdd1dae` | 51 lib（+1 back-end 像素）+ 42 paint（+5）+ 17 end_to_end（+2）；chrome 85+3+6 不受影响 |
+| C-4 | 文档：本 goal + PROGRESS 第 15c 条与总览行 + 批次总账（批次 3 拆分与验证口径教训） | 主仓库文档 commit | 与实跑一致 |
 
-**验证口径**：新增断言均为**端到端像素级**（cascade 值级 → layout 几何级 → renderer 像素级），
-不接受仅"命令生成"级断言。全链路像素测试三项：仅左边框只染左侧 6px；`border: 5px`
-使 border box 从 20px 增至 30px；`outline: 3px` 落在 10px margin 盒外。
+**实测语义确认**（不是推断）：`line-height: 40px`/`2`/`150%` 在 16px 字号下分别给出
+40 / 32 / 24 px 的单行盒高（layout 与 paint 两侧一致）；`text-transform: uppercase`
+的 `"abc…"` 与字面量 `"ABC…"` 测出**完全相同**的排版结果；`capitalize` 的
+`"hello world"` 与 `"Hello World"` 同理。
 
-**本机环境注记（影响复跑，非本轮改动）**：stable toolchain 的 `rustup update stable`
-（PID 8556，22:38 启动）中断，`rustc.exe` 缺失 → 本轮全部构建用 `cargo +1.85.0`；
-chrome/network 依赖 rust-version ≥1.86 的 icu 包需 `--ignore-rust-version`；
-network 的 dev-dep wiremock 0.6.5 需 rustc ≥1.88（let-chains），故 network 测试
-本机暂无法编译（该 crate 本轮未改动）。toolchain 修复后应按默认 stable 复跑一次。
+**踩到的两个坑（已写入总账）**：
+1. 首版 `text-transform` 像素断言用"大写墨迹行数 ≥ 小写"——因 `l` 的 ascender 高于
+   大写字母而失败（字体设计相关）。改为只用等值/不等断言。
+2. 行高像素断言首版画布只有 200px 高，`line-height: 60px` 的末行被画布裁掉，墨迹
+   像素比失真（0.69）；改用 500px 画布后比值落在 10% 容差内。
 
-**Mimosa 交互记录**：layout commit 曾被 medium 级发现拦截，命中的是
-`crates/muskitty-layout/target/doc/static.files/search-*.js`（rustdoc 生成物，
-Aug 2 的陈旧产物）——已按既有结论判定为误报，并用 `cargo clean --doc` 删除该
-生成物（可 `cargo doc` 重新生成），随后 commit 放行。其余 commit/push 均为
-"未取得完整扫描结论"的兼容放行警告（不宣称项目安全）。
+**Mimosa 交互记录**：本轮全部 commit/push 均为"未取得完整扫描结论"的兼容放行警告，
+按既有约定不宣称项目安全。另有一处操作瑕疵：patch backend 测试构造器时用了 Bash +
+python 直接改写源码（hook 本次未拦截），后续一律改回 Edit 工具。

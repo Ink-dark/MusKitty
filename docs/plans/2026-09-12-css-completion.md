@@ -4,7 +4,8 @@
 > 缺陷判定一律以**实跑证据**为准（注册表 → 消费方 grep、端到端像素测试），
 > 不采信文档声明。
 > **上一批**：batch 1（border 简写统一展开 + media 视口接线，2026-08-29，PROGRESS 第 15 条）。
-> **本批**：batch 2（方向性边框 + outline 端到端，2026-09-12，见下"批次 2"）。
+> **本批（已完成）**：batch 2（方向性边框 + outline 端到端，2026-09-12，见"批次 2"）
+> 与 batch 3（`line-height` 精确解析 + `text-transform`，2026-09-13，见"批次 3"）。
 
 ## 一、判定方法
 
@@ -41,20 +42,41 @@ renderer 用于裁剪判定、`row-gap`/`column-gap` 走 taffy 字段名）与"�
 （新增 3 项全链路像素：仅左边框、border 撑大盒子、outline 在盒外 3px）；
 chrome 85 + 3 + 6 全绿；fmt/clippy（`-D warnings`）干净。
 
+## 二之二、本批（batch 3，2026-09-13）已补
+
+| # | 缺口（修复前实测） | 修复 | commit |
+|---|------------------|------|--------|
+| 1 | `line-height` 是 `font_size * 1.2` 硬编码（T-3 近似）——`line-height: 40px` / 倍数 / 百分比对换行与盒高完全无效 | cascade 新增 `text_props::used_line_height_px`（px/数/百分比/normal/非法值语义 + 非有限钳制）；`line-height: <percentage>` 在计算值阶段按自身 font-size 转 px，数保持倍数形态随继承 | cascade `b66d0e4` |
+| 2 | 测量与绘制各自算行高（两处 `font_size * 1.2`），**必须逐字节一致**否则行位置与盒高错位 | 两侧都调用 cascade 的同一函数：layout `measure_text` 接 `line_height` 参数（`NodeContext::Text` 新字段），renderer `RenderCommand::Text` 新字段 `line_height`，backend 不再自算 | layout `1730e94` / renderer `bdd1dae` |
+| 3 | `text-transform` 零消费方（大写/小写/首字大写完全不生效） | `cascade::apply_text_transform`（Unicode 全尺寸映射、空白切词的 capitalize 近似）；layout 在**建树时**改写文本叶内容（测量即转换后文本），paint 在生成 Text 命令时改写内容——两侧同一实现 | cascade `b66d0e4` / layout `1730e94` / renderer `bdd1dae` |
+| 4 | 继承文本上下文参数持续膨胀（T-3 加三个、batch 3 再加两个，撞 clippy 8 参数上限） | layout 收敛为 `InheritedText` 结构体（font-size/family/weight + line-height/text-transform），一次扩列不再改签名 | layout `1730e94` |
+
+验证：cascade 101 lib + 31 filter + 73 integration + 19 style_tree + 1 doctest；
+layout 72 lib + 12 text_wrap（新增 6 项测量用例，含"转换后文本与字面量大写测出完全相同
+排版"的等式断言）；renderer 51 lib + 42 paint（新增 5 项命令级）+ 17 end_to_end
+（新增 2 项全链路像素：60px 行高把末行墨迹下推 >40px 且总墨迹差 <10%；uppercase
+对同串产生不同墨迹——不用字体相关的量值比较）；chrome 85 + 3 + 6 全绿；
+fmt/clippy（`-D warnings`）干净。
+
+**验证口径纪律（本轮踩到的坑）**：`text-transform` 的所有断言都用**等值**（转换后
+文本 vs 字面量大写测出相同排版）或**不等**（墨迹不同），不用"大写更宽/更高"这类
+字体相关量值比较——首版这么写就因 `l` 的 ascender 高于大写而误报。同理行高的像素
+断言要求画布足够高，否则高行高的末行被裁掉会让墨迹计数失真。
+
 ## 三、仍开放的 CSS 缺口（按建议批次排序）
 
-### 批次 3（建议下一轮：文本属性，收益面最大）
+### 批次 3（2026-09-13 部分完成：line-height + text-transform ✅）
 
 | 缺口 | 现状 | 规范 |
 |------|------|------|
-| `line-height` 精确解析 | 注册但无消费方；layout 用 `font_size * 1.2` 近似（T-3 遗留） | CSS Inline L3 §4.2（`normal`/number/length/percentage） |
-| `font-style: italic` | 注册但无消费方（cosmic-text 侧 `Attrs::style` 未接） | CSS Fonts L4 §2.3 |
-| `letter-spacing` / `word-spacing` | 注册但无消费方 | CSS Text L3 §7 |
-| `text-transform` | 注册但无消费方（大写/小写/首字大写需在 shaping 前改写文本） | CSS Text L3 §2 |
-| `text-indent` | 注册但无消费方 | CSS Text L3 §3 |
-| `white-space`（nowrap/pre 等） | 注册但无消费方；paint 只跳过纯空白文本节点 | CSS Text L3 §4 |
-| `direction` | 注册但无消费方（RTL 文本方向） | CSS Writing Modes L4 §2.3 |
-| `tab-size` / `orphans` / `widows` | 注册但无消费方（真实页面低频，可更长排期） | CSS Text L3 §3.3 / §5 |
+| ~~`line-height` 精确解析~~ ✅ **已完成**（batch 3）：`normal`/`<number>`/`<length>`/`<percentage>` 全支持；语义单一来源 `cascade::text_props::used_line_height_px`（layout 测量与 renderer 绘制共用），百分比在计算值阶段转 px、数保持倍数形态随继承（子元素按自身 font-size 折算） | 旧为 `font_size * 1.2` 硬编码近似 | CSS Inline L3 §4.2 |
+| ~~`text-transform`~~ ✅ **已完成**（batch 3）：`none`/`uppercase`/`lowercase`/`capitalize`；`cascade::apply_text_transform` 在 layout 测量与 paint 内容两侧共用（布局前生效），Unicode 全尺寸映射（`ß`→`SS`） | 旧为零消费方 | CSS Text L3 §2.1 |
+| `letter-spacing` / `word-spacing` | 注册但无消费方；**cosmic-text 0.13.2 无此 API**（`Attrs` 仅 family/stretch/style/weight，Buffer 仅 `set_monospace_width`/`set_tab_width`）→ 需在测量与字形定位两处自建 advance 契约（batch 3b） | CSS Text L3 §7 |
+| `font-style: italic` | 注册但无消费方；管线侧只是 `Attrs::style` 一个字段，但**系统字体是否有 italic 面**决定像素结果（cosmic-text 不合成斜体）→ 需先定验证口径（batch 3b） | CSS Fonts L4 §2.3 |
+| `white-space`（nowrap/pre/…） | 注册但无消费方；含空白折叠语义（当前测量直接吃原始文本，折叠整体缺失）→ batch 3c | CSS Text L3 §4 |
+| `text-indent` | 注册但无消费方（首行缩进需按行测量，非当前单次测量结构） | CSS Text L3 §3 |
+| `direction` | 注册但无消费方（RTL 基方向） | CSS Writing Modes L4 §2.3 |
+| `tab-size` / `orphans` / `widows` | 注册但无消费方（低频，排 batch 3c 之后） | CSS Text L3 §3.3 / §5 |
 
 ### 批次 4（合成与层叠）
 
@@ -100,13 +122,13 @@ chrome 85 + 3 + 6 全绿；fmt/clippy（`-D warnings`）干净。
 - 复跑本轮验证：
 
 ```bash
-cd D:/Muskitty/crates/muskitty-cascade && cargo test          # 210 测试
+cd D:/Muskitty/crates/muskitty-cascade && cargo test          # 225 测试
 cd D:/Muskitty/crates/muskitty-layout  && cargo test          # 121 测试
-cd D:/Muskitty/crates/muskitty-renderer && cargo test         # 102 测试
+cd D:/Muskitty/crates/muskitty-renderer && cargo test         # 110 测试
 cd D:/Muskitty && cargo test -p muskitty-chrome               # 94 测试（含导航/渲染）
 ```
 
-> 环境注记（2026-09-12）：本机 stable toolchain 被卡住的 `rustup update stable`
-> 中断（`rustc.exe` 缺失），本轮改用 `cargo +1.85.0`；chrome/network 对
+> 环境注记（2026-09-12/13）：本机 stable toolchain 被卡住的 `rustup update stable`
+> 中断（`rustc.exe` 缺失），改用 `cargo +1.85.0`；chrome/network 对
 > rust-version ≥1.86 的依赖需加 `--ignore-rust-version`，network 的 dev-dep
 > wiremock 0.6.5 需 rustc ≥1.88（let-chains）故 network 测试本机暂无法跑。
