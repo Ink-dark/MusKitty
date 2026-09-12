@@ -728,14 +728,15 @@ mod tests {
         }];
         let mut backend = TinySkiaBackend::new();
         let (w, h, data) = render_pixels(&mut backend, &cmds, 60, 160, 1.0);
+        // 自下而上找首个含墨迹的行（clippy 1.98 不再接受 filter(..).next_back()）
         let last = (0..h)
-            .filter(|&y| {
+            .rev()
+            .find(|&y| {
                 (0..w).any(|x| {
                     let i = ((y * w + x) * 4) as usize;
                     data[i] < 200
                 })
             })
-            .next_back()
             .unwrap_or(0) as usize;
         (w, last)
     }

@@ -157,7 +157,7 @@ fn many_overflow_hidden_siblings_render_in_place() {
                .empty{width:40px;height:20px;overflow:hidden} \
                .big0{width:300px;height:300px;background-color:#00ff00} \
                .big1{width:300px;height:300px;background-color:#ffeb3b}";
-    let (data, w, _h) = render(&html, &css, 200, 200);
+    let (data, w, _h) = render(&html, css, 200, 200);
     for r in 0..10 {
         let y = r * 20 + 5;
         let expected = match r % 4 {
