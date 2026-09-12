@@ -82,8 +82,24 @@ pub fn resolve_font_weight(style: &ComputedStyle) -> Option<u16> {
     None
 }
 
-/// 从 ComputedStyle 提取 text-align 水平对齐（T-3）。
+/// 从 ComputedStyle 提取 `line-height` 的使用值（px，M-3 batch 3）。
 ///
+/// 语义委托 cascade `text_props::used_line_height_px`（单一来源）：
+/// `normal`/缺失 → 1.2 × font-size；数 → 倍数 × font-size；百分比已在
+/// computed value 阶段转 px；非法值（负/NaN）回退 `normal`。
+pub fn resolve_line_height(style: &ComputedStyle, font_size: f32) -> f32 {
+    muskitty_cascade::used_line_height_px(style, font_size)
+}
+
+/// 按 `text-transform` 改写文本（M-3 batch 3）。
+///
+/// 委托 cascade `apply_text_transform`：与 layout 测量使用**同一**实现，
+/// 保证绘制内容与测量内容一致（CSS Text L3 §2.1 的转换在布局前生效）。
+pub fn apply_text_transform<'a>(text: &'a str, keyword: Option<&str>) -> std::borrow::Cow<'a, str> {
+    muskitty_cascade::apply_text_transform(text, keyword)
+}
+
+/// 从 ComputedStyle 提取 text-align 水平对齐（T-3）。///
 /// `center` → Center，`right`/`end` → Right，其余（`left`/`start`/`justify`/未知）→ Left。
 pub fn resolve_text_align(style: &ComputedStyle) -> TextAlign {
     style

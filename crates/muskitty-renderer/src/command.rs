@@ -44,6 +44,12 @@ pub enum RenderCommand {
     ///
     /// glyph 细节（整形/光栅化）由后端用 cosmic-text 现算；此处承载
     /// 文本串 + 字体样式 + 颜色，位置为 text 布局盒左上角（画布坐标系）。
+    ///
+    /// M-3 batch 3：`text` 是**已应用 `text-transform`** 的内容（与 layout
+    /// 测量所用文本一致——paint 与 layout 都调用 cascade
+    /// `apply_text_transform`）；`line_height` 是 `line-height` 的使用值（px，
+    /// cascade `used_line_height_px` 解析），后端须用它换行与排行，否则
+    /// 绘制行位置与布局盒高不一致（T-3 的"汉字位移"教训）。
     Text {
         /// 左上角 X（px，画布坐标系）。
         x: f32,
@@ -51,10 +57,12 @@ pub enum RenderCommand {
         y: f32,
         /// 布局宽度（px），用于换行（T-3），与 layout 层 measure 的容器宽一致。
         width: f32,
-        /// 文本内容。
+        /// 文本内容（已应用 `text-transform`）。
         text: String,
         /// 字号（px）。
         font_size: f32,
+        /// 行高（px，`line-height` 的使用值）。
+        line_height: f32,
         /// 字体族名（CSS `font-family` 首个族名）。
         font_family: String,
         /// 字重（CSS `font-weight`，100-900）。

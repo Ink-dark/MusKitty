@@ -227,6 +227,7 @@ impl Backend for TinySkiaBackend {
                     width,
                     text,
                     font_size,
+                    line_height,
                     font_family,
                     font_weight,
                     text_align,
@@ -249,6 +250,7 @@ impl Backend for TinySkiaBackend {
                         *width,
                         text,
                         *font_size,
+                        *line_height,
                         font_family,
                         *font_weight,
                         *text_align,
@@ -444,6 +446,7 @@ fn draw_text(
     width: f32,
     text: &str,
     font_size: f32,
+    line_height: f32,
     font_family: &str,
     font_weight: u16,
     text_align: TextAlign,
@@ -453,7 +456,9 @@ fn draw_text(
     swash_cache: &mut SwashCache,
     clip_mask: Option<&Mask>,
 ) {
-    let line_height = font_size * 1.2;
+    // M-3 batch 3：行高来自 Text 命令（cascade `used_line_height_px` 的使用值），
+    // 不再用 `font_size * 1.2` —— 与 layout 测量的行高一致，否则绘制行位置
+    // 与布局盒高对不上（T-3 的"汉字位移"教训）。
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     // 按布局宽度换行（T-3）。
     buffer.set_size(font_system, Some(width), None);
@@ -571,6 +576,7 @@ mod tests {
             width: 200.0,
             text: "T".to_string(),
             font_size: 64.0,
+            line_height: 64.0 * 1.2,
             font_family: "serif".to_string(),
             font_weight: 400,
             text_align: TextAlign::Left,
@@ -634,6 +640,7 @@ mod tests {
             width: 200.0,
             text: "Hello".to_string(),
             font_size: 24.0,
+            line_height: 24.0 * 1.2,
             font_family: "serif".to_string(),
             font_weight: 400,
             text_align: TextAlign::Left,
@@ -703,6 +710,60 @@ mod tests {
         assert_eq!(a, 255);
     }
 
+    // —— M-3 batch 3: Text 命令的 line_height 决定多行位置 ——
+
+    /// 渲染单条 Text 命令并返回「最底部墨迹行号」。
+    fn last_ink_row(text: &str, font_size: f32, line_height: f32, width: f32) -> (u32, usize) {
+        let cmds = vec![RenderCommand::Text {
+            x: 0.0,
+            y: 0.0,
+            width,
+            text: text.to_string(),
+            font_size,
+            line_height,
+            font_family: "serif".to_string(),
+            font_weight: 400,
+            text_align: TextAlign::Left,
+            color: Color::rgb(0, 0, 0),
+        }];
+        let mut backend = TinySkiaBackend::new();
+        let (w, h, data) = render_pixels(&mut backend, &cmds, 60, 160, 1.0);
+        let last = (0..h)
+            .filter(|&y| {
+                (0..w).any(|x| {
+                    let i = ((y * w + x) * 4) as usize;
+                    data[i] < 200
+                })
+            })
+            .next_back()
+            .unwrap_or(0) as usize;
+        (w, last)
+    }
+
+    #[test]
+    fn text_line_height_controls_multiline_positions() {
+        // 同一文本在同一宽度下换行（行数由换行决定，与行高无关）；行高只
+        // 影响各行纵向位置——行高 40 的第二行必须落在行高 10 的下方。
+        // 这是 backend 侧对「line_height 来自 Text 命令」的直接断言（此前
+        // 后端硬编码 `font_size * 1.2`，三处行高必然相同）。
+        let text = "one two three four five six";
+        let (_, small) = last_ink_row(text, 10.0, 10.0, 40.0);
+        let (_, normal) = last_ink_row(text, 10.0, 12.0, 40.0);
+        let (_, big) = last_ink_row(text, 10.0, 40.0, 40.0);
+        assert!(
+            small > 0 && normal > 0,
+            "wrapped text must ink multiple rows (small={small}, normal={normal})"
+        );
+        assert!(
+            big >= small + 20,
+            "40px line-height must push the last line far below the 10px case: big={big} small={small}"
+        );
+        assert!(
+            big > normal,
+            "40px line-height must exceed the 12px (1.2em) default: big={big} normal={normal}"
+        );
+    }
+
     // —— F-10: 裁剪栈有界化 ——
 
     #[test]
@@ -728,6 +789,7 @@ mod tests {
             width: 40.0,
             text: "T".to_string(),
             font_size: 12.0,
+            line_height: 12.0 * 1.2,
             font_family: "serif".to_string(),
             font_weight: 400,
             text_align: TextAlign::Left,

@@ -13,8 +13,9 @@
 use crate::color::Color;
 use crate::command::{RenderCommand, TextAlign};
 use crate::render_tree::{
-    extract_background_color, extract_border, extract_outline, extract_text_color,
-    resolve_font_family, resolve_font_size, resolve_font_weight, resolve_text_align,
+    apply_text_transform, extract_background_color, extract_border, extract_outline,
+    extract_text_color, resolve_font_family, resolve_font_size, resolve_font_weight,
+    resolve_line_height, resolve_text_align,
 };
 use muskitty_cascade::ComputedStyle;
 use muskitty_dom::{Node, NodeKind};
@@ -58,9 +59,11 @@ pub fn paint(input: &PaintInput) -> Vec<RenderCommand> {
         input.viewport,
         &mut commands,
         &mut children,
-        16.0,    // 默认 font-size（medium = 16px）
-        "serif", // 默认 font-family
-        400,     // 默认 font-weight（normal）
+        16.0,       // 默认 font-size（medium = 16px）
+        "serif",    // 默认 font-family
+        400,        // 默认 font-weight（normal）
+        16.0 * 1.2, // 默认 line-height（normal = 1.2 × font-size）
+        None,       // 默认 text-transform（none）
         TextAlign::Left,
         Color::BLACK,
     );
@@ -82,14 +85,17 @@ fn paint_recursive(
     inherited_font_size: f32,
     inherited_font_family: &str,
     inherited_font_weight: u16,
+    inherited_line_height: f32,
+    inherited_text_transform: Option<&str>,
     inherited_text_align: TextAlign,
     inherited_color: Color,
 ) {
     let addr = Rc::as_ptr(node) as usize;
 
-    // 本节点的继承上下文：Element 从自身 style 解析字体样式/color，
-    // 其余节点（Text/Comment/...）沿用继承值。
-    let (font_size, font_family, font_weight, text_align, color) = {
+    // 本节点的继承上下文：Element 从自身 style 解析字体样式/行高/转换/color，
+    // 其余节点（Text/Comment/...）沿用继承值。text-transform 与 line-height
+    // 的语义均由 cascade 单一来源给出（M-3 batch 3），与 layout 测量一致。
+    let (font_size, font_family, font_weight, line_height, text_transform, text_align, color) = {
         let node_ref = node.borrow();
         match &node_ref.kind {
             NodeKind::Element(_) => {
@@ -103,16 +109,25 @@ fn paint_recursive(
                 let fw = style
                     .and_then(resolve_font_weight)
                     .unwrap_or(inherited_font_weight);
+                let lh = style
+                    .map(|cs| resolve_line_height(cs, fs))
+                    .unwrap_or(inherited_line_height);
+                let tt = style
+                    .and_then(muskitty_cascade::text_transform_keyword)
+                    .map(str::to_string)
+                    .or_else(|| inherited_text_transform.map(str::to_string));
                 let ta = style
                     .map(resolve_text_align)
                     .unwrap_or(inherited_text_align);
                 let c = style.map(extract_text_color).unwrap_or(inherited_color);
-                (fs, ff, fw, ta, c)
+                (fs, ff, fw, lh, tt, ta, c)
             }
             _ => (
                 inherited_font_size,
                 inherited_font_family.to_string(),
                 inherited_font_weight,
+                inherited_line_height,
+                inherited_text_transform.map(str::to_string),
                 inherited_text_align,
                 inherited_color,
             ),
@@ -142,12 +157,15 @@ fn paint_recursive(
             // 折叠的完整语义推迟到 T-3）。
             NodeKind::Text(text) if !text.data.trim().is_empty() => {
                 if let Some(node_layout) = layout.get(addr).filter(|l| in_viewport(l, viewport)) {
+                    // M-3 batch 3：内容先过 text-transform（与 layout 测量同一实现）。
+                    let content = apply_text_transform(&text.data, text_transform.as_deref());
                     commands.push(RenderCommand::Text {
                         x: node_layout.abs_x,
                         y: node_layout.abs_y,
                         width: node_layout.width,
-                        text: text.data.clone(),
+                        text: content.into_owned(),
                         font_size,
+                        line_height,
                         font_family: font_family.clone(),
                         font_weight,
                         text_align,
@@ -216,6 +234,8 @@ fn paint_recursive(
             font_size,
             &font_family,
             font_weight,
+            line_height,
+            text_transform.as_deref(),
             text_align,
             color,
         );

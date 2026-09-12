@@ -563,3 +563,90 @@ fn end_to_end_outline_drawn_outside_box() {
         "outside outline"
     );
 }
+
+// —— M-3 batch 3: line-height / text-transform 的全链路像素验证 ——
+
+/// 全链路渲染并返回 `(width, 墨迹行号集合, 墨迹像素数)`。
+///
+/// 墨迹 = 任一通道 < 200 的像素（白底画布 + 黑字）。
+fn render_text_ink(html: &str, vw: u32, vh: u32) -> (u32, Vec<u32>, usize) {
+    let (width, data) = render_raw_pixels(html, "body { margin: 0 }", vw, vh);
+    let mut rows = Vec::new();
+    let mut ink = 0usize;
+    for y in 0..vh {
+        let mut row_has_ink = false;
+        for x in 0..width {
+            let i = ((y * width + x) * 4) as usize;
+            if data[i] < 200 || data[i + 1] < 200 || data[i + 2] < 200 {
+                row_has_ink = true;
+                ink += 1;
+            }
+        }
+        if row_has_ink {
+            rows.push(y);
+        }
+    }
+    (width, rows, ink)
+}
+
+#[test]
+fn end_to_end_line_height_moves_second_line_down() {
+    // 同一段换行文本：line-height 60px 时后续行明显下移，默认 1.2em=19.2px
+    // 更紧凑。换行行数与行高无关，故最底墨迹行号的差值直接反映行高注入
+    // （layout 测量与 renderer 绘制都取自同一份使用值）。
+    // 画布足够高（500px）让两种情况下所有行都完整落在画布内——否则高行高
+    // 的末行会被画布裁掉，墨迹像素数比较就失去意义。
+    let text = "The quick brown fox jumps over the lazy dog";
+    let (_, rows_default, ink_default) = render_text_ink(
+        &format!(r#"<div style="width: 100px">{text}</div>"#),
+        100,
+        500,
+    );
+    let (_, rows_lh60, ink_lh60) = render_text_ink(
+        &format!(r#"<div style="width: 100px; line-height: 60px">{text}</div>"#),
+        100,
+        500,
+    );
+    let last_default = *rows_default.last().expect("default text must ink");
+    let last_lh60 = *rows_lh60.last().expect("line-height text must ink");
+    assert!(
+        rows_default.len() > 5 && rows_lh60.len() > 5,
+        "both cases should wrap into several lines: default={} lh60={}",
+        rows_default.len(),
+        rows_lh60.len()
+    );
+    assert!(
+        last_lh60 > last_default + 40,
+        "60px line-height must push the last line well below the 19.2px default: \
+         last_lh60={last_lh60} last_default={last_default}"
+    );
+    // 同样的文本、同样的字形量、同样多的有效行 → 墨迹像素量接近
+    // （行高只挪位置，不改内容与字形）
+    let ratio = ink_lh60 as f64 / ink_default as f64;
+    assert!(
+        (0.9..1.1).contains(&ratio),
+        "line-height must move glyphs, not restyle them: ink ratio={ratio}"
+    );
+}
+
+#[test]
+fn end_to_end_text_transform_changes_rendered_glyphs() {
+    // uppercase 改变用于排版与绘制的文本 → 同串的墨迹不同（不同字形）。
+    // 不断言墨迹多少/行高方向：那取决于字体对大小写的设计（goal.md 已记
+    // 「像素断言只用不等性与位置，不用字体相关的量值比较」）。
+    let (_, _rows_none, ink_none) = render_text_ink(
+        r#"<div style="width: 300px; font-size: 32px">hello world</div>"#,
+        300,
+        80,
+    );
+    let (_, _rows_upper, ink_upper) = render_text_ink(
+        r#"<div style="width: 300px; font-size: 32px; text-transform: uppercase">hello world</div>"#,
+        300,
+        80,
+    );
+    assert!(ink_none > 0 && ink_upper > 0, "both cases must ink");
+    assert_ne!(
+        ink_none, ink_upper,
+        "uppercase glyphs must not produce pixel-identical ink (none={ink_none}, upper={ink_upper})"
+    );
+}

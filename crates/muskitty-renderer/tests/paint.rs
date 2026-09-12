@@ -897,3 +897,109 @@ fn clip_semantics_unchanged_after_lazy_mask() {
     // EndClip 后的蓝色小矩形：完整绘制。
     assert_eq!(px(2, 2), (0, 0, 255), "after EndClip: blue");
 }
+
+// —— M-3 batch 3: line-height / text-transform 在 Text 命令上的体现 ——
+
+/// 取唯一 Text 命令的 `(text, line_height)`。
+fn text_command(cmds: &[RenderCommand]) -> (String, f32) {
+    cmds.iter()
+        .find_map(|c| match c {
+            RenderCommand::Text {
+                text, line_height, ..
+            } => Some((text.clone(), *line_height)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected a Text command: {cmds:?}"))
+}
+
+#[test]
+fn paint_text_carries_line_height_px() {
+    let cmds = paint_pipeline(
+        "<div style=\"width: 200px; line-height: 40px\">hello world</div>",
+        "",
+        400.0,
+        300.0,
+    );
+    assert_eq!(text_command(&cmds).1, 40.0);
+}
+
+#[test]
+fn paint_text_default_line_height_is_normal() {
+    // 无声明 → `normal` = 1.2 × font-size(16px) = 19.2px
+    let cmds = paint_pipeline(
+        "<div style=\"width: 200px\">hello world</div>",
+        "",
+        400.0,
+        300.0,
+    );
+    assert_eq!(text_command(&cmds).1, 19.2);
+}
+
+#[test]
+fn paint_text_line_height_number_and_percentage() {
+    // 数 = 倍数 × font-size（2 × 16 = 32）
+    let cmds = paint_pipeline(
+        "<div style=\"width: 200px; line-height: 2\">hi</div>",
+        "",
+        400.0,
+        300.0,
+    );
+    assert_eq!(text_command(&cmds).1, 32.0);
+
+    // 百分比在计算值阶段转 px（150% × 16 = 24）
+    let cmds = paint_pipeline(
+        "<div style=\"width: 200px; line-height: 150%\">hi</div>",
+        "",
+        400.0,
+        300.0,
+    );
+    assert_eq!(text_command(&cmds).1, 24.0);
+}
+
+#[test]
+fn paint_text_transform_rewrites_text_content() {
+    let uppercase = paint_pipeline(
+        "<div style=\"width: 300px; text-transform: uppercase\">hello world</div>",
+        "",
+        400.0,
+        300.0,
+    );
+    assert_eq!(text_command(&uppercase).0, "HELLO WORLD");
+
+    let capitalize = paint_pipeline(
+        "<div style=\"width: 300px; text-transform: capitalize\">hello wide world</div>",
+        "",
+        400.0,
+        300.0,
+    );
+    assert_eq!(text_command(&capitalize).0, "Hello Wide World");
+
+    let lowercase = paint_pipeline(
+        "<div style=\"width: 300px; text-transform: lowercase\">MiXeD Case</div>",
+        "",
+        400.0,
+        300.0,
+    );
+    assert_eq!(text_command(&lowercase).0, "mixed case");
+
+    // 对照：未声明 → 原文
+    let none = paint_pipeline(
+        "<div style=\"width: 300px\">hello world</div>",
+        "",
+        400.0,
+        300.0,
+    );
+    assert_eq!(text_command(&none).0, "hello world");
+}
+
+#[test]
+fn paint_text_transform_inherits_to_children() {
+    // 继承属性：子元素的文本同样被改写（text-transform 在中间元素上声明）
+    let cmds = paint_pipeline(
+        "<div style=\"width: 300px; text-transform: uppercase\"><span>deep text</span></div>",
+        "",
+        400.0,
+        300.0,
+    );
+    assert_eq!(text_command(&cmds).0, "DEEP TEXT");
+}
