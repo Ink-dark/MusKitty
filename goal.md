@@ -101,3 +101,10 @@
 **Mimosa 交互记录**：本轮全部 commit/push 均为"未取得完整扫描结论"的兼容放行警告，
 按既有约定不宣称项目安全。另有一处操作瑕疵：patch backend 测试构造器时用了 Bash +
 python 直接改写源码（hook 本次未拦截），后续一律改回 Edit 工具。
+
+**工具链**：本轮前半程本机 stable 缺 `rustc.exe`（`rustup update stable` 卡住），
+构建用 `cargo +1.85.0`；该更新于本轮内自行完成（stable = 1.98.1），随后在**默认
+工具链**上复跑全部验证：`cargo test --workspace` 218（network 的 wiremock dev-dep
+此前因需 rustc ≥1.88 而编不过，现已可跑）、cascade 225、layout 127、renderer 110，
+`clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 全干净
+（新版 clippy 的两处既有告警已在 `9522d32` 修掉）。

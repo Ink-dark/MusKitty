@@ -128,7 +128,10 @@ cd D:/Muskitty/crates/muskitty-renderer && cargo test         # 110 测试
 cd D:/Muskitty && cargo test -p muskitty-chrome               # 94 测试（含导航/渲染）
 ```
 
-> 环境注记（2026-09-12/13）：本机 stable toolchain 被卡住的 `rustup update stable`
-> 中断（`rustc.exe` 缺失），改用 `cargo +1.85.0`；chrome/network 对
-> rust-version ≥1.86 的依赖需加 `--ignore-rust-version`，network 的 dev-dep
-> wiremock 0.6.5 需 rustc ≥1.88（let-chains）故 network 测试本机暂无法跑。
+> 环境注记：2026-09-12/13 期间本机 stable toolchain 被卡住的 `rustup update stable`
+> 中断（`rustc.exe` 缺失），batches 2/3 的实现与验证用 `cargo +1.85.0` 完成
+> （chrome/network 需 `--ignore-rust-version`，network 的 dev-dep wiremock 0.6.5
+> 需 rustc ≥1.88 故当时编不过）。**2026-09-13 该 update 自行完成（stable = 1.98.1）**，
+> 全部工作在默认工具链上复跑通过：`cargo test --workspace` 218、cascade 225、
+> layout 127、`clippy --workspace --all-targets -- -D warnings` 与 `fmt --all --check`
+> 干净（新版 clippy 的两处既有告警已在 `9522d32` 修掉）。
