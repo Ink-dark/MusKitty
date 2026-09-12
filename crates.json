@@ -1,0 +1,22 @@
+{
+  "_comment": "MusKitty crate 清单——单一来源。fetch-crates.ps1 / fetch-crates.sh 与 CI 均读取本文件；新增或剥离 crate 时只改这里，不要再改脚本内的硬编码列表。数组格式约定：每项一行（供无 python3 环境的 awk 解析路径使用）。名称必须匹配 ^[A-Za-z0-9_.-]+$。",
+  "org": "muskitty-dev",
+  "standalone": [
+    "muskitty-cascade",
+    "muskitty-css",
+    "muskitty-css-parser",
+    "muskitty-css-tokenizer",
+    "muskitty-css-values",
+    "muskitty-cssom",
+    "muskitty-dom",
+    "muskitty-html5-parser",
+    "muskitty-html5-tokenizer",
+    "muskitty-layout",
+    "muskitty-selectors"
+  ],
+  "bundled": [
+    "muskitty-chrome",
+    "muskitty-network",
+    "muskitty-renderer"
+  ]
+}

@@ -3,21 +3,19 @@
 # fetch-crates.sh
 # Muskitty Crates - 批量拉取 / 推送 / 存在性检查工具 (macOS / Linux)
 #
+# crate 清单：根目录 crates.json（单一来源）——
+#   standalone = 已剥离、需从 muskitty-dev 单独克隆的仓库
+#   bundled    = 主仓库 workspace member（在主仓库内直接版本控制）
+#   新增 / 剥离 crate 时只改 crates.json；脚本不再含硬编码列表，
+#   并会在结尾对账 crates/ 目录、Cargo.toml members、远程 org 三方。
+#
 # 目录结构 (脚本放在项目根目录):
 #   ./fetch-crates.sh       <-- 本脚本
+#   ./crates.json           <-- crate 清单（单一来源）
 #   ./crates/
 #     ├── muskitty-cascade/            (独立仓库)
-#     ├── muskitty-cssom/              (独立仓库)
 #     ├── muskitty-renderer/           (主仓库 member，未剥离)
-#     ├── muskitty-layout/             (独立仓库)
-#     ├── muskitty-css/                (独立仓库)
-#     ├── muskitty-css-parser/         (独立仓库)
-#     ├── muskitty-css-tokenizer/      (独立仓库)
-#     ├── muskitty-css-values/        (独立仓库)
-#     ├── muskitty-dom/               (独立仓库)
-#     ├── muskitty-html5-parser/      (独立仓库)
-#     ├── muskitty-html5-tokenizer/   (独立仓库)
-#     └── muskitty-selectors/         (独立仓库)
+#     └── …（完整清单见 crates.json）
 #
 # 用法:
 #   ./fetch-crates.sh                   # 默认: pull 模式 (拉取所有更新)
@@ -52,30 +50,66 @@ fi
 # ------------------------------------------------------------------------------
 # 配置
 # ------------------------------------------------------------------------------
-ORG="muskitty-dev"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CRATES_DIR="${SCRIPT_DIR}/crates"
 PROTOCOL="https"
 
-# 已独立拆分的 crate（需要单独拉取/推送）
-STANDALONE_CRATES=(
-    "muskitty-cascade"
-    "muskitty-cssom"
-    "muskitty-layout"
-    "muskitty-css"
-    "muskitty-css-parser"
-    "muskitty-css-tokenizer"
-    "muskitty-css-values"
-    "muskitty-dom"
-    "muskitty-html5-parser"
-    "muskitty-html5-tokenizer"
-    "muskitty-selectors"
-)
+# ------------------------------------------------------------------------------
+# crate 清单：单一来源 = 主仓库根目录 crates.json
+#   新增 / 剥离 crate 时只改 crates.json，不要再在本脚本内硬编码列表。
+#   条目先做名称白名单校验（仅 GitHub 仓库名合法字符），再拼接 URL——脚本
+#   只请求 github.com / api.github.com 两个固定主机的 https 地址。
+# ------------------------------------------------------------------------------
+CONFIG_FILE="${SCRIPT_DIR}/crates.json"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo -e "${RED}[✗] 找不到 crates.json（应与本脚本同目录）: $CONFIG_FILE${NC}"
+    exit 1
+fi
 
-# 尚未独立（作为主仓库 workspace member 直接版本控制，跳过）
-BUNDLED_CRATES=(
-    "muskitty-renderer"
-)
+# 从 crates.json 取数组（数组每项一行）
+# python3 经 stdin 读文件（避免 Windows 原生 python 读不懂 /d/... POSIX 路径），
+# 失败或结果为空时自动回退 awk（纯 POSIX，兼容 macOS 自带 bash 3.2）。
+json_array() {
+    local key="$1" out=""
+    if command -v python3 >/dev/null 2>&1; then
+        out="$(python3 -c "import json,sys; print('\n'.join(json.load(sys.stdin)[sys.argv[1]]))" \
+            "$key" < "$CONFIG_FILE" 2>/dev/null || true)"
+    fi
+    if [[ -z "$out" ]]; then
+        out="$(awk -v key="\"$key\"" '
+            $0 ~ "^[[:space:]]*" key { inarr = 1; next }
+            inarr && /\]/ { exit }
+            inarr { print }
+        ' "$CONFIG_FILE" | grep -o '"[A-Za-z0-9_.-]*"' | tr -d '"')"
+    fi
+    printf '%s\n' "$out"
+}
+
+STANDALONE_CRATES=()
+while IFS= read -r _line; do
+    [[ -n "$_line" ]] && STANDALONE_CRATES+=("$_line")
+done < <(json_array standalone)
+BUNDLED_CRATES=()
+while IFS= read -r _line; do
+    [[ -n "$_line" ]] && BUNDLED_CRATES+=("$_line")
+done < <(json_array bundled)
+
+if [[ ${#STANDALONE_CRATES[@]} -eq 0 || ${#BUNDLED_CRATES[@]} -eq 0 ]]; then
+    echo -e "${RED}[✗] crates.json 缺少 standalone / bundled 清单（数组每项一行）${NC}"
+    exit 1
+fi
+
+# 名称白名单校验（条目会进入 URL 与 git 参数，防注入）
+for _n in "${STANDALONE_CRATES[@]}" "${BUNDLED_CRATES[@]}"; do
+    if [[ ! "$_n" =~ ^[A-Za-z0-9_.-]+$ || "$_n" == [-.]* ]]; then
+        echo -e "${RED}[✗] crates.json 含非法仓库名（仅允许字母/数字/._- 且不以 - . 开头）: $_n${NC}"
+        exit 1
+    fi
+done
+
+# 组织：默认取 crates.json 的 org；-o/--org 在参数解析时覆盖
+ORG="$(sed -n 's/.*"org"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_FILE" | head -n1)"
+[[ -z "$ORG" ]] && ORG="muskitty-dev"
 
 # 汇总统计
 TOTAL=0
@@ -225,8 +259,7 @@ echo -e "  ${GRAY}组织:${NC}     $ORG"
 echo -e "  ${GRAY}模式:${NC}     $MODE"
 echo -e "  ${GRAY}协议:${NC}     $PROTOCOL"
 echo -e "  ${GRAY}目录:${NC}     $CRATES_DIR"
-echo -e "  ${GRAY}独立:${NC}     ${#STANDALONE_CRATES[@]} 个 crate"
-echo -e "  ${GRAY}未独立:${NC}   ${#BUNDLED_CRATES[@]} 个 crate"
+echo -e "  ${GRAY}清单:${NC}     crates.json（独立 ${#STANDALONE_CRATES[@]} / 未独立 ${#BUNDLED_CRATES[@]}）"
 echo ""
 
 # 检查 git
@@ -582,6 +615,74 @@ for crate in "${BUNDLED_CRATES[@]}"; do
         echo -e "  📦 ${crate}  ${GRAY}(本地 ✗)${NC}"
     fi
 done
+
+# ------------------------------------------------------------------------------
+# 一致性检查：crates.json ↔ 本地 crates/ 目录 ↔ Cargo.toml members ↔ 远程 org
+#   目的：新增/剥离 crate 后忘记登记清单时当场可见（脚本内已无硬编码列表，
+#   crates.json 是唯一需要维护的地方）。仅警告，不改变退出码。
+# ------------------------------------------------------------------------------
+DRIFT=()
+known=" ${STANDALONE_CRATES[*]} ${BUNDLED_CRATES[*]} "
+
+# 1) crates/ 下存在但未登记的目录（隐藏目录跳过）
+for _d in "$CRATES_DIR"/*/; do
+    [[ -d "$_d" ]] || continue
+    _name="$(basename "$_d")"
+    [[ "$_name" == .* ]] && continue
+    case "$known" in
+        *" $_name "*) ;;
+        *) DRIFT+=("crates/ 下存在未登记目录（crates.json 漏登记？）: $_name") ;;
+    esac
+done
+
+# 2) Cargo.toml workspace members ↔ bundled 清单（双向）
+if [[ -f "$SCRIPT_DIR/Cargo.toml" ]]; then
+    # 只取 members = [...] 块（避免扫到 exclude 段），再压平成空格定界串
+    _toml_members="$(awk '
+            /^[[:space:]]*members[[:space:]]*=[[:space:]]*\[/ { inarr = 1 }
+            inarr { print }
+            inarr && /\]/ { exit }
+        ' "$SCRIPT_DIR/Cargo.toml" | grep -o '"crates/[^"]*"' | sed 's|"crates/||; s|"||g')"
+    _toml_flat=" $(printf '%s' "$_toml_members" | tr '\n' ' ' | tr -s ' ') "
+    while IFS= read -r _m; do
+        [[ -z "$_m" ]] && continue
+        case " ${BUNDLED_CRATES[*]} " in
+            *" $_m "*) ;;
+            *) DRIFT+=("Cargo.toml members 有而 crates.json bundled 没有: $_m") ;;
+        esac
+    done <<< "$_toml_members"
+    for _b in "${BUNDLED_CRATES[@]}"; do
+        case "$_toml_flat" in
+            *" $_b "*) ;;
+            *) DRIFT+=("crates.json bundled 有而 Cargo.toml members 没有: $_b") ;;
+        esac
+    done
+fi
+
+# 3) 远程 org 下 muskitty-* 仓库是否都已登记（curl 匿名 API；失败则跳过）
+if command -v curl >/dev/null 2>&1; then
+    _resp="$(curl -fsS --max-time 10 "https://api.github.com/orgs/${ORG}/repos?per_page=100" 2>/dev/null || true)"
+    if [[ -n "$_resp" ]]; then
+        while IFS= read -r _rn; do
+            [[ -z "$_rn" ]] && continue
+            case "$known" in
+                *" $_rn "*) ;;
+                *) DRIFT+=("远程 ${ORG} 存在但未登记（新剥离的 crate？）: $_rn") ;;
+            esac
+        done < <(printf '%s\n' "$_resp" | grep -o '"name": *"muskitty-[^"]*"' | sed 's/.*"\(muskitty-[^"]*\)"/\1/')
+    else
+        echo -e "  ${CYAN}[i] 跳过远程清单核对（GitHub API 不可用）${NC}"
+    fi
+fi
+
+if [[ ${#DRIFT[@]} -gt 0 ]]; then
+    echo ""
+    echo -e "${YELLOW}── 清单一致性警告（crates.json 是唯一来源）──${NC}"
+    for _d in "${DRIFT[@]}"; do
+        echo -e "  ${YELLOW}[⚠]${NC} $_d"
+    done
+    echo -e "  ${YELLOW}修复：更新 crates.json（不要改脚本内列表）。${NC}"
+fi
 
 # ------------------------------------------------------------------------------
 # 汇总报告

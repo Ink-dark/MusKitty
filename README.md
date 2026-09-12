@@ -58,8 +58,9 @@ MusKitty/                              # this repo — workspace coordinator
 ├── PROGRESS.md                        # project-wide progress dashboard
 ├── CLAUDE.md / AGENTS.md              # engineering rules / hard constraints
 ├── README.md                          # this file
-├── fetch-crates.ps1                   # Windows: pull standalone crates
-├── fetch-crates.sh                    # macOS/Linux: pull standalone crates
+├── fetch-crates.ps1                   # Windows: pull standalone crates (reads crates.json)
+├── fetch-crates.sh                    # macOS/Linux: pull standalone crates (reads crates.json)
+├── crates.json                        # single source of truth: standalone + bundled crate lists
 ├── crates/
 │   ├── muskitty-renderer/             # 📦 workspace member (tiny-skia backend)
 │   ├── muskitty-network/              # 📦 workspace member (NetworkFetcher trait + reqwest)
@@ -121,11 +122,16 @@ missing those directories — run the fetch script first.
 git clone https://github.com/Ink-dark/MusKitty.git
 cd MusKitty
 
-# Pull all 11 standalone dependency crates into crates/
+# Pull all standalone dependency crates into crates/ (list = crates.json)
 pwsh ./fetch-crates.ps1 clone    # Windows
 # or
 ./fetch-crates.sh clone           # macOS / Linux
 ```
+
+`crates.json` is the single source of truth for which crates are standalone
+(fetched from `muskitty-dev`) and which are bundled workspace members; both
+scripts read it and cross-check it against `crates/`, `Cargo.toml` members,
+and the remote org at the end of every run.
 
 ### Day-to-day
 

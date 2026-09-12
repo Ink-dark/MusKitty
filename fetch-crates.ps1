@@ -2,21 +2,20 @@
 # ==============================================================================
 # fetch-crates.ps1
 # 放在项目根目录运行，自动拉取 muskitty-dev 下所有 crates 子仓库
+#
+# crate 清单：根目录 crates.json（单一来源）——
+#   standalone = 已剥离、需从 muskitty-dev 单独克隆的仓库
+#   bundled    = 主仓库 workspace member（在主仓库内直接版本控制）
+#   新增 / 剥离 crate 时只改 crates.json；脚本不再含硬编码列表，
+#   并会在结尾对账 crates/ 目录、Cargo.toml members、远程 org 三方。
+#
 # 目录结构:
 #   ./fetch-crates.ps1       <-- 本脚本
+#   ./crates.json            <-- crate 清单（单一来源）
 #   ./crates/
 #     ├── muskitty-cascade/            (独立仓库)
-#     ├── muskitty-cssom/              (独立仓库)
 #     ├── muskitty-renderer/           (主仓库 member，未剥离)
-#     ├── muskitty-layout/             (独立仓库)
-#     ├── muskitty-css/                (独立仓库)
-#     ├── muskitty-css-parser/         (独立仓库)
-#     ├── muskitty-css-tokenizer/      (独立仓库)
-#     ├── muskitty-css-values/        (独立仓库)
-#     ├── muskitty-dom/               (独立仓库)
-#     ├── muskitty-html5-parser/      (独立仓库)
-#     ├── muskitty-html5-tokenizer/   (独立仓库)
-#     └── muskitty-selectors/         (独立仓库)
+#     └── …（完整清单见 crates.json）
 #
 # 用法:
 #   pwsh ./fetch-crates.ps1                # 检查 + 克隆缺失的
@@ -44,28 +43,44 @@ param(
 $ErrorActionPreference = 'Continue'  # 单个失败不中断整体
 
 # ------------------------------------------------------------------------------
-# 已独立拆分的 crate 仓库（需要从 GitHub 单独拉取）
+# crate 清单：单一来源 = 主仓库根目录 crates.json
+#   新增 / 剥离 crate 时只改 crates.json，不要再在本脚本内硬编码列表。
+#   条目先做名称白名单校验（仅 GitHub 仓库名合法字符），再拼接 URL——脚本
+#   只请求 github.com / api.github.com 两个固定主机的 https 地址。
 # ------------------------------------------------------------------------------
-$StandaloneCrates = @(
-    'muskitty-cascade',
-    'muskitty-cssom',
-    'muskitty-layout',
-    'muskitty-css',
-    'muskitty-css-parser',
-    'muskitty-css-tokenizer',
-    'muskitty-css-values',
-    'muskitty-dom',
-    'muskitty-html5-parser',
-    'muskitty-html5-tokenizer',
-    'muskitty-selectors'
-)
+function Test-SafeRepoName {
+    param([string]$Name)
+    return (($Name -match '^[A-Za-z0-9_.-]+$') -and ($Name -notmatch '^[-.]'))
+}
 
-# ------------------------------------------------------------------------------
-# 尚未独立拆分的 crate（作为主仓库 workspace member 直接版本控制，跳过）
-# ------------------------------------------------------------------------------
-$BundledCrates = @(
-    'muskitty-renderer'
-)
+$ConfigPath = Join-Path $PSScriptRoot 'crates.json'
+if (-not (Test-Path -Path $ConfigPath)) {
+    Write-Host "[✗] 找不到 crates.json（应与本脚本同目录）: $ConfigPath" -ForegroundColor Red
+    exit 1
+}
+try {
+    $CratesConfig = Get-Content -Path $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+catch {
+    Write-Host "[✗] crates.json 解析失败: $_" -ForegroundColor Red
+    exit 1
+}
+
+$StandaloneCrates = @($CratesConfig.standalone)
+$BundledCrates = @($CratesConfig.bundled)
+if ($StandaloneCrates.Count -eq 0 -or $BundledCrates.Count -eq 0) {
+    Write-Host "[✗] crates.json 缺少 standalone / bundled 清单（数组每项一行）" -ForegroundColor Red
+    exit 1
+}
+$invalidNames = @(@($StandaloneCrates) + @($BundledCrates) | Where-Object { -not (Test-SafeRepoName $_) })
+if ($invalidNames.Count -gt 0) {
+    Write-Host "[✗] crates.json 含非法仓库名（仅允许字母/数字/._- 且不以 - . 开头）: $($invalidNames -join ', ')" -ForegroundColor Red
+    exit 1
+}
+# 组织：-Org 显式传入时优先，否则采用 crates.json 的 org
+if (-not $PSBoundParameters.ContainsKey('Org') -and $CratesConfig.org) {
+    $Org = [string]$CratesConfig.org
+}
 
 # ------------------------------------------------------------------------------
 # 辅助函数
@@ -154,6 +169,7 @@ Write-Host "  组织:     $Org" -ForegroundColor Gray
 Write-Host "  Crates目录: $CratesDir" -ForegroundColor Gray
 Write-Host "  协议:     $Protocol" -ForegroundColor Gray
 Write-Host "  强制更新: $($Force.IsPresent)" -ForegroundColor Gray
+Write-Host "  清单:     crates.json（独立 $($StandaloneCrates.Count) / 未独立 $($BundledCrates.Count)）" -ForegroundColor Gray
 Write-Host "  脚本位置: $PSScriptRoot" -ForegroundColor Gray
 Write-Host ""
 
@@ -398,6 +414,63 @@ foreach ($bundled in $BundledCrates) {
         Action      = 'Bundled'
         Status      = 'BundledInMain'
     })
+}
+
+# ------------------------------------------------------------------------------
+# 一致性检查：crates.json ↔ 本地 crates/ 目录 ↔ Cargo.toml members ↔ 远程 org
+#   目的：新增/剥离 crate 后忘记登记清单时当场可见（脚本内已无硬编码列表，
+#   crates.json 是唯一需要维护的地方）。仅警告，不改变退出码。
+# ------------------------------------------------------------------------------
+$drift = [System.Collections.Generic.List[string]]::new()
+$knownCrates = @($StandaloneCrates) + @($BundledCrates)
+
+# 1) crates/ 下存在但未登记的目录（隐藏目录如 .mimosa 跳过）
+$unlistedDirs = @(Get-ChildItem -Path $CratesDir -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notlike '.*' -and $_.Name -notin $knownCrates } |
+    Select-Object -ExpandProperty Name)
+if ($unlistedDirs.Count -gt 0) {
+    $drift.Add("crates/ 下存在未登记目录（crates.json 漏登记？）: $($unlistedDirs -join ', ')")
+}
+
+# 2) Cargo.toml workspace members ↔ bundled 清单（双向）
+$cargoToml = Join-Path $PSScriptRoot 'Cargo.toml'
+if (Test-Path -Path $cargoToml) {
+    $tomlText = Get-Content -Path $cargoToml -Raw
+    if ($tomlText -match '(?s)\[workspace\].*?members\s*=\s*\[(.*?)\]') {
+        $tomlMembers = @([regex]::Matches($Matches[1], '"crates/([^"]+)"') |
+            ForEach-Object { $_.Groups[1].Value })
+        $onlyInToml = @($tomlMembers | Where-Object { $_ -notin $BundledCrates })
+        $onlyInJson = @($BundledCrates | Where-Object { $_ -notin $tomlMembers })
+        if ($onlyInToml.Count -gt 0) {
+            $drift.Add("Cargo.toml members 有而 crates.json bundled 没有: $($onlyInToml -join ', ')")
+        }
+        if ($onlyInJson.Count -gt 0) {
+            $drift.Add("crates.json bundled 有而 Cargo.toml members 没有: $($onlyInJson -join ', ')")
+        }
+    }
+}
+
+# 3) 远程 org 下 muskitty-* 仓库是否都已登记（匿名 API；限流/断网时跳过）
+try {
+    $orgRepos = Invoke-RestMethod -Uri "https://api.github.com/orgs/$Org/repos?per_page=100" `
+        -Method Get -TimeoutSec 10 -ErrorAction Stop
+    $remoteCrates = @($orgRepos | ForEach-Object { $_.name } | Where-Object { $_ -like 'muskitty-*' })
+    $unregistered = @($remoteCrates | Where-Object { $_ -notin $knownCrates })
+    if ($unregistered.Count -gt 0) {
+        $drift.Add("远程 $Org 存在但未登记（新剥离的 crate？）: $($unregistered -join ', ')")
+    }
+}
+catch {
+    Write-Host "  [i] 跳过远程清单核对（GitHub API 不可用）" -ForegroundColor Cyan
+}
+
+if ($drift.Count -gt 0) {
+    Write-Host ""
+    Write-Host "── 清单一致性警告（crates.json 是唯一来源）──" -ForegroundColor Yellow
+    foreach ($d in $drift) {
+        Write-Host "  [⚠] $d" -ForegroundColor Yellow
+    }
+    Write-Host "  修复：更新 crates.json（不要改脚本内列表）。" -ForegroundColor DarkYellow
 }
 
 # ------------------------------------------------------------------------------
