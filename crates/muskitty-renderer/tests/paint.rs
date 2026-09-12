@@ -316,7 +316,16 @@ fn paint_stylesheet_background_color() {
     }
 }
 
-// —— B-2: border 测试 ——
+// —— M-3 batch 2: 方向性 border 测试 ——
+
+/// 取出唯一的 Rect 命令中的四边边框。
+fn rect_border(cmds: &[RenderCommand]) -> Border {
+    assert_eq!(cmds.len(), 1, "expected exactly one command: {cmds:?}");
+    match &cmds[0] {
+        RenderCommand::Rect { border, .. } => border.expect("border should be present"),
+        other => panic!("expected Rect, got {other:?}"),
+    }
+}
 
 #[test]
 fn paint_border_solid_longhand() {
@@ -326,23 +335,15 @@ fn paint_border_solid_longhand() {
         800.0,
         600.0,
     );
-    assert_eq!(cmds.len(), 1);
     match &cmds[0] {
-        RenderCommand::Rect {
-            border, background, ..
-        } => {
-            assert_eq!(*background, None, "no background");
-            assert_eq!(
-                *border,
-                Some(Border {
-                    width: 2.0,
-                    color: Color::BLACK,
-                    style: BorderStyle::Solid,
-                })
-            );
-        }
+        RenderCommand::Rect { background, .. } => assert_eq!(*background, None, "no background"),
         _ => panic!("expected Rect"),
     }
+    // 四边等宽同色同样式
+    assert_eq!(
+        rect_border(&cmds),
+        Border::uniform(2.0, Color::BLACK, BorderStyle::Solid)
+    );
 }
 
 #[test]
@@ -353,31 +354,101 @@ fn paint_border_with_background() {
         800.0,
         600.0,
     );
-    assert_eq!(cmds.len(), 1);
     match &cmds[0] {
         RenderCommand::Rect {
             background, border, ..
         } => {
             assert_eq!(*background, Some(Color::rgb(255, 0, 0)));
             let b = border.expect("border should be present");
-            assert_eq!(b.width, 1.0);
-            assert_eq!(b.color, Color::rgb(0, 0, 255));
-            assert_eq!(b.style, BorderStyle::Solid);
+            assert_eq!(b.widths(), (1.0, 1.0, 1.0, 1.0));
+            assert_eq!(b.top.unwrap().color, Color::rgb(0, 0, 255));
+            assert_eq!(b.top.unwrap().style, BorderStyle::Solid);
         }
         _ => panic!("expected Rect"),
     }
 }
 
 #[test]
-fn paint_border_style_none_skipped() {
-    // border-style: none → 不生成边框；且无 background → 不生成指令
+fn paint_directional_border_only_that_side() {
+    // border-left 简写：只有左边有边框（此前整条声明被丢弃）
     let cmds = paint_pipeline(
-        "<div style=\"border-width: 2px; border-style: none; border-color: red; width: 100px; height: 50px\"></div>",
+        "<div style=\"border-left: 4px solid red; width: 100px; height: 50px\"></div>",
         "",
         800.0,
         600.0,
     );
-    assert!(cmds.is_empty(), "border-style:none + no bg = no command");
+    let b = rect_border(&cmds);
+    assert_eq!(b.widths(), (0.0, 0.0, 0.0, 4.0));
+    assert_eq!(b.left.unwrap().color, Color::rgb(255, 0, 0));
+    assert!(b.top.is_none() && b.right.is_none() && b.bottom.is_none());
+}
+
+#[test]
+fn paint_border_bottom_shorthand() {
+    let cmds = paint_pipeline(
+        "<div style=\"border-bottom: 2px solid blue; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    let b = rect_border(&cmds);
+    assert_eq!(b.widths(), (0.0, 0.0, 2.0, 0.0));
+    assert_eq!(b.bottom.unwrap().color, Color::rgb(0, 0, 255));
+}
+
+#[test]
+fn paint_border_per_side_widths_and_colors() {
+    // 1/2/3/4 值 → 上/右/下/左；每边颜色独立
+    let cmds = paint_pipeline(
+        "<div style=\"border-width: 1px 2px 3px 4px; border-style: solid; border-color: red green blue black; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    let b = rect_border(&cmds);
+    assert_eq!(b.widths(), (1.0, 2.0, 3.0, 4.0));
+    assert_eq!(b.top.unwrap().color, Color::rgb(255, 0, 0));
+    assert_eq!(b.right.unwrap().color, Color::rgb(0, 128, 0));
+    assert_eq!(b.bottom.unwrap().color, Color::rgb(0, 0, 255));
+    assert_eq!(b.left.unwrap().color, Color::BLACK);
+}
+
+#[test]
+fn paint_border_currentcolor_uses_text_color() {
+    // currentcolor → 元素文字色（非固定黑色）
+    let cmds = paint_pipeline(
+        "<div style=\"color: #00ff00; border: 1px solid currentcolor; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert_eq!(rect_border(&cmds).top.unwrap().color, Color::rgb(0, 255, 0));
+}
+
+#[test]
+fn paint_border_keyword_width_renders() {
+    // `border: thin solid red` —— thin/medium/thick 归一化后应绘制 1px
+    let cmds = paint_pipeline(
+        "<div style=\"border: thin solid red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    let b = rect_border(&cmds);
+    assert_eq!(b.widths(), (1.0, 1.0, 1.0, 1.0));
+}
+
+#[test]
+fn paint_border_style_none_and_hidden_skipped() {
+    for kw in ["none", "hidden"] {
+        let cmds = paint_pipeline(
+            &format!("<div style=\"border: 2px {kw} red; width: 100px; height: 50px\"></div>"),
+            "",
+            800.0,
+            600.0,
+        );
+        assert!(cmds.is_empty(), "border-style:{kw} + no bg = no command");
+    }
 }
 
 #[test]
@@ -400,66 +471,211 @@ fn paint_border_only_emits_command() {
         800.0,
         600.0,
     );
-    assert_eq!(cmds.len(), 1);
     match &cmds[0] {
-        RenderCommand::Rect {
-            background, border, ..
-        } => {
-            assert_eq!(*background, None);
-            let b = border.expect("border present");
-            assert_eq!(b.width, 3.0);
-            assert_eq!(b.color, Color::rgb(0xff, 0x88, 0x00));
-            assert_eq!(b.style, BorderStyle::Dashed);
-        }
+        RenderCommand::Rect { background, .. } => assert_eq!(*background, None),
         _ => panic!("expected Rect"),
     }
+    let b = rect_border(&cmds);
+    assert_eq!(b.widths(), (3.0, 3.0, 3.0, 3.0));
+    assert_eq!(b.top.unwrap().color, Color::rgb(0xff, 0x88, 0x00));
+    assert_eq!(b.top.unwrap().style, BorderStyle::Dashed);
 }
 
 #[test]
-fn paint_border_shorthand_emits_border() {
-    // M-3: `border:` 简写 → cascade 展开 → extract_border 端到端。
-    // 必须显式 px 宽度：无宽度时 parse_border_width 读不到 Dimension 而无边框
-    // （renderer 既有缺口，`border: solid red` 不绘制）。
+fn paint_border_double_painted_as_solid_approximation() {
+    // §4.2 全集关键字都应产生边框（double 等当前按 solid 近似绘制，
+    // 此前 renderer 解析失败 → 完全无边框）
     let cmds = paint_pipeline(
-        "<div style=\"border: 2px solid black; width: 100px; height: 50px\"></div>",
+        "<div style=\"border: 5px double red; width: 100px; height: 50px\"></div>",
         "",
         800.0,
         600.0,
     );
-    assert_eq!(cmds.len(), 1);
-    match &cmds[0] {
-        RenderCommand::Rect {
-            background, border, ..
-        } => {
-            assert_eq!(*background, None);
-            let b = border.expect("border present");
-            assert_eq!(b.width, 2.0);
-            assert_eq!(b.color, Color::BLACK);
-            assert_eq!(b.style, BorderStyle::Solid);
-        }
-        _ => panic!("expected Rect"),
-    }
+    let b = rect_border(&cmds);
+    assert_eq!(b.widths(), (5.0, 5.0, 5.0, 5.0));
+    assert_eq!(b.top.unwrap().style, BorderStyle::Double);
 }
 
 #[test]
 fn paint_border_shorthand_hex_color() {
-    // 简写带 hash 颜色：parse_border_color 走 hex 路径
     let cmds = paint_pipeline(
         "<div style=\"border: 3px dashed #ff8800; width: 100px; height: 50px\"></div>",
         "",
         800.0,
         600.0,
     );
-    assert_eq!(cmds.len(), 1);
+    let b = rect_border(&cmds);
+    assert_eq!(b.widths(), (3.0, 3.0, 3.0, 3.0));
+    assert_eq!(b.top.unwrap().color, Color::rgb(0xff, 0x88, 0x00));
+    assert_eq!(b.top.unwrap().style, BorderStyle::Dashed);
+}
+
+// —— M-3 batch 2: outline 测试（CSS UI L4 §4）——
+
+#[test]
+fn paint_outline_shorthand_emits_outline() {
+    // 只有 outline（无背景/边框）→ 只有 Outline 命令
+    let cmds = paint_pipeline(
+        "<div style=\"outline: 2px solid red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    assert_eq!(cmds.len(), 1, "expected only an Outline command: {cmds:?}");
     match &cmds[0] {
-        RenderCommand::Rect { border, .. } => {
-            let b = border.expect("border present");
-            assert_eq!(b.width, 3.0);
-            assert_eq!(b.color, Color::rgb(0xff, 0x88, 0x00));
-            assert_eq!(b.style, BorderStyle::Dashed);
+        RenderCommand::Outline {
+            outline_width,
+            color,
+            style,
+            ..
+        } => {
+            assert_eq!(*outline_width, 2.0);
+            assert_eq!(*color, Color::rgb(255, 0, 0));
+            assert_eq!(*style, BorderStyle::Solid);
         }
-        _ => panic!("expected Rect"),
+        other => panic!("expected Outline, got {other:?}"),
     }
+}
+
+#[test]
+fn paint_outline_uses_border_box_geometry() {
+    let cmds = paint_pipeline(
+        "<div style=\"outline: 1px solid red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    match &cmds[0] {
+        RenderCommand::Outline {
+            x,
+            y,
+            width,
+            height,
+            ..
+        } => {
+            assert_eq!((*x, *y), (0.0, 0.0), "border box origin");
+            assert_eq!((*width, *height), (100.0, 50.0), "border box size");
+        }
+        other => panic!("expected Outline, got {other:?}"),
+    }
+}
+
+#[test]
+fn paint_outline_emitted_after_children() {
+    // 轮廓绘制在元素及后代之上 → 命令序在子节点之后
+    let cmds = paint_pipeline(
+        "<div style=\"outline: 1px solid red\"><span style=\"background-color: blue; width: 10px; height: 10px\"></span></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    let child_idx = cmds
+        .iter()
+        .position(|c| {
+            matches!(
+                c,
+                RenderCommand::Rect {
+                    background: Some(_),
+                    ..
+                }
+            )
+        })
+        .expect("child rect");
+    let outline_idx = cmds
+        .iter()
+        .position(|c| matches!(c, RenderCommand::Outline { .. }))
+        .expect("outline command");
+    assert!(
+        child_idx < outline_idx,
+        "outline must be emitted after descendants: {cmds:?}"
+    );
+}
+
+#[test]
+fn paint_outline_none_and_zero_width_skipped() {
+    for style in [
+        "outline-style: none; outline-width: 2px; outline-color: red",
+        "outline-style: solid; outline-width: 0px; outline-color: red",
+        "outline: none",
+    ] {
+        let cmds = paint_pipeline(
+            &format!("<div style=\"{style}; width: 100px; height: 50px\"></div>"),
+            "",
+            800.0,
+            600.0,
+        );
+        assert!(
+            cmds.is_empty(),
+            "no outline expected for `{style}`: {cmds:?}"
+        );
+    }
+}
+
+#[test]
+fn paint_outline_auto_style_and_color() {
+    // outline-style: auto（UA 焦点环）→ 按 solid 近似；outline-color 初始值
+    // auto → 元素文字色
+    let cmds = paint_pipeline(
+        "<div style=\"color: #3366ff; outline-style: auto; outline-width: 2px; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    match &cmds[0] {
+        RenderCommand::Outline { color, style, .. } => {
+            assert_eq!(*style, BorderStyle::Solid, "auto approximated as solid");
+            assert_eq!(
+                *color,
+                Color::rgb(0x33, 0x66, 0xff),
+                "auto color → text color"
+            );
+        }
+        other => panic!("expected Outline, got {other:?}"),
+    }
+}
+
+#[test]
+fn paint_outline_does_not_change_layout() {
+    // outline 不参与布局：同一元素加 outline 前后几何不变
+    let with = paint_pipeline(
+        "<div style=\"outline: 3px solid red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    let without = paint_pipeline(
+        "<div style=\"background-color: red; width: 100px; height: 50px\"></div>",
+        "",
+        800.0,
+        600.0,
+    );
+    let geom = |cmds: &[RenderCommand]| match cmds.iter().find(|c| {
+        matches!(
+            c,
+            RenderCommand::Outline { .. } | RenderCommand::Rect { .. }
+        )
+    }) {
+        Some(RenderCommand::Outline {
+            x,
+            y,
+            width,
+            height,
+            ..
+        })
+        | Some(RenderCommand::Rect {
+            x,
+            y,
+            width,
+            height,
+            ..
+        }) => (*x, *y, *width, *height),
+        other => panic!("no geometry command: {other:?}"),
+    };
+    assert_eq!(
+        geom(&with),
+        geom(&without),
+        "outline must not affect layout"
+    );
 }
 
 // —— B-2: rgb() / rgba() 颜色函数测试 ——

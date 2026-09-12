@@ -1,15 +1,15 @@
 //! 渲染样式提取工具。
 //!
-//! 从 [`ComputedStyle`] 提取绘制所需信息（background-color / border），
-//! 供 `paint` 生成 [`RenderCommand`] 时查询。
+//! 从 [`ComputedStyle`] 提取绘制所需信息（background-color / 四边 border /
+//! outline），供 `paint` 生成 [`RenderCommand`] 时查询。
 //!
 //! RenderTree / RenderNode 中间结构已移除（P2-17）：`paint` 直接输出
 //! `Vec<RenderCommand>`。z-order / 层叠上下文 / transform 嵌套等复杂
 //! 场景需要中间结构时再引入，当前无消费者。
 
 use crate::color::Color;
-use crate::command::{Border, BorderStyle, TextAlign};
-use muskitty_cascade::ComputedStyle;
+use crate::command::{Border, BorderStyle, SideBorder, TextAlign};
+use muskitty_cascade::{ComputedStyle, ComputedValue};
 use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
 
@@ -97,67 +97,167 @@ pub fn resolve_text_align(style: &ComputedStyle) -> TextAlign {
         .unwrap_or(TextAlign::Left)
 }
 
-/// 从 ComputedStyle 提取边框。
+/// 从 ComputedStyle 提取边框（四边独立）。
 ///
-/// 读取 `border-width` / `border-style` / `border-color` 三个 longhand
-/// 属性。`border` 简写需要 CSSOM 层展开，当前不支持（推迟）。
+/// 逐边读取 `border-<side>-{style,width,color}`（M-3 batch 2：cascade 的
+/// `border`/`border-<side>`/`border-width|style|color` 简写已全部展开为
+/// 方向性长属性，不再有统一的 `border-width` 等中间属性）。
 ///
-/// 返回 `None` 表示无边框（未设置 / 样式为 none / 宽度为 0）。
-pub fn extract_border(style: &ComputedStyle) -> Option<Border> {
-    // border-style（默认 none）
-    let style_val = parse_border_style(style)?;
-    if style_val == BorderStyle::None {
+/// - `border-<side>-style` 为 `none`/`hidden` 或缺失（初始值 none）→ 该边
+///   跳过（§4.1：used width = 0）；
+/// - 宽度取 px Dimension（cascade 已把 `thin`/`medium`/`thick` 归一化为 px）；
+/// - 颜色为 `currentcolor` 时用调用方传入的 `current_color`（元素文字色）。
+///
+/// 四边均无 → `None`。
+pub fn extract_border(style: &ComputedStyle, current_color: Color) -> Option<Border> {
+    let border = Border {
+        top: extract_side(
+            style,
+            "border-top-style",
+            "border-top-width",
+            "border-top-color",
+            current_color,
+        ),
+        right: extract_side(
+            style,
+            "border-right-style",
+            "border-right-width",
+            "border-right-color",
+            current_color,
+        ),
+        bottom: extract_side(
+            style,
+            "border-bottom-style",
+            "border-bottom-width",
+            "border-bottom-color",
+            current_color,
+        ),
+        left: extract_side(
+            style,
+            "border-left-style",
+            "border-left-width",
+            "border-left-color",
+            current_color,
+        ),
+    };
+    if border.is_empty() {
+        None
+    } else {
+        Some(border)
+    }
+}
+
+/// 提取单边边框；该边不绘制（style none/hidden、宽度 ≤ 0 或缺失）时 `None`。
+fn extract_side(
+    style: &ComputedStyle,
+    style_prop: &str,
+    width_prop: &str,
+    color_prop: &str,
+    current_color: Color,
+) -> Option<SideBorder> {
+    let border_style = parse_border_style(style.get(style_prop)?.keyword()?);
+    if !border_style.is_painted() {
         return None;
     }
-
-    // border-width（默认 0，当前仅解析 px）
-    let width = parse_border_width(style)?;
+    let width = parse_border_width(style.get(width_prop)?)?;
     if width <= 0.0 {
         return None;
     }
-
-    // border-color（默认 currentColor，当前回退到黑色）
-    let color = parse_border_color(style).unwrap_or(Color::BLACK);
-
-    Some(Border {
+    let color = style
+        .get(color_prop)
+        .and_then(|cv| resolve_color(cv, current_color))
+        .unwrap_or(current_color);
+    Some(SideBorder {
         width,
         color,
-        style: style_val,
+        style: border_style,
     })
 }
 
-/// 解析 `border-style` 关键字。
-fn parse_border_style(style: &ComputedStyle) -> Option<BorderStyle> {
-    let cv = style.get("border-style")?;
-    let kw = cv.keyword()?;
+/// 从 ComputedStyle 提取轮廓（CSS UI Level 4 §4）。
+///
+/// 轮廓不参与布局，绘制在 border box 之外（由 backend 展开到盒子外侧）。
+/// `outline-style` 为 `none`（初始值）或宽度 ≤ 0 → `None`。
+/// `outline-style: auto`（UA 焦点环）按 solid 近似；`outline-color` 的
+/// 初始值 `auto` 与 `currentcolor` 一样解析为元素文字色。
+pub fn extract_outline(style: &ComputedStyle, current_color: Color) -> Option<SideBorder> {
+    let kw = style.get("outline-style")?.keyword()?;
+    // `auto` 是 outline-style 独有关键字（UA 焦点环），border-style 无此值
+    let border_style = if kw.eq_ignore_ascii_case("auto") {
+        BorderStyle::Solid
+    } else {
+        parse_border_style(kw)
+    };
+    if !border_style.is_painted() {
+        return None;
+    }
+    let width = parse_border_width(style.get("outline-width")?)?;
+    if width <= 0.0 {
+        return None;
+    }
+    let color = style
+        .get("outline-color")
+        .and_then(|cv| resolve_color(cv, current_color))
+        .unwrap_or(current_color);
+    Some(SideBorder {
+        width,
+        color,
+        style: border_style,
+    })
+}
+
+/// 解析 border/outline 颜色值；`currentcolor` → `current_color`。
+///
+/// 无法解析（如 `outline-color: auto`）返回 `None`，调用方回退
+/// `current_color`。
+fn resolve_color(cv: &ComputedValue, current_color: Color) -> Option<Color> {
+    if cv
+        .keyword()
+        .is_some_and(|kw| kw.eq_ignore_ascii_case("currentcolor"))
+    {
+        return Some(current_color);
+    }
+    crate::color::parse_color(cv.tokens())
+}
+
+/// 解析 border-style / outline-style 关键字（CSS Backgrounds & Borders L3 §4.2 全集）。
+///
+/// 未知关键字 → [`BorderStyle::None`]（不绘制），与 CSS 无效值回退初始值的
+/// 效果一致。
+fn parse_border_style(kw: &str) -> BorderStyle {
     match kw.to_ascii_lowercase().as_str() {
-        "none" => Some(BorderStyle::None),
-        "solid" => Some(BorderStyle::Solid),
-        "dashed" => Some(BorderStyle::Dashed),
-        "dotted" => Some(BorderStyle::Dotted),
-        _ => None,
+        "none" => BorderStyle::None,
+        "hidden" => BorderStyle::Hidden,
+        "solid" => BorderStyle::Solid,
+        "dashed" => BorderStyle::Dashed,
+        "dotted" => BorderStyle::Dotted,
+        "double" => BorderStyle::Double,
+        "groove" => BorderStyle::Groove,
+        "ridge" => BorderStyle::Ridge,
+        "inset" => BorderStyle::Inset,
+        "outset" => BorderStyle::Outset,
+        _ => BorderStyle::None,
     }
 }
 
-/// 解析 `border-width` 为 px 浮点值。
+/// 解析边框宽度为 px 浮点值。
 ///
-/// 当前仅支持 `<length>` 的 px 单位；其他单位（em/rem/pt）推迟。
-fn parse_border_width(style: &ComputedStyle) -> Option<f32> {
-    let cv = style.get("border-width")?;
-    // 取首个 dimension token
+/// cascade 的 computed value 阶段已把 `thin`/`medium`/`thick` 归一化为 px
+/// Dimension（`normalize_line_width`），故此处只需认 px Dimension 与
+/// `<length>` 的裸 `0`。其他单位/无法解析的值 → `None`（不绘制）。
+fn parse_border_width(cv: &ComputedValue) -> Option<f32> {
     for v in cv.tokens() {
-        if let ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) = v {
-            if unit.eq_ignore_ascii_case("px") {
+        match v {
+            ComponentValue::PreservedToken(Token::Dimension(numeric, unit))
+                if unit.eq_ignore_ascii_case("px") =>
+            {
                 return Some(numeric.value as f32);
             }
-            // 非 px 单位推迟
+            ComponentValue::PreservedToken(Token::Number(numeric)) if numeric.value == 0.0 => {
+                return Some(0.0);
+            }
+            _ => {}
         }
     }
     None
-}
-
-/// 解析 `border-color`。
-fn parse_border_color(style: &ComputedStyle) -> Option<Color> {
-    let cv = style.get("border-color")?;
-    crate::color::parse_color(cv.tokens())
 }

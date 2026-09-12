@@ -13,8 +13,8 @@
 use crate::color::Color;
 use crate::command::{RenderCommand, TextAlign};
 use crate::render_tree::{
-    extract_background_color, extract_border, extract_text_color, resolve_font_family,
-    resolve_font_size, resolve_font_weight, resolve_text_align,
+    extract_background_color, extract_border, extract_outline, extract_text_color,
+    resolve_font_family, resolve_font_size, resolve_font_weight, resolve_text_align,
 };
 use muskitty_cascade::ComputedStyle;
 use muskitty_dom::{Node, NodeKind};
@@ -155,7 +155,7 @@ fn paint_recursive(
                     });
                 }
             }
-            // Element 节点 → Rect 命令（背景 + 边框）。
+            // Element 节点 → Rect 命令（背景 + 四边边框）。
             NodeKind::Element(_) => {
                 // 查询布局结果；display:none / contents / 非渲染标签不在布局
                 // 树中（或无盒），自然跳过。
@@ -164,7 +164,8 @@ fn paint_recursive(
                         if let Some(style) = styles.get(&addr) {
                             let bg =
                                 extract_background_color(style).filter(|c| !c.is_transparent());
-                            let border = extract_border(style);
+                            // `currentcolor` 取本元素文字色（M-3 batch 2）
+                            let border = extract_border(style, color);
 
                             // 有背景或边框时生成绘制指令（绝对坐标）。
                             if bg.is_some() || border.is_some() {
@@ -223,6 +224,26 @@ fn paint_recursive(
 
     if clips {
         commands.push(RenderCommand::EndClip);
+    }
+
+    // 轮廓（M-3 batch 2）：绘制在 border box 之外、元素及其后代之上，故在
+    // 子节点递归与本元素裁剪恢复之后发出（CSS UI L4 §4；outline 不影响布局）。
+    if let NodeKind::Element(_) = node.borrow().kind {
+        if let Some(style) = styles.get(&addr) {
+            if let Some(outline) = extract_outline(style, color) {
+                if let Some(node_layout) = layout.get(addr).filter(|l| in_viewport(l, viewport)) {
+                    commands.push(RenderCommand::Outline {
+                        x: node_layout.abs_x,
+                        y: node_layout.abs_y,
+                        width: node_layout.width,
+                        height: node_layout.height,
+                        outline_width: outline.width,
+                        color: outline.color,
+                        style: outline.style,
+                    });
+                }
+            }
+        }
     }
 }
 

@@ -421,3 +421,145 @@ fn end_to_end_font_weight_and_size_reach_text_command() {
         "32px text should ink more scanlines than 16px, bold={bold_ink} normal={normal_ink}"
     );
 }
+
+// —— M-3 batch 2: 方向性边框 / 轮廓的全链路像素验证 ——
+
+/// 全链路渲染并返回原始 RGBA 像素（与 [`render_to_png`] 同管线，跳过 PNG 编码）。
+fn render_raw_pixels(html: &str, css: &str, vw: u32, vh: u32) -> (u32, Vec<u8>) {
+    let dom = muskitty_html5_parser::parse(html);
+    let parsed = parse_stylesheet(css);
+    let sheet = {
+        let mut s = from_stylesheet(&parsed);
+        s.origin = Origin::Author;
+        s
+    };
+    let styles = compute_styles_tree(&dom, &[sheet], &StyleTreeOptions::default());
+    let mut tree = build_layout_tree(&dom, &styles);
+    let layout = compute_layout(&mut tree, vw as f32, vh as f32).expect("layout should succeed");
+    let input = PaintInput {
+        dom: &dom,
+        styles: &styles,
+        layout: &layout,
+        viewport: None,
+    };
+    let commands = paint(&input);
+    let mut backend = TinySkiaBackend::new();
+    match backend.render(&commands, vw, vh, 1.0) {
+        RenderOutput::Pixels { width, data, .. } => (width, data),
+        other => panic!("expected Pixels, got {other:?}"),
+    }
+}
+
+/// 读取像素为 `(r, g, b, a)`。
+fn pixel_at(data: &[u8], width: u32, x: u32, y: u32) -> (u8, u8, u8, u8) {
+    let i = ((y * width + x) * 4) as usize;
+    (data[i], data[i + 1], data[i + 2], data[i + 3])
+}
+
+#[test]
+fn end_to_end_directional_border_only_that_side() {
+    // `border-left` 走完 cascade 简写展开 → layout 盒模型 → paint → 像素：
+    // 左边 6px 红条，其余三边与盒内保持白底
+    let (width, data) = render_raw_pixels(
+        r#"<div style="border-left: 6px solid red; width: 40px; height: 20px"></div>"#,
+        "",
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 2, 10),
+        (255, 0, 0, 255),
+        "left border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 6, 10),
+        (255, 255, 255, 255),
+        "inside the box (right of the 6px border)"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 10),
+        (255, 255, 255, 255),
+        "no right border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 25),
+        (255, 255, 255, 255),
+        "below the box"
+    );
+}
+
+#[test]
+fn end_to_end_border_box_grows_with_border() {
+    // 盒模型：content-box 下 border 使 border box 变大 → 边框外侧属于盒子
+    // （旧行为下 border 不占空间，同一像素位置不会被边框覆盖）
+    let (width, data) = render_raw_pixels(
+        r#"<div style="border: 5px solid red; width: 20px; height: 20px"></div>"#,
+        "",
+        40,
+        40,
+    );
+    // 垂直中线 y=15 处：x ∈ [0,5) 左边框，x ∈ [5,25) 内部（无背景 → 白），
+    // x ∈ [25,30) 右边框
+    assert_eq!(
+        pixel_at(&data, width, 2, 15),
+        (255, 0, 0, 255),
+        "left border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 15, 15),
+        (255, 255, 255, 255),
+        "content"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 27, 15),
+        (255, 0, 0, 255),
+        "right border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 32, 15),
+        (255, 255, 255, 255),
+        "outside the 30px border box"
+    );
+}
+
+#[test]
+fn end_to_end_outline_drawn_outside_box() {
+    // outline 画在 border box 之外、且不影响布局（margin:10px 让轮廓可见）
+    let (width, data) = render_raw_pixels(
+        r#"<div style="margin: 10px; width: 40px; height: 20px; outline: 3px solid blue"></div>"#,
+        "",
+        80,
+        60,
+    );
+    // border box = (10,10)-(50,30)；轮廓在其外侧 3px
+    assert_eq!(
+        pixel_at(&data, width, 30, 8),
+        (0, 0, 255, 255),
+        "outline top"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 8, 20),
+        (0, 0, 255, 255),
+        "outline left"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 52, 20),
+        (0, 0, 255, 255),
+        "outline right"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 32),
+        (0, 0, 255, 255),
+        "outline bottom"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (255, 255, 255, 255),
+        "interior"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 6),
+        (255, 255, 255, 255),
+        "outside outline"
+    );
+}
