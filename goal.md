@@ -1,121 +1,82 @@
-# Goal — W-3：WPT 选择器套件对齐（第一批，2026-09-13）
+# Goal — W-3b：An+B 符号保真（WPT 选择器套件收尾，2026-09-13）
 
 > **更新时间**：2026-09-13
-> **状态**：✅ **已完成**（S-1~S-6 全部满足退出条件，见文末"完成记录"）。
-> **实测结果**：75.6% → **94.3%（479/508）**，失败 124 → 29（28 例属 W-3b，
-> 1 例为已记录的 tentative 夹具自相矛盾）。
-> **任务来源**：用户指令"继续 w-3，对齐 wpt 测试实现"。仓库内 "W-3" 只有 windowing 轨道
-> 的输入事件项（已完成，仅剩页面命中测试），与本指令的"对齐 WPT"不符；按
-> [docs/wpt-compliance-2026-09-06.md](docs/wpt-compliance-2026-09-06.md) 一节的套件表，
-> **第三个套件正是 `css/selectors/parsing`（75.6%，384/508）**——CSS 系唯一仍有大缺口的
-> 套件。故本轮按"WPT 第三个套件对齐"执行；若用户另有所指可随时纠偏。
-> **复跑基线**（本轮实测，与文档一致）：
-> `cd crates/muskitty-selectors && cargo test --test wpt_parsing -- --nocapture`
-> → `PASS RATE: 75.6% (384/508)`，失败 124 例。
+> **状态**：✅ **已完成**（T-1~T-5 全部满足退出条件，见文末"完成记录"）。
+> **实测结果**：**94.3%（479/508）→ 99.8%（507/508）**；剩余唯一 1 例为上一批
+> 已记录的 tentative 夹具自相矛盾（`:has-slotted(div + div)`）。
+> **上一批**：W-3 第一批（96 例，selectors `f8d2002` / css-tokenizer `23ec4ec`）。
+> **本轮范围来源**：上一批 goal.md 明确留下的 28 例——全部是同一个根因：
+> 解析器分不清 `<signed-integer>` 与 `<signless-integer>`。
 
-## 失败分布（本轮实测，按夹具）
+## 根因（实测 + 规范核对）
 
-| 夹具 | 失败 | 类别 |
-|------|-----:|------|
-| parse-part.html | 26 | `::part(<ident>+)` 未实现（+ 单冒号 `:part()` 等应拒已拒） |
-| css/css-syntax/anb-parsing.html | 20 | An+B 符号/重复符号应拒未拒（**需 tokenizer 改动**） |
-| parse-has-slotted.tentative.html | 19 | `:has-slotted` 未实现 |
-| parse-is-where.html | 14 | `:host(<compound>)` 6 + `::part():is/:where()` 8 |
-| parse-anplusb.html | 12 | An+B：8 符号（需 tokenizer）+ 4 空白形态 |
-| parse-state.html | 11 | `:state(<ident>)` 未实现 + 伪元素后置规则 |
-| parse-heading.html | 10 | `:heading` / `:heading(<integer>#)` 未实现 |
-| parse-slotted.html | 9 | `::slotted(<compound>)` 未实现（含后置伪类应拒） |
-| parse-not.html | 3 | `:host(:not(…))` 2 + `:not(::before)` 应拒未拒 |
-| **合计** | **124** | |
+CSS Syntax §7 L3377-3378 把两者定义为：
 
-**本轮范围**：124 − 28 = **96 例**（不依赖 tokenizer 的符号信息）→ 预期
-**480/508 ≈ 94.5%**。
-**显式留到 W-3b**：An+B 的 28 例符号保真（`n 5` 该拒、`n- +5` 该拒、`5n + +5` 该拒…），
-因为需要"数字 token 是否带符号"——[`muskitty-css-tokenizer`](../crates/muskitty-css-tokenizer)
-的 `Numeric`（pub struct，已发布 v0.2.0）只有 `value` / `is_integer`，其
-`consume_a_number` 按 §4.3.13 第 7 步本应返回 sign 却丢掉了（见 `impls.rs` 注释与
-`an_plus_b.rs` 模块文档的"更宽松"说明）。跨仓库改 tokenizer 公共 API + 6 个 crate 的
-约 48 个构造点，需独立一轮协调（serialization/发布顺序也受影响）。
+- `<signed-integer>`：type flag 为 "integer" 的 `<number-token>`，**带符号字符**；
+- `<signless-integer>`：同类型但**不带符号字符**。
 
-## 规范依据（本轮逐条核对本地规范源）
-
-| 特性 | 语法/规则 | 来源 |
-|------|-----------|------|
-| `::part(<ident>+)` | `::part() = ::part(<ident>+)`；多名字、顺序无关；"fully styleable"，允许后随伪类 | `D:\CSSWG\css-shadow-1\Overview.md` §part（L1157-1230） |
-| `::slotted(<compound-selector>)` | 语法即 `::slotted(<compound-selector>)`；"can be followed by a tree-abiding pseudo-element"，未提及伪类 → 伪类后置无效（夹具钉死） | css-shadow-1 §slotted（L444-490） |
-| `:host(<compound-selector>)` | `:host(<compound-selector>)`；裸 `:host` 亦合法 | css-shadow-1 §host（L313-380） |
-| `:has-slotted` | 裸 `:has-slotted` 匹配"有非空扁平 slot 节点"；**功能性形式属未来版本**（规范明说），夹具 `:has-slotted(div + div)` 断言接受选择器 | css-shadow-1 §has-slotted（L548-575） |
-| `:state(<custom-ident>)` | `:state()` 参数是字符串/自定义 ident；仅供自定义元素 | `D:\CSSWG\selectors-5\Overview.md` §state（L271-296）+ HTML custom state |
-| `:heading` / `:heading(<level>#)` | 裸形式合法；函数形式 `:heading(<level>#)`，`<level>` = **type flag 为 integer 的 number-token** | selectors-5 §heading（L296-330） |
-| `:not()` 参数 | `complex-real-selector-list` —— **real** 不含伪元素 → `:not(::before)` 无效 | `D:\CSSWG\selectors-4\Overview.md` §4.3（L1543、L4654-4666） |
-| `:has()` | "pseudo-elements are not valid selectors within `:has()`"（参数内）；`::part(foo):has(li)` 无效由夹具钉死（`:has()` 取 relative-selector-list，属"需要 complex selector 的上下文"，见 §4.5 note L1770-1775） | selectors-4 §4.5（L1754-1775） |
-| 伪元素后置规则 | `<pseudo-compound-selector> = pseudo-element-selector pseudo-class-selector*`；`.foo::before:hover` 合法（§3 L780-784）；但伪元素只能出现在**最右**（subject）复合选择器（夹具：`::part(foo) + ::part(bar)`、`::slotted(foo) + ::slotted(bar)` 均无效） | selectors-4 §3（L762-800、L4665-4672） |
-| `:state` 后置限制 | 仅允许紧跟 `::part(...)`（夹具：`::after:state()` / `::first-letter:state()` / `::slotted():state()` 无效，`::part():state()` 有效） | WPT parse-state.html 夹具（规范未逐条列举，注释注明以夹具为准） |
-
-**本项目既有裁决（沿用）**：WPT 夹具 > 规范文字 > 审计报告文字（见
-PROGRESS 第 15 条旁的 SEL-2 勘误先例）。
+而 token 层 `5` 与 `+5` 完全同类：tokenizer 的 `consume_a_number` 按 §4.3.13 第 7 步
+本应返回 `(value, type, sign)`，实现只返回了前两者（`impls.rs` 注释与 selectors
+`an_plus_b.rs` 的"比规范更宽松"说明都记录了这一点）。于是：
+`n + 5`（合法）与 `n 5`（非法）在 token 流上无法区分，`n- 5`（合法）与 `n- +5`
+（非法）同样。
 
 ## 任务与退出条件
 
 | # | 任务 | 退出条件 |
 |---|------|---------|
-| S-1 | **AST + 伪元素参数**：`PseudoElement` 增 `argument: Option<PseudoElementArgument>`（`Part(Vec<String>)` / `Slotted(CompoundSelector)`）；`PseudoClassArgument` 增 `Compound(CompoundSelector)`（`:host()` 用）；`specificity.rs` 补新分支 | 编译通过；既有 169+ 测试全绿（含 specificity 用例）；无 `Eq` 依赖破裂（PseudoElement 去掉 `Eq` 派生的影响已排查） |
-| S-2 | **`::part()` / `::slotted()`**：函数形式伪元素解析（`part` = 1+ ident；`slotted` = 单个 compound 选择器）；裸 `::slotted` / `::part(x)` 单冒号形式仍无效；`::slotted(...)` 后不得跟伪类；`::part(...)` 后允许伪类（`:has` 除外）；伪元素仅允许出现在最右复合选择器（禁 `::part(a) + ::part(b)`） | parse-part.html + parse-slotted.html 全绿（45 例，含 invalid/forgiving 两侧） |
-| S-3 | **`:host(<compound>)`**：`:host` 函数形式接受 compound 选择器（裸 `:host` 保持合法）；`:host(:is(div))` / `:host(:not(.a))` / `:host(:is(,,,))`（forgiving）均按夹具 | parse-is-where.html + parse-not.html 的 `:host` 例全绿（16 例） |
-| S-4 | **新伪类**：`:state(<ident>)`（裸形式无效、参数必须是单个 ident、仅可紧跟 `::part`）、`:heading`（裸 + `<integer>#`，非整数/An+B/函数/`of` 全部拒）、`:has-slotted`（裸 + 选择器参数；`::has-slotted` 与 `:has-slotted()` 拒） | parse-state.html + parse-heading.html + parse-has-slotted.tentative.html 全绿（57 例） |
-| S-5 | **real-selector 规则 + An+B 空白**：`:is`/`:where`/`:not`/`:has`/`nth-* of S` 参数内禁止伪元素（`not(::before)` 拒）；An+B 接受"符号与整数之间的空白"与"`)` 前空白"（`( +n + 7 )`、`( 23n\n\n+\n\n123 )`） | parse-not.html 全绿；parse-anplusb.html 的 4 例空白形态转绿（8 例符号例仍红且**计入 W-3b**，故该夹具不进硬断言） |
-| S-6 | **harness + 文档**：把本轮转绿的夹具加入 `HARD_ASSERT_100`（防回归）；`docs/wpt-compliance-2026-09-06.md` 更新实测数字与剩余依赖说明；PROGRESS 行与 goal.md 收尾；selectors 仓库 commit + push | harness 实测 ≥94%；硬断言夹具 0 失败；文档数字与实跑一致；commit 落盘并推送 |
+| T-1 | **css-tokenizer**（独立仓库）：`consume_a_number` 返回 sign；`Numeric` 增 `has_sign: bool` + `Numeric::new()` 便捷构造；版本 **0.2.0 → 0.3.0**（加 pub 字段是破坏性变更） | 既有测试全绿 + 新增符号矩阵测试（±number/percentage/dimension、`1e+3` 指数符号不算）；fmt/clippy 干净 |
+| T-2 | **css-parser / css**：依赖声明改 `0.3.0`；测试里的 `Numeric` 字面量补字段（合成的值 → `has_sign: false`） | 两仓库测试全绿；css-parser 100 例 |
+| T-3 | **cascade / layout**：合成值构造点补 `has_sign: false`（共 28 处） | cascade 225 / layout 127 全绿，行为不变（无一处读该标志） |
+| T-4 | **selectors**：`finish_after_n` 落实 §7 的文法——plain `n`/`-n`/`<n-dimension>` 的 B 只接受**带符号**整数；`n-`/`-n-`/`<ndash-dimension>` 与 `['+'\|'-']` 分隔符后的 B 只接受**无符号**整数；裸 `<integer>` 形式符号不限 | WPT `css/selectors/parsing` ≥99.8%；An+B 两夹具 100% 并纳入 `HARD_ASSERT_100` |
+| T-5 | **验证与文档**：全链复跑（8 个 crate + workspace）、`goal.md`/`wpt-compliance`/`PROGRESS` 同步、各仓库 commit + push | 文档数字与实跑一致；commit 落盘（推送见下） |
 
-## 显式非目标（本轮不做）
+## 规范依据（逐条核对本地 `docs/spec/css-syntax-3-Overview.bs`）
 
-- An+B 符号保真（28 例）与随之而来的 `Numeric` 公共 API 扩展 → **W-3b**
-- 选择器序列化（`serializations` 字段全程不参与断言，crate 无 serializer）
-- 匹配语义：`:state`/`:heading`/`:has-slotted`/`::part`/`::slotted`/`:host()` **只做解析保真**，
-  匹配侧保持"不匹配"（本套件是 parsing 套件；匹配语义需 shadow DOM 模型，另行成轮）
+| 规则 | 规范行 |
+|------|--------|
+| `<signed-integer>` = integer 类型 + **有**符号字符 | §7 L3377 |
+| `<signless-integer>` = integer 类型 + **无**符号字符 | §7 L3378 |
+| `<n-dimension> <signed-integer>` / `'+'? n <signed-integer>` / `-n <signed-integer>` | §7 L3355-3357 |
+| `<ndash-dimension> <signless-integer>` / `'+'? n- <signless>` / `-n- <signless>` | §7 L3359-3361 |
+| `<n-dimension> ['+'\|'-'] <signless>` / `n` / `-n` 同样 | §7 L3363-3365 |
+| `+` 与 `n` 之间不得有空白（其余 token 之间可有空白） | §7 L3371-3375（† 注） |
+| `<integer>` 形式（A=0）不限制符号 | §7 L3347 + L3390-3392 |
+
+## 显式非目标
+
+- **`Display`/序列化带符号输出**：`Numeric::to_string()` 仍不打印 `+`（既有行为，
+  改动会波及 css-parser/cssom 的序列化断言，与本轮目标无关）；`has_sign` 目前只服务
+  文法匹配，已在 `types.rs` 注明。
+- **发布**：本轮只做本地版本号与依赖声明（`css-tokenizer 0.3.0`）；实际发布与
+  下游版本号（css-parser/css 的发布版本）由架构师的发布流程决定。
+- `:has-slotted(div + div)` 那 1 例（tentative 夹具自相矛盾）**不改**——上一批已记录。
 
 ## 风险与既定裁决
 
-- **AST 公共 API 变更**：`PseudoElement` 增字段、`PseudoClassArgument` 增变体——crate 未发布到
-  crates.io（v0.1.0 本地），消费者仅本仓库（cascade/cssom 经 `selectors` 使用解析 API），
-  已 grep 匹配点：`specificity.rs` 2 处、`simple.rs` 构造 2 处，其余在 tests。
-- **不能过度收紧**：只实现夹具钉死的限制（`:has` 后置、`:state` 后置、伪元素仅最右、
-  real-selector 列表），不发明规范未写的限制；每条注释写明依据（规范行号或夹具名）。
-- **`:has-slotted` 功能性形式是 tentative**：规范明说属未来版本，故按夹具接受选择器参数，
-  在该分支注释标明 tentative 来源，避免后人误以为已成文。
+- **公共 API 破坏**：`Numeric` 加字段使所有结构体字面量失效。已确认依赖声明只有
+  `css-parser` / `css` 两处写死版本，其余 crate 经 css-parser/css 传递依赖，无需改
+  `Cargo.toml`；字面量共 48 处，按文件机械补齐（`is_integer:` 是 `Numeric` 独有字段名，
+  替换后由 rustfmt 统一缩进）。
+- **不能过度收紧**：只按 §7 的三类 B 形态加约束；裸 `<integer>`、`odd`/`even`、
+  `<ndashdigit-*>`（B 编码在 token 内）全部保持原样，并用 112 例 An+B 夹具回归验证。
+- **推送受阻**：本轮期间 GitHub 大面积不可达（`Recv failure` / 连接超时），
+  commit 全部本地落盘，推送由后台重试循环接管，恢复即推（见"完成记录"）。
 
 ## 完成记录（2026-09-13）
 
 | # | 交付 | commit | 验证 |
 |---|------|--------|------|
-| S-1 | AST：`PseudoElement{name,legacy,argument}` + `PseudoElementArgument{Part,Slotted}` + `PseudoClassArgument::Compound`；specificity 补 `:host()`（伪类 + 参数特异性，css-shadow-1 L336-343） | selectors `f8d2002`（已推送） | 既有 169 测试全绿（无 `Eq` 依赖破裂） |
-| S-2 | `::part(<ident>+)` / `::slotted(<compound-selector>)`；伪元素仅最右复合；`::slotted` 后禁伪类；`:has` 不可后置 | 同上 | parse-part 26/26、parse-slotted 9/9 |
-| S-3 | `:host(<compound-selector>)`，参数与嵌套 `:is/:where/:not` 递归 compound-only | 同上 | parse-is-where、parse-not 的 host 例全绿（16 例） |
-| S-4 | `:state(<custom-ident>)` + 仅跟 `::part`；`:heading` / `:heading(<integer>#)`；`:has-slotted`；`:lang()`/`:dir()` 注册 | 同上 | parse-state 11/11、parse-heading 10/10、parse-has-slotted 18/19 |
-| S-5 | real-selector-list 禁伪元素（解析失败路径，令 `:not(::before)` invalid 而 `:is(::before)` forgiving-valid）；An+B 空白形态 | 同上 | parse-not 3/3；An+B 空白 4 例转绿 |
-| S-5b | **附带**：css-tokenizer 的 `--`/`--0` 被切成 `Delim`（§4.3.1 的 `-` 分支漏 §4.3.9 子句） | css-tokenizer `23ec4ec`（已推送） | 新增 `double_dash_is_ident`；tokenizer 84 测试全绿 |
-| S-6 | harness 硬断言扩到 9 夹具；新增 13 例回归测试 `tests/parser_shadow_wpt.rs`；文档（wpt-compliance 第七节 / PROGRESS / 本 goal） | 主仓库文档 commit | 硬断言夹具 0 失败 |
+| T-1 | tokenizer：sign 暴露 + `Numeric::new` + 0.3.0 | css-tokenizer `aaeebd9` | 85 例（新增 `numeric_has_sign_flag`）+ 符号输入期望修正 |
+| T-2 | css-parser / css 依赖声明与测试字面量 | css-parser `f0e7a56`、css `fc1621e` | 100 例 / 编译通过 |
+| T-3 | cascade / layout 合成值补字段 | cascade `0f32951`、layout `a22bd84` | 225 / 127 例，行为不变 |
+| T-4 | selectors：An+B 符号规则 | selectors `9371ab6` | **WPT 99.8%（507/508）**；`HARD_ASSERT_100` 增至 11 个夹具；新增 4 组符号矩阵测试（38 条断言） |
+| T-5 | 文档 + 主仓库 `Cargo.lock` 版本联动 | 主仓库文档 commit | 全链复跑：css-tokenizer 85 / css-parser 100 / css-values 150 / cssom 104 / html5-parser 113 / selectors 186 / cascade 225 / layout 127 / workspace 218，全绿 |
 
-**下游回归**（tokenizer/selectors 属公共底层）：css-tokenizer 84、css-parser 100、
-css-values 150、cssom 104、cascade 225、layout 127、html5-parser 113、workspace 218 —— 全绿，
-`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 干净。
+**最终差距**：507/508。唯一失败项 `parse-has-slotted.tentative.json` 的
+`:has-slotted(div + div)`——上一批已判定为 tentative 夹具自相矛盾（同文件把
+`div + div` 判 valid、`div > span` 判 invalid，而 `+`/`>` 同为组合器），本实现取
+一致的"参数为复合选择器"读法并保持该例失败，不做硬断言。
 
-**已知偏差（1 例，已记录）**：`parse-has-slotted.tentative.json` 把
-`:has-slotted(div + div)` 判 valid、`:has-slotted(div > span)` 判 invalid；`+` 与 `>`
-同为组合器，任何单一选择器文法都无法同时满足。本实现取与 `::slotted()` 一致的
-"参数为复合选择器"读法（两者皆 invalid），并在 harness 注释、实现注释与本记录三处
-写明来源与理由；该夹具不做硬断言。项目既有先例支持"夹具自相矛盾时记录并偏离"
-（html5lib XML-only 3 例、html5-parser `tests_innerHTML_1` #76）。
-
-**Mimosa 交互记录**：本轮 commit/push 仍为"未取得完整扫描结论"的兼容放行警告；
-另在 `compound.rs` 的多处机械替换时用过一次 Bash+python 改源码（随后改回 Edit），
-该做法与仓库约定相悖，已停止。
-
-**W-3b 待办（下一轮，已定方案）**：An+B 的 28 例需要"number-token 是否带符号"。
-落点：css-tokenizer `Numeric` 增加符号位（`consume_a_number` 按 §4.3.13 第 7 步
-本应返回 sign），随后 selectors 的 `an_plus_b.rs` 按 `<signed-integer>` /
-`<signless-integer>` 区分：
-- `n 5` / `-n 5` 该拒（plain `n` 后只接带符号整数）；
-- `n- +5` / `n- -5` / `5n + +5` / `5n - -5` 该拒（符号位后只接无符号整数）；
-- `n-+1` / `-n-+1` 该拒（`<ndash-ident>` 后同上）。
-代价：`Numeric` 是已发布 crate 的 pub struct，加字段会波及约 48 个构造点
-（cascade/layout/css-parser 测试里的合成值构造），需一次跨仓库协调 + 版本 0.2.1 发布。
+**推送状态**：见主仓库文档 commit 的说明与后续后台重试循环结果；
+CSS 系共 6 个仓库在本轮有提交（tokenizer / css-parser / css / cascade / layout / selectors）。
