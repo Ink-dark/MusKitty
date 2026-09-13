@@ -19,7 +19,7 @@
 | **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | v0.1.2 | muskitty-dev/muskitty-html5-tokenizer |
 | **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | WPT tree-construction 99.0% (1905/1924, 14 script-on skipped) | v0.1.2 | muskitty-dev/muskitty-html5-parser |
 | **muskitty-dom** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | v0.1.0 | muskitty-dev/muskitty-dom |
-| **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking + `Numeric::has_sign`（§4.3.13 第 7 步的 sign，供 An+B 区分 signed/signless） | 单元全绿 + WPT css/css-syntax tokenizer 层 100% (99/99) | v0.2.0 已发布 / 本地 0.3.0 待发布 | muskitty-dev/muskitty-css-tokenizer |
+| **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking + `Numeric::has_sign`（§4.3.13 第 7 步的 sign，供 An+B 区分 signed/signless） | 单元全绿 + WPT css/css-syntax tokenizer 层 100% (99/99) | v0.2.1 已发布（含 `--`/`--0` ident 修复）/ 本地 0.3.0 待发布（has_sign，破坏性） | muskitty-dev/muskitty-css-tokenizer |
 | **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 单元全绿 + WPT css/css-syntax parser 层 100% (27/27) | v0.2.0 | muskitty-dev/muskitty-css-parser |
 | **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.5.0 | muskitty-dev/muskitty-css |
 | **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 + L5 §state/§heading + Shadow L1（`::part`/`::slotted`/`:host()`/`:has-slotted`）+ An+B 符号保真（§7 signed/signless） | 单元全绿 + WPT selectors/parsing **99.8% (507/508)**，11 个夹具硬断言 | v0.1.0 | muskitty-dev/muskitty-selectors |

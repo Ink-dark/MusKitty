@@ -78,5 +78,24 @@ CSS Syntax §7 L3377-3378 把两者定义为：
 `div + div` 判 valid、`div > span` 判 invalid，而 `+`/`>` 同为组合器），本实现取
 一致的"参数为复合选择器"读法并保持该例失败，不做硬断言。
 
-**推送状态**：见主仓库文档 commit 的说明与后续后台重试循环结果；
-CSS 系共 6 个仓库在本轮有提交（tokenizer / css-parser / css / cascade / layout / selectors）。
+**推送与合并（本轮收尾）**：本轮期间 GitHub 长时间不可达（`Recv failure` / 连接超时），
+commit 先全部本地落盘、由后台重试循环接管；网络恢复后 5 个 crate 的推送被拒——
+**架构师在远端发了版**（`bump version … (align release with code ahead of last tag)` + tag：
+tokenizer v0.2.1、css-parser v0.3.1、selectors v0.2.1、cascade v0.1.1、layout v0.1.1）。
+处置：
+
+| 仓库 | 冲突/处置 |
+|------|----------|
+| css-tokenizer | Cargo.toml 冲突（我的 0.3.0 vs 上游 0.2.1）。**保留 0.3.0**：本轮加 pub 字段是破坏性变更，不能走 patch 版本；0.3.0 同时包含上游已发布的 `--`/`--0` 修复与 `has_sign`。v0.2.1 tag 在其自身提交上仍有效 |
+| css-parser | 自动合并（上游改 [package] version、我改依赖声明行，不同行）→ 包版本 0.3.1 + 依赖 tokenizer 0.3.0 |
+| selectors / cascade / layout | 自动合并（上游只改 package version，我改 src/tests） |
+
+**发现并修掉一个真实缺口**：cascade 的 `src/filter.rs`（测试助手从 `Numeric` 字面量改为
+`Numeric::new`）在上一轮机械替换时**漏提交**，导致那次提交单独 checkout 编不过
+（`git stash` 该文件后实测 4 个 `E0063 missing field has_sign`）。已补提交
+（cascade `c6eb005`）并在 message 里写明验证方式。
+
+**最终状态**：7 个位置（6 crate + 主仓库）全部 `0/0` 与远端同步；
+合并后复跑全链：tokenizer 85 / css-parser 100 / css-values 150 / cssom 104 /
+html5-parser 113 / selectors 186 / cascade 225 / layout 127 / workspace 218 全绿，
+WPT selectors 99.8%（507/508）不变，workspace clippy 与各仓库 fmt 干净。
