@@ -1,0 +1,35 @@
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 11 packages to latest compatible versions
+[1m[92m   Compiling[0m zmij v1.0.23
+[1m[92m   Compiling[0m serde_core v1.0.229
+[1m[92m   Compiling[0m serde_json v1.0.151
+[1m[92m   Compiling[0m memchr v2.8.3
+[1m[92m   Compiling[0m itoa v1.0.18
+[1m[92m   Compiling[0m muskitty-css-tokenizer v0.2.1 (/workspace/crates/muskitty-css-tokenizer)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 4.15s
+[1m[92m     Running[0m tests/wpt_css_syntax.rs (target/debug/deps/wpt_css_syntax-e104bcb14c15a41f)
+
+running 1 test
+
+═══════════════════════════════════════════════════════════════
+ WPT css/css-syntax (tokenizer level) — results
+═══════════════════════════════════════════════════════════════
+ fixture                                  pass     fail    total
+ ─────────────────────────────────────────────────────────────────
+ cdc-vs-ident-tokens.json                    2        0        2
+ escaped-eof.json                            4        0        4
+ input-preprocessing.json                    5        0        5
+ non-ascii-codepoints.json                  55        0       55
+ unclosed-url-at-eof.json                    2        0        2
+ whitespace.json                            31        0       31
+ ─────────────────────────────────────────────────────────────────
+ TOTAL                                      99        0       99   (100.0%)
+
+── failures ──
+═══════════════════════════════════════════════════════════════
+
+PASS RATE: 100.0% (99/99) — informational; not asserting a hard threshold yet.
+test wpt_css_syntax_tokenizer_suite ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

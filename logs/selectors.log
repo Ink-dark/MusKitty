@@ -1,0 +1,123 @@
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 15 packages to latest compatible versions
+[1m[92m Downloading[0m crates ...
+[1m[92m  Downloaded[0m itoa v1.0.18
+[1m[92m  Downloaded[0m zmij v1.0.23
+[1m[92m  Downloaded[0m serde_core v1.0.229
+[1m[92m  Downloaded[0m serde_json v1.0.151
+[1m[92m  Downloaded[0m memchr v2.8.3
+[1m[92m   Compiling[0m serde_core v1.0.229
+[1m[92m   Compiling[0m zmij v1.0.23
+[1m[92m   Compiling[0m muskitty-css-tokenizer v0.2.1 (/workspace/crates/muskitty-css-tokenizer)
+[1m[92m   Compiling[0m serde_json v1.0.151
+[1m[92m   Compiling[0m muskitty-css-parser v0.3.1 (/workspace/crates/muskitty-css-parser)
+[1m[92m   Compiling[0m muskitty-css v0.6.0 (/workspace/crates/muskitty-css)
+[1m[92m   Compiling[0m itoa v1.0.18
+[1m[92m   Compiling[0m memchr v2.8.3
+[1m[92m   Compiling[0m muskitty-selectors v0.2.1 (/workspace/crates/muskitty-selectors)
+[1m[92m   Compiling[0m muskitty-dom v0.2.1 (/workspace/crates/muskitty-dom)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 6.51s
+[1m[92m     Running[0m tests/wpt_parsing.rs (target/debug/deps/wpt_parsing-da3f98a0a4b6998a)
+
+running 1 test
+
+═══════════════════════════════════════════════════════════════
+ WPT css/selectors/parsing — results (validity assertions)
+═══════════════════════════════════════════════════════════════
+ fixture                                              pass     fail    total
+ ─────────────────────────────────────────────────────────────────
+ css-syntax-anb-parsing.json                            47       20       67
+ css-syntax-escaped-eof-selector.json                    2        0        2
+ css-syntax-ident-three-code-points.json                 8        0        8
+ css-syntax-inclusive-ranges-ident.json                 28        0       28
+ invalid-pseudos.json                                   12        0       12
+ parse-anplusb.json                                    104        8      112
+ parse-attribute.json                                   16        0       16
+ parse-child.json                                        2        0        2
+ parse-class.json                                        4        0        4
+ parse-descendant.json                                   3        0        3
+ parse-focus-visible.json                                3        0        3
+ parse-has-disallow-nesting-has-inside-has.json          1        0        1
+ parse-has-forgiving-selector.json                       3        0        3
+ parse-has-slotted.tentative.json                       22        1       23
+ parse-has.json                                         29        0       29
+ parse-heading.json                                     28        0       28
+ parse-id.json                                           3        0        3
+ parse-is-where.json                                    45        0       45
+ parse-is.json                                           6        0        6
+ parse-not.json                                         26        0       26
+ parse-part.json                                        32        0       32
+ parse-sibling.json                                      3        0        3
+ parse-slotted.json                                     19        0       19
+ parse-state.json                                       24        0       24
+ parse-universal.json                                    3        0        3
+ parse-where.json                                        6        0        6
+ ─────────────────────────────────────────────────────────────────
+ TOTAL                                                 479       29      508   (94.3%)
+
+── failures ──
+
+[css/css-syntax/anb-parsing.html] ":nth-child(n 5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(-n 5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(5n- -5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(5n- +5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(n- +5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(n- -5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(-n- +5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(-n- -5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(5n + +5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(5n + -5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(5n - +5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(5n - -5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(+n + +5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(+n + -5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(+n - +5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(+n - -5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(-n + +5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(-n + -5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(-n - +5)" (invalid)  expected invalid, but parsed
+
+[css/css-syntax/anb-parsing.html] ":nth-child(-n - -5)" (invalid)  expected invalid, but parsed
+
+[parse-anplusb.html] ":nth-child(n-+1)" (invalid)  expected invalid, but parsed
+
+[parse-anplusb.html] ":nth-child(-n-+1)" (invalid)  expected invalid, but parsed
+
+[parse-anplusb.html] ":nth-last-child(n-+1)" (invalid)  expected invalid, but parsed
+
+[parse-anplusb.html] ":nth-last-child(-n-+1)" (invalid)  expected invalid, but parsed
+
+[parse-anplusb.html] ":nth-of-type(n-+1)" (invalid)  expected invalid, but parsed
+
+[parse-anplusb.html] ":nth-of-type(-n-+1)" (invalid)  expected invalid, but parsed
+
+[parse-anplusb.html] ":nth-last-of-type(n-+1)" (invalid)  expected invalid, but parsed
+
+[parse-anplusb.html] ":nth-last-of-type(-n-+1)" (invalid)  expected invalid, but parsed
+
+[parse-has-slotted.tentative.html] ":has-slotted(div + div)" (valid)  expected valid, got error: UnexpectedToken("expected ')' to close :has-slotted(...), got Delim('+')")
+═══════════════════════════════════════════════════════════════
+
+PASS RATE: 94.3% (479/508) — informational for non-guarded fixtures; HARD_ASSERT_100 fixtures are hard-asserted.
+test wpt_selector_parsing_suite ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

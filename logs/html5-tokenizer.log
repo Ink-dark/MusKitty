@@ -1,0 +1,155 @@
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 11 packages to latest compatible versions
+[1m[92m   Compiling[0m serde_core v1.0.229
+[1m[92m   Compiling[0m zmij v1.0.23
+[1m[92m   Compiling[0m serde_json v1.0.151
+[1m[92m   Compiling[0m memchr v2.8.3
+[1m[92m   Compiling[0m itoa v1.0.18
+[1m[92m   Compiling[0m muskitty-html5-tokenizer v0.1.4 (/workspace/crates/muskitty-html5-tokenizer)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 4.48s
+[1m[92m     Running[0m tests/html5lib_tokenizer.rs (target/debug/deps/html5lib_tokenizer-6c1cd3933ec58808)
+
+running 1 test
+
+═══════════════════════════════════════════════════════════════
+ html5lib tokenizer test suite — results
+═══════════════════════════════════════════════════════════════
+ fixture                                pass       fail      total
+ ─────────────────────────────────────────────────────────────────
+ contentModelFlags.test                   24          0         24
+ domjs.test                               59          0         59
+ entities.test                            80          0         80
+ escapeFlag.test                           9          0          9
+ namedEntities.test                     4210          0       4210
+ numericEntities.test                    336          0        336
+ pendingSpecChanges.test                   1          0          1
+ test1.test                               69          0         69
+ test2.test                               43          2         45
+ test3.test                             1777          9       1786
+ test4.test                               85          0         85
+ unicodeChars.test                       323          0        323
+ unicodeCharsProblematic.test              5          0          5
+ xmlViolation.test                         1          3          4
+ ─────────────────────────────────────────────────────────────────
+ TOTAL                                  7022         14       7036   (99.8%)
+
+── failure samples (up to 5 per file) ──
+
+[test2.test] Simili processing instruction
+  initial state: Data state
+      input:    "<?namespace>"
+      expected: [
+    Comment(
+        "?namespace",
+    ),
+]
+      actual:   []
+
+[test2.test] A bogus comment stops at >, even if preceded by two dashes
+  initial state: Data state
+      input:    "<?foo-->"
+      expected: [
+    Comment(
+        "?foo--",
+    ),
+]
+      actual:   []
+
+[test3.test] <?
+  initial state: Data state
+      input:    "<?"
+      expected: [
+    Comment(
+        "?",
+    ),
+]
+      actual:   []
+
+[test3.test] <?A
+  initial state: Data state
+      input:    "<?A"
+      expected: [
+    Comment(
+        "?A",
+    ),
+]
+      actual:   []
+
+[test3.test] <?B
+  initial state: Data state
+      input:    "<?B"
+      expected: [
+    Comment(
+        "?B",
+    ),
+]
+      actual:   []
+
+[test3.test] <?Y
+  initial state: Data state
+      input:    "<?Y"
+      expected: [
+    Comment(
+        "?Y",
+    ),
+]
+      actual:   []
+
+[test3.test] <?Z
+  initial state: Data state
+      input:    "<?Z"
+      expected: [
+    Comment(
+        "?Z",
+    ),
+]
+      actual:   []
+
+[xmlViolation.test] Non-XML character
+  initial state: Data state
+      input:    "a\u{ffff}b"
+      expected: [
+    Character(
+        "a�b",
+    ),
+]
+      actual:   [
+    Character(
+        "a\u{ffff}b",
+    ),
+]
+
+[xmlViolation.test] Non-XML space
+  initial state: Data state
+      input:    "a\u{c}b"
+      expected: [
+    Character(
+        "a b",
+    ),
+]
+      actual:   [
+    Character(
+        "a\u{c}b",
+    ),
+]
+
+[xmlViolation.test] Double hyphen in comment
+  initial state: Data state
+      input:    "<!-- foo -- bar -->"
+      expected: [
+    Comment(
+        " foo - - bar ",
+    ),
+]
+      actual:   [
+    Comment(
+        " foo -- bar ",
+    ),
+]
+═══════════════════════════════════════════════════════════════
+
+PASS RATE: 99.8% (7022/7036) — harness ran to completion; not asserting a hard threshold yet.
+test html5lib_tokenizer_suite ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

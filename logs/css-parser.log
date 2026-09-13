@@ -1,0 +1,36 @@
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 12 packages to latest compatible versions
+[1m[92m   Compiling[0m serde_core v1.0.229
+[1m[92m   Compiling[0m zmij v1.0.23
+[1m[92m   Compiling[0m serde_json v1.0.151
+[1m[92m   Compiling[0m itoa v1.0.18
+[1m[92m   Compiling[0m muskitty-css-tokenizer v0.2.1 (/workspace/crates/muskitty-css-tokenizer)
+[1m[92m   Compiling[0m memchr v2.8.3
+[1m[92m   Compiling[0m muskitty-css-parser v0.3.1 (/workspace/crates/muskitty-css-parser)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 4.38s
+[1m[92m     Running[0m tests/wpt_css_syntax.rs (target/debug/deps/wpt_css_syntax-8600f67e8a4acbd9)
+
+running 1 test
+
+═══════════════════════════════════════════════════════════════
+ WPT css/css-syntax (parser level) — results
+═══════════════════════════════════════════════════════════════
+ fixture                                  pass     fail    total
+ ─────────────────────────────────────────────────────────────────
+ at-rule-in-declaration-list.json            6        0        6
+ charset-is-not-a-rule.json                  1        0        1
+ custom-property-rule-ambiguity.json         2        0        2
+ trailing-braces.json                        1        0        1
+ url-whitespace-consumption.json             3        0        3
+ var-with-blocks.json                       14        0       14
+ ─────────────────────────────────────────────────────────────────
+ TOTAL                                      27        0       27   (100.0%)
+
+── failures ──
+═══════════════════════════════════════════════════════════════
+
+PASS RATE: 100.0% (27/27) — informational; not asserting a hard threshold yet.
+test wpt_css_syntax_parser_suite ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
