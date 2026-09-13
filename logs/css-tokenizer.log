@@ -1,12 +1,4 @@
-[1m[92m    Updating[0m crates.io index
-[1m[92m     Locking[0m 11 packages to latest compatible versions
-[1m[92m   Compiling[0m zmij v1.0.23
-[1m[92m   Compiling[0m serde_core v1.0.229
-[1m[92m   Compiling[0m serde_json v1.0.151
-[1m[92m   Compiling[0m memchr v2.8.3
-[1m[92m   Compiling[0m itoa v1.0.18
-[1m[92m   Compiling[0m muskitty-css-tokenizer v0.2.1 (/workspace/crates/muskitty-css-tokenizer)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 4.15s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.04s
 [1m[92m     Running[0m tests/wpt_css_syntax.rs (target/debug/deps/wpt_css_syntax-e104bcb14c15a41f)
 
 running 1 test
