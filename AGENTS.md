@@ -111,6 +111,12 @@ muskitty-html5-tokenizer ─→ muskitty-html5-parser        │                
 - 禁止 `git rebase -i` 压缩已完成的 commit
 - WPT 语义比对通过后才允许 commit（架构师执行比对）
 
+### Versioning Discipline
+- 改逻辑（修 bug / 加特性 / 换行为）必须在提交里把该 crate 的 `Cargo.toml` `version` 随手 +1（patch），不允许"改了代码却发版版本号不变"
+- 判据：crate 的 git tag（`vX.Y.Z`，`git describe --tags`）落后于 HEAD 提交（`N>0`，即 tag 之后还有提交未发版）时，patch 版本必须 ≥ 已打 tag 的版本，否则视为失配
+- `path =` 依赖在同一工作区内由 path 覆盖版本号，仅作安全校验，故 patch 升级不会破坏依赖方 `^X.Y.Z` 要求——无需连带改其他 crate 的依赖段（除非涉及 semver-incompatible 的大版本/次版本变更）
+- 发版动作（打 tag / push / 发布 crates.io）另行人工执行，bump 版本号只改 `Cargo.toml`
+
 ### Extraction Discipline (项目特有，当前暂停)
 - 每个 crate 达到下一层入场门槛的 spec 覆盖后，剥离为独立 git 仓库（Hard extraction：crate 有自己的 `[workspace]` 块，从父 workspace `members` 移到 `exclude`）
 - 主仓库 `.gitignore` 加入 `crates/<crate-name>/` 排除项
