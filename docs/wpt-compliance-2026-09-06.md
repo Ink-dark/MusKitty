@@ -57,6 +57,10 @@ cssom `charset_at_rule_is_dropped` / `roundtrip_other_at_rule_statement`）。
 
 ## 四、实测差距（未修复，按 crate 归档）
 
+> **更新（2026-09-13）**：本节 selectors 的 128 例差距已修掉 96 例，套件升至
+> **94.3%（479/508）**；剩余 29 例（28 例 An+B 符号 + 1 例 tentative 夹具
+> 自相矛盾）的说明见文末第七节。
+
 ### muskitty-selectors — 128 失败（74.8%）
 
 | 类别 | 数量 | 说明 |
@@ -105,3 +109,42 @@ cd crates/muskitty-css-values && cargo test --test wpt_css_syntax -- --nocapture
 
 夹具出处与提取方式：`crates/muskitty-selectors/tests/data/wpt/README.md`；
 各 JSON 内 `source`/`note` 字段记录逐文件映射与未移植断言。
+
+## 七、修复记录（2026-09-13，W-3 第一批）
+
+selectors 套件从 **75.6%（384/508）** 提到 **94.3%（479/508）**，失败 124 → 29。
+工作项与逐条依据（规范行号 / 夹具名）见当轮 [goal.md](goal.md) 的"规范依据"表；
+实现注释在 `crates/muskitty-selectors/src/parser/{simple,compound,complex}.rs`。
+
+### 已修复（96 例）
+
+| 类别 | 例数 | 修复 |
+|------|-----:|------|
+| `::part(<ident>+)` | 26 | 功能性伪元素解析（css-shadow-1 §part L1163）；`PseudoElement` 增 `argument` |
+| `::slotted(<compound-selector>)` | 9 | 同上（§slotted L456）；后随伪类无效（§slotted L471 只允许后随 tree-abiding 伪元素） |
+| `:host(<compound-selector>)` | 16 | 参数为复合选择器且**递归**收紧（`:host(:not(.a .b))` invalid、`:host(:is(div .foo))` forgiving-valid） |
+| `:state(<custom-ident>)` | 11 | selectors-5 §state；裸形式无效、仅可紧跟 `::part()` |
+| `:heading` / `:heading(<integer>#)` | 10 | selectors-5 §heading；`<level>` = type flag integer 的 number-token |
+| `:has-slotted`（tentative） | 19 | css-shadow-1 §has-slotted；参数按复合选择器读法 |
+| real-selector-list 禁伪元素 | 3 | `:not(::before)` invalid；`:is(::before)`/`:where(::before)` 保持 forgiving-valid（失败项被丢弃） |
+| 伪元素仅最右复合 + `:has` 后置禁止 | 4 | `::part(a) + ::part(b)`、`::part(foo):has(li)` 等 invalid |
+| An+B 空白形态 | 4 | CSS Syntax §7 允许 `+`/`-` 两侧空白（`( +n + 7 )`、内嵌换行） |
+| `:lang()` / `:dir()` 未注册 | 4 | 补齐 KNOWN/PARAMETERISED 伪类表 |
+| 附带：tokenizer `--`/`--0` 被切成 Delim | 2 | css-tokenizer §4.3.1 的 `-` 分支漏了 §4.3.9 "`-`+`-`"子句（css-tokenizer `23ec4ec`） |
+
+### 剩余（29 例）
+
+| 类别 | 例数 | 说明 |
+|------|-----:|------|
+| An+B 符号保真 | 28 | 需 tokenizer 暴露"number-token 是否带符号"（`Numeric` 现只有 `value`/`is_integer`；`consume_a_number` 按 §4.3.13 第 7 步本应返回 sign 却丢弃）。属跨仓库公共 API 扩展 + 约 48 个构造点，单列 **W-3b** |
+| `:has-slotted(div + div)` | 1 | **tentative 夹具自相矛盾**：同一文件把 `div + div` 判 valid、`div > span` 判 invalid，而 `+` 与 `>` 同为组合器——任何单一选择器文法都无法同时满足。本实现取一致的"参数为复合选择器"读法（两者都 invalid），该夹具因此不做硬断言 |
+
+### 硬断言（防回归）
+
+`crates/muskitty-selectors/tests/wpt_parsing.rs` 的 `HARD_ASSERT_100` 由 3 个
+夹具扩到 9 个：新增 `parse-part` / `parse-slotted` / `parse-is-where` /
+`parse-not` / `parse-state` / `parse-heading`。An+B 两个夹具与 tentative 的
+has-slotted 保持 informational（前者待 W-3b，后者含已知偏差）。
+
+另有针对新语义的独立回归测试 `crates/muskitty-selectors/tests/parser_shadow_wpt.rs`
+（13 例，正反两向 + AST 形状断言）。

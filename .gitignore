@@ -9,6 +9,9 @@ crates/*/target
 render_demo.png
 rendering-test.png
 
+# --- 个人工具文档（本地 skill 说明，含本机绝对路径，不入库）---
+docs/cat-fetch-skill.md
+
 # --- 已剥离的独立 crate（各自有 .git 仓库，在 Cargo.toml exclude 列表中）---
 # 这些目录不在主仓库版本控制中。新设备 clone 后需通过 fetch-crates.ps1 / fetch-crates.sh
 # 拉取到 crates/ 下，workspace member 的 path 依赖才能解析。
