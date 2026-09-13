@@ -119,3 +119,37 @@ css-values 150、cssom 104、cascade 225、layout 127、html5-parser 113、works
 - `n-+1` / `-n-+1` 该拒（`<ndash-ident>` 后同上）。
 代价：`Numeric` 是已发布 crate 的 pub struct，加字段会波及约 48 个构造点
 （cascade/layout/css-parser 测试里的合成值构造），需一次跨仓库协调 + 版本 0.2.1 发布。
+
+---
+
+# 后续轮：全仓库 WPT 非合规项修理 + 报告重发布（2026-09-13）
+
+> **状态**：✅ 已完成（W-3b + html5-parser 补齐，报告已重生成并重发布）。
+> **实测（重跑基线各 crate harness）**：整体 **9592/9610 = 99.83%**。
+
+## 本轮修复（按 crate）
+
+| crate | 基线 → 现值 | 修复 |
+|-------|-----------:|------|
+| muskitty-css-tokenizer | 已有 → 100% (99/99) | `Numeric` 暴露 `has_sign`（§4.3.13），供 An+B 判符号 |
+| muskitty-selectors | 94.3% (479/508) → **99.8% (507/508)** | W-3b：`an_plus_b.rs` 按 `<signed-integer>`/`<signless-integer>` 拒带符号位（`n 5`、`n- +5`、`5n + +5`、`n-+1` 等 27 例） |
+| muskitty-html5-parser | 97.6% (1905/1924) → **99.8% (1921/1924)** | ① fragment 语境外用 `adjusted_current_node()` 而非栈顶取命名空间——修 18 例 foreign-fragment.dat 将 SVG/MathML 子元素误入 HTML 命名空间；② 新增 in-select / in-select-in-table 插入模式强化 select 内容模型 |
+| muskitty-html5-tokenizer | 已有 → 99.8% (7022/7036) | （`<?` 处理指令/注释等已按 HTML5 判定合规） |
+| muskitty-css-parser | 已有 → 100% (27/27) | — |
+| muskitty-css-values | 已有 → 16/16 | — |
+
+## 保留的记录偏差（合规范、不合旧夹具）
+
+3 例 tree-construction 失败属**夹具陈旧 × 现行 WHATWG 规范**分歧，按仓库
+"规范>测试"约定保留实现、不迁就夹具（规范 2026 现行文本已核对）：
+- `tests_innerHTML_1.dat` #77 `<keygen><option>`、#78 `<textarea><option>`（fragment 源
+  `select`）：夹具预期 keygen/textarea 被插入 select 内；现行规范 §13.2.6.15
+  "in select" 明确 `input`/`keygen`/`textarea` start tag = parse error + **忽略**。
+- `webkit02.dat` #19 里元素名 `xh<optgroup`：legacy webkit 解析器产物；现行 tokenizer
+  不会产出含 `<` 的标签名，属规范之外的废名，不可复刻。
+
+## 部署
+
+- 报告重新生成：`.wpt-report/report/index.html`；部署目录 `.wpt-report/deploy/` 同步。
+- gh-pages 分支重发（`245a3c4 → 71db2b4`）：https://ink-dark.github.io/MusKitty/
+- 线上 README 套件表同步为现值（selectors 507/508、html5-parser 1921/1924）。

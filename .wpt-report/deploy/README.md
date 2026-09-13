@@ -10,9 +10,9 @@
 
 | 套件 | crate | 通过/总 | 通过率 |
 |------|-------|--------|-------|
-| html5 tree-construction | muskitty-html5-parser | 1905/1924 | 99.0% |
+| html5 tree-construction | muskitty-html5-parser | 1921/1924 | 99.8% |
 | html5lib tokenizer | muskitty-html5-tokenizer | 7022/7036 | 99.8% |
-| css/selectors/parsing | muskitty-selectors | 479/508 | 94.3% |
+| css/selectors/parsing | muskitty-selectors | 507/508 | 99.8% |
 | css/css-syntax (tokenizer) | muskitty-css-tokenizer | 99/99 | 100% |
 | css/css-syntax (parser) | muskitty-css-parser | 27/27 | 100% |
 | css/css-syntax (numeric) | muskitty-css-values | 16/16 | 100% |
