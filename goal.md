@@ -1,101 +1,51 @@
-# Goal — W-3b：An+B 符号保真（WPT 选择器套件收尾，2026-09-13）
+# Goal — CS-1：外链 CSS 与其他 CSS 来源接入（2026-09-14）
 
-> **更新时间**：2026-09-13
-> **状态**：✅ **已完成**（T-1~T-5 全部满足退出条件，见文末"完成记录"）。
-> **实测结果**：**94.3%（479/508）→ 99.8%（507/508）**；剩余唯一 1 例为上一批
-> 已记录的 tentative 夹具自相矛盾（`:has-slotted(div + div)`）。
-> **上一批**：W-3 第一批（96 例，selectors `f8d2002` / css-tokenizer `23ec4ec`）。
-> **本轮范围来源**：上一批 goal.md 明确留下的 28 例——全部是同一个根因：
-> 解析器分不清 `<signed-integer>` 与 `<signless-integer>`。
-
-## 根因（实测 + 规范核对）
-
-CSS Syntax §7 L3377-3378 把两者定义为：
-
-- `<signed-integer>`：type flag 为 "integer" 的 `<number-token>`，**带符号字符**；
-- `<signless-integer>`：同类型但**不带符号字符**。
-
-而 token 层 `5` 与 `+5` 完全同类：tokenizer 的 `consume_a_number` 按 §4.3.13 第 7 步
-本应返回 `(value, type, sign)`，实现只返回了前两者（`impls.rs` 注释与 selectors
-`an_plus_b.rs` 的"比规范更宽松"说明都记录了这一点）。于是：
-`n + 5`（合法）与 `n 5`（非法）在 token 流上无法区分，`n- 5`（合法）与 `n- +5`
-（非法）同样。
+> **状态**：🚧 进行中。
+> **依据**：[docs/plans/2026-09-13-external-css-and-css-sources.md](docs/plans/2026-09-13-external-css-and-css-sources.md)
+> （规划轮已交：现状证据表、决策 D1–D7、批次划分、规范本地源行号）。
+> **上一轮**：W-3b（An+B 符号保真，WPT selectors 99.8%）——记录见 PROGRESS 头部与
+> [docs/wpt-compliance-2026-09-06.md](docs/wpt-compliance-2026-09-06.md)。
 
 ## 任务与退出条件
 
 | # | 任务 | 退出条件 |
 |---|------|---------|
-| T-1 | **css-tokenizer**（独立仓库）：`consume_a_number` 返回 sign；`Numeric` 增 `has_sign: bool` + `Numeric::new()` 便捷构造；版本 **0.2.0 → 0.3.0**（加 pub 字段是破坏性变更） | 既有测试全绿 + 新增符号矩阵测试（±number/percentage/dimension、`1e+3` 指数符号不算）；fmt/clippy 干净 |
-| T-2 | **css-parser / css**：依赖声明改 `0.3.0`；测试里的 `Numeric` 字面量补字段（合成的值 → `has_sign: false`） | 两仓库测试全绿；css-parser 100 例 |
-| T-3 | **cascade / layout**：合成值构造点补 `has_sign: false`（共 28 处） | cascade 225 / layout 127 全绿，行为不变（无一处读该标志） |
-| T-4 | **selectors**：`finish_after_n` 落实 §7 的文法——plain `n`/`-n`/`<n-dimension>` 的 B 只接受**带符号**整数；`n-`/`-n-`/`<ndash-dimension>` 与 `['+'\|'-']` 分隔符后的 B 只接受**无符号**整数；裸 `<integer>` 形式符号不限 | WPT `css/selectors/parsing` ≥99.8%；An+B 两夹具 100% 并纳入 `HARD_ASSERT_100` |
-| T-5 | **验证与文档**：全链复跑（8 个 crate + workspace）、`goal.md`/`wpt-compliance`/`PROGRESS` 同步、各仓库 commit + push | 文档数字与实跑一致；commit 落盘（推送见下） |
+| CS-1a | **URL 基建**：`muskitty-network` 引 `url = "2"`（非可选，纯 Rust，已在 lock 经 reqwest 传递存在）；新增 `src/url.rs`：`resolve(base, reference)` / `file_url_from_path` / `path_from_file_url` / `is_fetchable_subresource`；pub 签名只出现 `&str`/`String`（对齐 decoupling ADR） | 解析用例表全绿（`../`、`./`、`//host/p`、`?q`、`#f`、百分号与非 ASCII、`file:///D:/x` ↔ `D:\x`、空串、绝对 URL）；scheme 策略表全绿（http→file 拒、file→http 允、`data:` 允、`about:`/`javascript:` 拒）；`cargo test -p muskitty-network` 全绿；fmt/clippy 干净 |
+| CS-1b/c | **采集 + 抓取**：新 `chrome/src/stylesheets.rs`——`collect_sheet_sources`（DOM 先序 = 文档序；`<style>` 取 `text_content()`；`<link>` 按 rel 词表/`href`/`media`/`type`/`title`/`alternate`/`disabled` 语义；首个可用 `<base href>` 作文档 base）；`SheetLoader`（抓取 + 去重缓存 + 上限：单表 8 MiB / 每文档 64 表 / 深度 16 + 失败非致命）；`DocumentFetcher`（http(s) 走网络层 + Content-Type 必须 `text/css`；file 走本地读；`data:` 最小解码；http 页拒 `file://`）；删 `extract_inline_style` 与 4 个调用点 | 采集顺序/属性语义逐条有断言（注释内 `<style>` 不命中、`rel="next stylesheet"`、`type="text/plain"` 跳过、`disabled`、`alternate`、空 `href`）；抓取去重与上限有断言；`render_page` 增 sheets 入口且保留单表旧入口；chrome/workspace 编译与既有测试全绿 |
+| CS-1d | **sheet 级字段**：cascade `prepare_sheets_with_context` 跳过 `disabled`/`alternate` 表、按 `sheet.media` 求值（复用 `eval_media_query_list`）；chrome 把 `media` 属性经 `parse_comma_separated_list_of_component_values` 填入 | cascade 单测：`print` 表被跳过、`disabled` 表被跳过、空/非法 media 语义；端到端：`media="print"` 表不生效 |
+| CS-1e | **`@import`**：加载期就地展开——合法位置判定（其他规则之后出现的 import 无效）、以**导入表自身 URL** 为基准解析、条件导入包 `CssRule::Media`、循环/深度/失败跳过；`layer()`/`supports()` 前缀整条跳过（注释引规范） | 单测：顺序、相对基准、条件包裹、A→B→A 不挂死、深度上限、失败跳过、后置 import 无效；e2e：`@import url("a.css")` 与 `@import "b.css" screen` |
+| CS-1g | **热重载**：`SourceFile` 监视集合扩到「HTML + 该页 file:// 外链表路径」，任一 mtime 变化 → 重新采集/加载 | 改外链 CSS 文件触发重载且像素变化；改 HTML 仍触发 |
+| CS-1f | **UA 样式表（最后做，会改全仓像素预期）**：`chrome/src/ua.css` + `ua.rs`，`render_page` 系列入口把 UA 表置于表列表首位；内容按 HTML §15.3.1/§15.3.2/§15.3.3/§15.3.6/§15.3.7 最小集（逻辑属性按 horizontal-tb 等价物理属性写，偏差记录）；layout `is_non_rendered_tag` 保留为防御并注释指向 UA 表 | 像素断言：7 个此前会出盒的标签（`area/datalist/basefont/noembed/noframes/param/rp`）不再出盒、`<p>`/`<h1>` 默认边距与字号生效、`body` 默认 8px、`[hidden]` 不渲染；chrome/renderer/layout 全量测试绿（预期变化一次性校准并在 commit 说明） |
+| CS-1e2e | **离线端到端**：`std::net::TcpListener` 迷你静态服务器（多文件 fixture） | 7 条断言全绿：相对路径生效、后出现的表胜出、404 表跳过且其余生效、`media="print"` 不生效、`@import` 链以导入表为基准（子目录 fixture）、成环限时返回、`data:` 表生效 |
+| CS-1z | **收尾**：文档（PROGRESS 行、本 goal 完成记录、规划文档状态改"已实施"） | 全量 `cargo test --workspace` + cascade/layout 各自仓库测试全绿；`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 干净；commit 落盘并 push（cascade 改动提交到其独立仓库） |
 
-## 规范依据（逐条核对本地 `docs/spec/css-syntax-3-Overview.bs`）
+## 显式非目标（本轮不做，理由见规划文档"非目标"表）
 
-| 规则 | 规范行 |
-|------|--------|
-| `<signed-integer>` = integer 类型 + **有**符号字符 | §7 L3377 |
-| `<signless-integer>` = integer 类型 + **无**符号字符 | §7 L3378 |
-| `<n-dimension> <signed-integer>` / `'+'? n <signed-integer>` / `-n <signed-integer>` | §7 L3355-3357 |
-| `<ndash-dimension> <signless-integer>` / `'+'? n- <signless>` / `-n- <signless>` | §7 L3359-3361 |
-| `<n-dimension> ['+'\|'-'] <signless>` / `n` / `-n` 同样 | §7 L3363-3365 |
-| `+` 与 `n` 之间不得有空白（其余 token 之间可有空白） | §7 L3371-3375（† 注） |
-| `<integer>` 形式（A=0）不限制符号 | §7 L3347 + L3390-3392 |
-
-## 显式非目标
-
-- **`Display`/序列化带符号输出**：`Numeric::to_string()` 仍不打印 `+`（既有行为，
-  改动会波及 css-parser/cssom 的序列化断言，与本轮目标无关）；`has_sign` 目前只服务
-  文法匹配，已在 `types.rs` 注明。
-- **发布**：本轮只做本地版本号与依赖声明（`css-tokenizer 0.3.0`）；实际发布与
-  下游版本号（css-parser/css 的发布版本）由架构师的发布流程决定。
-- `:has-slotted(div + div)` 那 1 例（tentative 夹具自相矛盾）**不改**——上一批已记录。
+- `@import` 的 `layer()`/`supports()` 前缀（整条跳过，注释引规范）
+- CORS / `integrity` / `crossorigin` / `referrerpolicy`
+- alternate 样式表的切换 UI（本轮按 disabled 处理）
+- `Link:` 响应头、`preload`/`prefetch` 等链接类型
+- CSS 编码全解码（BOM 嗅探 + UTF-8 为准，其余 lossy；触发条件已记录）
+- `url()` 相对解析（renderer 无图像管线）
+- 首屏渐进渲染（外链本轮为 render-blocking）
 
 ## 风险与既定裁决
 
-- **公共 API 破坏**：`Numeric` 加字段使所有结构体字面量失效。已确认依赖声明只有
-  `css-parser` / `css` 两处写死版本，其余 crate 经 css-parser/css 传递依赖，无需改
-  `Cargo.toml`；字面量共 48 处，按文件机械补齐（`is_integer:` 是 `Numeric` 独有字段名，
-  替换后由 rustfmt 统一缩进）。
-- **不能过度收紧**：只按 §7 的三类 B 形态加约束；裸 `<integer>`、`odd`/`even`、
-  `<ndashdigit-*>`（B 编码在 token 内）全部保持原样，并用 112 例 An+B 夹具回归验证。
-- **推送受阻**：本轮期间 GitHub 大面积不可达（`Recv failure` / 连接超时），
-  commit 全部本地落盘，推送由后台重试循环接管，恢复即推（见"完成记录"）。
+- **`CssStyleSheet: Send` 未验证**：第一步加静态断言测试；不成立则改为"线程回传文本+元数据，UI 线程建表"（规划 D2）。
+- **签名涟漪**：`render_page` 新增 sheets 入口但保留单表旧入口，把测试改动降到最小；`NavigationDoc.css: String` → `sheets`，`WebView.css` → `sheets`，调用点逐个机械改。
+- **UA 表注入**改变既有像素预期 → 放最后一批，集中一次校准，不保留旧口径兼容分支。
+- **上限是本实现策略**（浏览器无硬限），值写在代码注释与规划文档，触发条件：真实页面命中。
 
-## 完成记录（2026-09-13）
+## 复跑命令
 
-| # | 交付 | commit | 验证 |
-|---|------|--------|------|
-| T-1 | tokenizer：sign 暴露 + `Numeric::new` + 0.3.0 | css-tokenizer `aaeebd9` | 85 例（新增 `numeric_has_sign_flag`）+ 符号输入期望修正 |
-| T-2 | css-parser / css 依赖声明与测试字面量 | css-parser `f0e7a56`、css `fc1621e` | 100 例 / 编译通过 |
-| T-3 | cascade / layout 合成值补字段 | cascade `0f32951`、layout `a22bd84` | 225 / 127 例，行为不变 |
-| T-4 | selectors：An+B 符号规则 | selectors `9371ab6` | **WPT 99.8%（507/508）**；`HARD_ASSERT_100` 增至 11 个夹具；新增 4 组符号矩阵测试（38 条断言） |
-| T-5 | 文档 + 主仓库 `Cargo.lock` 版本联动 | 主仓库文档 commit | 全链复跑：css-tokenizer 85 / css-parser 100 / css-values 150 / cssom 104 / html5-parser 113 / selectors 186 / cascade 225 / layout 127 / workspace 218，全绿 |
+```bash
+cd D:/Muskitty && cargo test -p muskitty-network          # CS-1a
+cd D:/Muskitty && cargo test -p muskitty-chrome           # CS-1b/c/e/g/e2e
+cd D:/Muskitty/crates/muskitty-cascade && cargo test      # CS-1d
+cd D:/Muskitty/crates/muskitty-layout && cargo test       # CS-1f 回归
+cd D:/Muskitty && cargo test --workspace
+cd D:/Muskitty && cargo clippy --workspace --all-targets -- -D warnings
+cd D:/Muskitty && cargo fmt --all -- --check
+```
 
-**最终差距**：507/508。唯一失败项 `parse-has-slotted.tentative.json` 的
-`:has-slotted(div + div)`——上一批已判定为 tentative 夹具自相矛盾（同文件把
-`div + div` 判 valid、`div > span` 判 invalid，而 `+`/`>` 同为组合器），本实现取
-一致的"参数为复合选择器"读法并保持该例失败，不做硬断言。
-
-**推送与合并（本轮收尾）**：本轮期间 GitHub 长时间不可达（`Recv failure` / 连接超时），
-commit 先全部本地落盘、由后台重试循环接管；网络恢复后 5 个 crate 的推送被拒——
-**架构师在远端发了版**（`bump version … (align release with code ahead of last tag)` + tag：
-tokenizer v0.2.1、css-parser v0.3.1、selectors v0.2.1、cascade v0.1.1、layout v0.1.1）。
-处置：
-
-| 仓库 | 冲突/处置 |
-|------|----------|
-| css-tokenizer | Cargo.toml 冲突（我的 0.3.0 vs 上游 0.2.1）。**保留 0.3.0**：本轮加 pub 字段是破坏性变更，不能走 patch 版本；0.3.0 同时包含上游已发布的 `--`/`--0` 修复与 `has_sign`。v0.2.1 tag 在其自身提交上仍有效 |
-| css-parser | 自动合并（上游改 [package] version、我改依赖声明行，不同行）→ 包版本 0.3.1 + 依赖 tokenizer 0.3.0 |
-| selectors / cascade / layout | 自动合并（上游只改 package version，我改 src/tests） |
-
-**发现并修掉一个真实缺口**：cascade 的 `src/filter.rs`（测试助手从 `Numeric` 字面量改为
-`Numeric::new`）在上一轮机械替换时**漏提交**，导致那次提交单独 checkout 编不过
-（`git stash` 该文件后实测 4 个 `E0063 missing field has_sign`）。已补提交
-（cascade `c6eb005`）并在 message 里写明验证方式。
-
-**最终状态**：7 个位置（6 crate + 主仓库）全部 `0/0` 与远端同步；
-合并后复跑全链：tokenizer 85 / css-parser 100 / css-values 150 / cssom 104 /
-html5-parser 113 / selectors 186 / cascade 225 / layout 127 / workspace 218 全绿，
-WPT selectors 99.8%（507/508）不变，workspace clippy 与各仓库 fmt 干净。
+## 完成记录（收尾时填写）

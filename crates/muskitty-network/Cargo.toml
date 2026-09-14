@@ -19,6 +19,12 @@ reqwest-backend = ["dep:reqwest", "dep:tokio"]
 default = ["reqwest-backend"]
 
 [dependencies]
+# url: WHATWG URL Standard 的参考实现（servo/rust-url，纯 Rust，零 C 依赖）。
+# CS-1：`<link rel=stylesheet href>` / `@import` 的相对解析、file:// ↔ 路径转换、
+# data: 解码都走它——URL 是规范算法，标准库无法替代（AGENTS.md 的"标准库能搞定
+# 不引 crate"在此不适用）。**非可选**：关闭 reqwest-backend 时上层仍需 URL 语义。
+# 类型只在 `url` 模块内部使用，不进 pub 签名（decoupling ADR）。
+url = "2"
 # reqwest: HTTP 客户端，作为 NetworkFetcher 的一个可选实现。
 # rustls-tls 满足 AGENTS.md "零 C/C++ 依赖" 硬约束（不用 native-tls / OpenSSL）。
 # http2 启用 HTTP/2，charset 启用响应编码处理。

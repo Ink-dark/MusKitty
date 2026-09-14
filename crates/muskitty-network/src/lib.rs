@@ -26,6 +26,7 @@
 mod error;
 mod fetcher;
 mod response;
+pub mod url;
 
 pub use error::{NetworkError, NetworkResult};
 pub use fetcher::NetworkFetcher;
