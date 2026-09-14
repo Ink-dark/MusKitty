@@ -1,0 +1,154 @@
+/* MusKitty 最小 UA 样式表（CS-1f）。
+ *
+ * 规范依据：HTML Standard §15 Rendering 的 UA 级默认表——各小节的规则
+ * "expected to be used as part of the user-agent level style sheet defaults"
+ * （D:\whatwg\html\17-15rendering.md §15.2 L35-53）。
+ *
+ * 范围纪律：**只写当前管线有消费方的属性**（display / margin / padding /
+ * font-* / color / background-color / border-* / overflow）。规范原文用逻辑属性
+ * （margin-block / padding-inline-start）与 relative 关键字；这里按
+ * horizontal-tb + ltr 的等价物理属性/字面量写，偏差逐条在下方注释。
+ *
+ * 明确不写（本轮非目标，各自需要的能力已记录）：
+ * - `address, cite, dfn, em, i, var { font-style: italic }`：font-style 已注册但
+ *   无消费方（M-3 batch 3b：受系统字体面制约）。
+ * - `big { font-size: larger }` / `small { font-size: smaller }`：relative 字号
+ *   关键字无消费方。
+ * - `sub, sup { line-height/system; font-size: smaller }`：需 vertical-align。
+ * - `:link { color: #0000EE }` / `:link, :visited { text-decoration: underline }`：
+ *   需 `:link`/`:visited` 匹配（文档 URL 语义）与 text-decoration 绘制。
+ * - `ins, u { text-decoration: underline }` / `del, s { line-through }`：同上。
+ * - `[hidden=until-found] { content-visibility: hidden }`：content-visibility 无消费方。
+ * - §15.3.8 表格、§15.5 表单控件外观：布局无 table/form 控件模型。
+ * - `slot { display: contents }`：contents 语义未实现（layout 现按 Block 处理）。
+ * - presentational hints（`hr[align]`、`body bgcolor` 等）：属独立特性，未实现。
+ */
+
+/* HTML §15.3.1 Hidden elements（L57-81）：15 个非渲染标签。
+ * 注：layout 另有硬编码跳过表（crates/muskitty-layout/src/convert.rs
+ * is_non_rendered_tag），本表生效后其覆盖的 8 个标签冗余，保留为防御。 */
+area, base, basefont, datalist, head, link, meta, noembed, noframes, param, rp,
+script, style, template, title {
+  display: none;
+}
+
+[hidden] {
+  display: none;
+}
+
+input[type=hidden i] {
+  display: none !important;
+}
+
+/* 偏差：规范把 noscript 的 display:none 放在 `@media (scripting)` 内；本实现
+ * 无脚本引擎（等价于启用脚本的 UA），故无条件隐藏（media 求值对未知 feature
+ * fail-closed，原样照抄会让 noscript 反而显示出来）。 */
+noscript {
+  display: none;
+}
+
+/* HTML §15.3.2 The page（L83-100）：html/body 都是 block；body 四边默认 8px
+ *（规范以 presentational hint + 默认值 8px 表述，此处直接用规则表达）。 */
+html, body {
+  display: block;
+}
+
+body {
+  margin: 8px;
+}
+
+/* HTML §15.3.3 Flow content（L125-155）。margin-block: 1em → margin: 1em 0；
+ * margin-inline: 40px → 左右 40px。listing/plaintext/pre/xmp 的
+ * `white-space: pre` 待 batch 3c（white-space 无消费方），先只写字体。 */
+address, blockquote, center, dialog, div, figure, figcaption, footer, form,
+header, hr, legend, listing, main, p, plaintext, pre, search, xmp {
+  display: block;
+}
+
+blockquote, figure, listing, p, plaintext, pre, xmp {
+  margin: 1em 0;
+}
+
+blockquote, figure {
+  margin-left: 40px;
+  margin-right: 40px;
+}
+
+listing, plaintext, pre, xmp {
+  font-family: monospace;
+}
+
+dialog:not([open]) {
+  display: none;
+}
+
+/* HTML §15.3.4 Phrasing content（L225-253）：bolder 无消费方 → bold（700）近似；
+ * code/kbd/samp/tt 等宽；mark 高亮（规范注明颜色可随实现反馈调整）。 */
+b, strong {
+  font-weight: bold;
+}
+
+code, kbd, samp, tt {
+  font-family: monospace;
+}
+
+mark {
+  background-color: yellow;
+  color: black;
+}
+
+/* HTML §15.3.6 Sections and headings（L377-397）：`:heading` = h1-h6，
+ * `:heading(n)` 的字号/边距表按层级展开为类型选择器（不依赖 L5 伪类匹配）。 */
+article, aside, hgroup, nav, section {
+  display: block;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  display: block;
+  font-weight: bold;
+}
+
+h1 { margin: 0.67em 0; font-size: 2em; }
+h2 { margin: 0.83em 0; font-size: 1.5em; }
+h3 { margin: 1em 0; font-size: 1.17em; }
+h4 { margin: 1.33em 0; font-size: 1em; }
+h5 { margin: 1.67em 0; font-size: 0.83em; }
+h6 { margin: 2.33em 0; font-size: 0.67em; }
+
+/* HTML §15.3.7 Lists（L399-455）：margin-block → margin: 1em 0；
+ * padding-inline-start / margin-inline-start → 左侧 40px。列表标记（marker）、
+ * counter-reset 与 list-style-type 需要 marker 盒，未实现（list-item 在 layout
+ * 中按 Block 处理）。 */
+dir, dd, dl, dt, menu, ol, ul {
+  display: block;
+}
+
+li {
+  display: list-item;
+}
+
+dir, dl, menu, ol, ul {
+  margin: 1em 0;
+}
+
+:is(dir, dl, menu, ol, ul) :is(dir, dl, menu, ol, ul) {
+  margin: 0;
+}
+
+dd {
+  margin-left: 40px;
+}
+
+dir, menu, ol, ul {
+  padding-left: 40px;
+}
+
+/* HTML §15.3.11 hr（L826-838）：border-style: inset 由 renderer 按 solid 近似
+ * 绘制（M-3 batch 2 已文档化）；margin-inline: auto → 左右 auto。 */
+hr {
+  color: gray;
+  border-style: inset;
+  border-width: 1px;
+  margin: 0.5em auto;
+  overflow: hidden;
+}

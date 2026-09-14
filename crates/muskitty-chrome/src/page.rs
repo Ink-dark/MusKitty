@@ -58,6 +58,10 @@ pub fn render_page(
 /// F-13（审计 S-7）：layout 失败以 `Err` 上抛而非 `.expect` panic——
 /// layout crate 的约定明确要求调用方**不得**跨模块 expect（旧实现任何
 /// taffy `Err` 都会 abort 整个浏览器进程）。调用方自行决定降级策略。
+///
+/// CS-1f：UA 样式表（[`crate::ua`]）自动置于表列表首位——所有渲染入口
+/// （真窗口 / 无头 / 测试 / 文件模式）行为一致；cascade 的 origin 权重保证
+/// 它低于作者表。
 pub fn render_page_with_sheets(
     html: &str,
     sheets: &[CssStyleSheet],
@@ -71,7 +75,10 @@ pub fn render_page_with_sheets(
         viewport_width: width as f64,
         viewport_height: height as f64,
     };
-    let styles = compute_styles(&dom, sheets, &opts);
+    let mut all_sheets = Vec::with_capacity(sheets.len() + 1);
+    all_sheets.push(crate::ua::ua_stylesheet());
+    all_sheets.extend_from_slice(sheets);
+    let styles = compute_styles(&dom, &all_sheets, &opts);
     // LAY-2：注入会话级共享字体系统（系统字体只枚举一次）。
     let mut tree = FONT_SYSTEM.with(|fonts| build_layout_tree_with_fonts(&dom, &styles, fonts));
     // 布局用逻辑尺寸（CSS px）；scale 只影响栅格化，不改变布局。

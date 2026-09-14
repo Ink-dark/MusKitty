@@ -47,6 +47,7 @@ pub mod navigation;
 pub mod page;
 pub mod shortcut;
 pub mod stylesheets;
+pub mod ua;
 pub mod webview;
 
 /// 浏览器窗口应用（winit 事件循环 + chrome 合成呈现，`winit-backend`
