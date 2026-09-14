@@ -4,7 +4,7 @@
 > 相对 URL 解析、外链抓取、`@import` 递归、每张表自身的 media/disabled 生效，外加一份最小
 > UA 样式表。判定纪律沿用 M-3：**缺陷与收益一律以实跑证据为准**（代码位置 + 端到端像素），
 > 不采信文档声明。
-> **状态**：📋 **规划完成，未实施**（本文件只定义批次与退出条件；实施时另开 `goal.md` 轮次）。
+> **状态**：✅ **已实施**（2026-09-14 轮，见文末"实施记录"；批次与退出条件即当轮 `goal.md` 的任务表）。
 > **相关文档**：
 > [docs/plans/2026-09-12-css-completion.md](2026-09-12-css-completion.md)（M-3 特性缺口总账）、
 > [docs/plans/2026-08-09-phase5-network.md](2026-08-09-phase5-network.md)（N-6 才是规范指定的
@@ -285,12 +285,15 @@ temp-dir fixture（`index.html` + `css/style.css`）：`render_html_file` 与 `A
 7. **编码面（BOM/`@charset`/Content-Type charset 全解码）**——触发条件见 D6；
 8. **首屏渐进渲染 / 子资源并行抓取 / 抓取缓存持久化**——触发条件：真实页面实测变慢。
 
-## 九、复跑命令（预留，实施后回填）
+## 九、复跑命令
 
 ```bash
-cd D:/Muskitty && cargo test -p muskitty-network          # CS-1a：URL 解析表
-cd D:/Muskitty && cargo test -p muskitty-chrome           # CS-1b/c/d/g：采集、抓取、热重载
-cd D:/Muskitty/crates/muskitty-cascade && cargo test      # CS-1d：sheet 级 media/disabled
+cd D:/Muskitty && cargo test -p muskitty-network          # CS-1a：URL 解析/策略/data URL 表
+cd D:/Muskitty && cargo test -p muskitty-chrome           # CS-1b/c/e/g：采集、抓取、@import、热重载
+cd D:/Muskitty && cargo test -p muskitty-chrome --test stylesheets_e2e   # 离线多文件全链路像素
+cd D:/Muskitty && cargo test -p muskitty-chrome --test ua_stylesheet     # UA 表像素
+cd D:/Muskitty/crates/muskitty-cascade && cargo test      # CS-1d：sheet 级 media/disabled/alternate
+cd D:/Muskitty/crates/muskitty-layout && cargo test       # CS-1f 回归（127）
 cd D:/Muskitty && cargo test --workspace                  # 全量 + 集成
 cd D:/Muskitty && cargo clippy --workspace --all-targets -- -D warnings
 cd D:/Muskitty && cargo fmt --all -- --check
@@ -299,10 +302,26 @@ cd D:/Muskitty && cargo fmt --all -- --check
 ## 十、明确留给后续的债务（本轮记录，不修）
 
 1. **UA 表与 layout 硬编码跳过表双轨**：CS-1f 后 `is_non_rendered_tag` 冗余但保留，删除条件
-   写在函数注释里。
+   写在函数注释里（`crates/muskitty-layout/src/convert.rs`）。
 2. **逻辑属性未注册**：UA 表用物理属性等价替代（规范 `margin-block-*`/`padding-inline-start`）；
    逻辑属性（含 `direction`/writing-mode 交互）单列后续项。
 3. **`@import` 的 `layer()`/`supports()`**：整条跳过，代码注释与文档同源。
 4. **编码面**：UTF-8 为准 + BOM 嗅探，其余 lossy（HTML 侧同缺口）。
 5. **DOM 二次解析**：加载期采集与渲染各解析一次 HTML；"Document 长驻对象"（DOM + sheets +
    URL 一体）列为后续重构，触发条件：加载路径实测或需要二次导航复用。
+6. **`<base href>` 影响全部来源**：规范只影响其后出现的 URL，实现按最终 base 统一解析
+   （病态文档才有差异），注释与 §四 CS-1b 均记录。
+
+## 十一、实施记录（2026-09-14 轮）
+
+| 批次 | commit | 关键落点 |
+|------|--------|---------|
+| CS-1a | 主仓库 `30cfca6` | `muskitty-network/src/url.rs`（`resolve`/路径互转/`scheme`/`is_fetchable_subresource`/`decode_data_url`）、`url = "2"` 非可选依赖 |
+| CS-1b/c/e/g | 主仓库 `6f25857` | `muskitty-chrome/src/stylesheets.rs`（采集 + `DocumentFetcher` + `Loader` + `@import` 展开）、`page.rs` 的 `render_page_with_sheets`、`navigation.rs` 抓取线程装载、`webview.rs` 的 `sheets`、`app.rs` 文件模式与热重载、`tests/stylesheets_e2e.rs` |
+| CS-1d | cascade `6ed08a0` | `filter.rs` 的 `sheet_applies`（disabled/alternate/media 门控）+ 6 条测试 |
+| CS-1f | 主仓库 `0f7df1e` | `muskitty-chrome/src/ua.css` + `ua.rs`、渲染入口统一注入、`tests/ua_stylesheet.rs` |
+| CS-1f-doc | layout `ef63936` | `convert.rs::is_non_rendered_tag` 注释化为防御 + 删除条件 |
+
+实测数字：chrome 108 lib + 3 headless + 6 probe + 9 e2e + 7 UA；network 21 + 4 doc；
+cascade 231；layout 127；workspace 全绿；clippy/fmt 干净。逐条退出条件与偏差见当轮
+[goal.md](../../goal.md) 的"完成记录"。

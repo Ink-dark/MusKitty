@@ -1,6 +1,6 @@
 # Goal — CS-1：外链 CSS 与其他 CSS 来源接入（2026-09-14）
 
-> **状态**：🚧 进行中。
+> **状态**：✅ **已完成**（CS-1a~CS-1f 全部满足退出条件，见文末"完成记录"）。
 > **依据**：[docs/plans/2026-09-13-external-css-and-css-sources.md](docs/plans/2026-09-13-external-css-and-css-sources.md)
 > （规划轮已交：现状证据表、决策 D1–D7、批次划分、规范本地源行号）。
 > **上一轮**：W-3b（An+B 符号保真，WPT selectors 99.8%）——记录见 PROGRESS 头部与
@@ -48,4 +48,24 @@ cd D:/Muskitty && cargo clippy --workspace --all-targets -- -D warnings
 cd D:/Muskitty && cargo fmt --all -- --check
 ```
 
-## 完成记录（收尾时填写）
+## 完成记录（2026-09-14）
+
+| # | 交付 | commit | 验证 |
+|---|------|--------|------|
+| CS-1a | `muskitty-network::url`：`resolve` / `file_url_from_path` / `path_from_file_url` / `scheme` / `is_fetchable_subresource` / `decode_data_url`；`url = "2"` 非可选依赖（原为 reqwest 传递依赖），pub 签名只出 `&str`/`Vec<u8>` | 主仓库 `30cfca6` | 12 模块测试（相对/协议相对/query/fragment/百分号与 CJK/file 往返/策略表/data URL 变体与错误）；network 10 + 4 doc-tests 全绿 |
+| CS-1b/c | chrome `stylesheets` 模块：DOM 文档序采集（属性语义表 + `<base>`）、`DocumentFetcher`（scheme 分发 + MIME + BOM 编码）、`SheetLoader`（去重缓存 + 三项上限 + 失败非致命）；删 `extract_inline_style` 与 4 个调用点 | 主仓库 `6f25857` | 22 模块测试（顺序/注释与脚本免疫/属性语义表/base/上限/去重/`Send` 断言/fetcher 跨 scheme 拒绝） |
+| CS-1c | 接线：`render_page_with_sheets`（旧单表入口保留）、`NavigationDoc{final_url,html,sheets,is_html,stats}`、导航线程内抓表、`WebView.sheets`、file 模式与 `file://` 导航走同一加载路径 | 同上 | chrome 108 lib + 3 headless + 6 probe 全绿；`--no-default-features` check 通过 |
+| CS-1d | cascade：sheet 级 `disabled`/`alternate`/`media` 门控（复用 `eval_media_query`） | cascade `6ed08a0`（已 push） | 6 条新 filter 测试；cascade 231 全绿 |
+| CS-1e | `@import` 加载期就地展开：合法位置、以导入表 URL 为基准、条件导入包 `@media`、循环/深度/失败跳过、`layer()`/`supports()` 前缀整条跳过 | 随 `6f25857` | 7 条模块测试 + 2 条 e2e（子目录相对基准、成环限时、内嵌表以文档为基准） |
+| CS-1e2e | 离线多文件服务器（`TcpListener`）+ 9 条全链路像素断言 | 随 `6f25857` | 全绿（相对路径/后表胜出/404/media=print/disabled/@import 链/成环/data:/内嵌 import） |
+| CS-1g | 热重载监视集合扩到 HTML + 其 `file://` 样式表 | 随 `6f25857` | `hot_reload_picks_up_external_css_change`（只改 CSS → 重载 → 声明值 red→green） |
+| CS-1f | 最小 UA 样式表（`ua.css` + `ua.rs`，HTML §15 Rendering，只用有消费方的属性，未写规则与偏差逐条记录）+ `render_page_with_sheets` 统一注入（`OnceLock` 缓存） | 主仓库 `0f7df1e` | 7 条像素断言（15 标签清单中此前出盒的 7 个零墨迹 + 对照、body 8px、h1 2em/边距、p 1em、`[hidden]` 与作者覆盖、列表/引用缩进、hr） |
+| CS-1f-doc | layout `is_non_rendered_tag` 注释化为防御并记录删除条件 | layout `ef63936`（已 push） | layout 127 全绿 |
+
+**全量复跑**：`cargo test --workspace`（chrome 108+3+6+9+7、renderer 110、network 21+4）、cascade 231、layout 127 全绿；`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 干净。
+
+**实测语义**（与新行为对照的验收点）：外链 CSS（含同目录/子目录相对路径）端到端生效且像素正确；后出现的表在等特异性下胜出；404/抓取失败的表跳过而页面其余照渲；`media="print"` 与 `disabled` 表不生效；`@import` 以**导入表自身** URL 为基准解析、成环限时返回；`data:text/css,...` 表生效；UA 表使 7 个原出盒标签零墨迹、body 8px、h1 32px/边距 21.44px、`ul` 左缩进 40px、`[hidden]` 隐藏且作者 `display:block` 可覆盖。
+
+**已知偏差与债务（已记录，不修）**：`@import` 的 `layer()`/`supports()` 前缀整条跳过（`supports` 不匹配时规范要求不得抓取，`layer()` 按 media 求值会误丢整表）；外链为 render-blocking（无首屏渐进渲染）；编码 BOM 嗅探 + UTF-8 为准，其余 lossy；`<base href>` 影响全部来源（规范只影响其后出现的 URL）；`url()` 相对解析随图像管线另排；layout 硬编码跳过表与 UA 表双轨（删除条件写在函数注释）。
+
+**Mimosa 交互记录**：本轮 commit/push 与 layout/cascade 两个独立仓库的推送都收到"未取得完整扫描结论"的兼容放行警告；按仓库约定继续。另：曾试图用 Bash 追加测试文件被 hook 拦下，已改用 Edit 提交同一内容。
