@@ -6,10 +6,13 @@
 //! 管线逻辑从 renderer 的 `window_demo` 抽出，供真窗口 / Headless 复用。
 
 use muskitty_cascade::{compute_styles, StyleTreeOptions};
-use muskitty_css::parse_stylesheet;
-use muskitty_cssom::{from_stylesheet, Origin};
+use muskitty_cssom::CssStyleSheet;
 use muskitty_layout::{build_layout_tree_with_fonts, compute_layout, SharedFontSystem};
 use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
+
+use crate::stylesheets::{load_stylesheets, DocumentFetcher, LoadOptions};
+
+pub use crate::stylesheets::author_sheet;
 
 thread_local! {
     /// LAY-2：会话级共享字体系统。
@@ -21,7 +24,24 @@ thread_local! {
     static FONT_SYSTEM: SharedFontSystem = SharedFontSystem::new();
 }
 
-/// 渲染 HTML + CSS 到 RGBA 像素（[`RenderOutput::Pixels`]）。
+/// 渲染 HTML + CSS 文本到 RGBA 像素（[`RenderOutput::Pixels`]）。
+///
+/// 单表便捷入口：等价于 [`render_page_with_sheets`] 传一张 [`author_sheet`]。
+/// 多表（外链 + 内嵌按文档序）请用 [`render_page_with_sheets`]。
+pub fn render_page(
+    html: &str,
+    css: &str,
+    width: u32,
+    height: u32,
+    scale: f32,
+) -> Result<RenderOutput, Box<dyn std::error::Error>> {
+    render_page_with_sheets(html, &[author_sheet(css)], width, height, scale)
+}
+
+/// 渲染 HTML + 已加载样式表（CS-1 主入口）到 RGBA 像素。
+///
+/// `sheets` 为**文档序**样式表（采集/抓取/`@import` 展开见
+/// [`crate::stylesheets`]）；cascade 按 slice 顺序展平，等特异性时后者胜。
 ///
 /// `width` / `height` 为**逻辑**画布尺寸（CSS px，即布局视口）；
 /// `scale` 为 HiDPI 缩放因子（物理像素 ÷ 逻辑像素，W-2）。布局与
@@ -30,35 +50,28 @@ thread_local! {
 ///
 /// 管线步骤：
 /// 1. HTML → DOM（muskitty-html5-parser）
-/// 2. CSS → CssStyleSheet（Author origin）
-/// 3. cascade + compute → 每元素 ComputedStyle
-/// 4. layout → LayoutResult（视口 = width × height）
-/// 5. paint → RenderCommand[]
-/// 6. TinySkiaBackend::render → `RenderOutput::Pixels`（RGBA8，物理分辨率）
+/// 2. cascade + compute → 每元素 ComputedStyle（sheet 级 media/disabled 由 cascade 处理）
+/// 3. layout → LayoutResult（视口 = width × height）
+/// 4. paint → RenderCommand[]
+/// 5. TinySkiaBackend::render → `RenderOutput::Pixels`（RGBA8，物理分辨率）
 ///
 /// F-13（审计 S-7）：layout 失败以 `Err` 上抛而非 `.expect` panic——
 /// layout crate 的约定明确要求调用方**不得**跨模块 expect（旧实现任何
 /// taffy `Err` 都会 abort 整个浏览器进程）。调用方自行决定降级策略。
-pub fn render_page(
+pub fn render_page_with_sheets(
     html: &str,
-    css: &str,
+    sheets: &[CssStyleSheet],
     width: u32,
     height: u32,
     scale: f32,
 ) -> Result<RenderOutput, Box<dyn std::error::Error>> {
     let dom = muskitty_html5_parser::parse(html);
-    let parsed = parse_stylesheet(css);
-    let sheet = {
-        let mut s = from_stylesheet(&parsed);
-        s.origin = Origin::Author;
-        s
-    };
     // media 视口 = 布局视口（逻辑 CSS px）；与 layout 用同一 width/height。
     let opts = StyleTreeOptions {
         viewport_width: width as f64,
         viewport_height: height as f64,
     };
-    let styles = compute_styles(&dom, &[sheet], &opts);
+    let styles = compute_styles(&dom, sheets, &opts);
     // LAY-2：注入会话级共享字体系统（系统字体只枚举一次）。
     let mut tree = FONT_SYSTEM.with(|fonts| build_layout_tree_with_fonts(&dom, &styles, fonts));
     // 布局用逻辑尺寸（CSS px）；scale 只影响栅格化，不改变布局。
@@ -74,11 +87,12 @@ pub fn render_page(
     Ok(backend.render(&commands, width, height, scale))
 }
 
-/// 渲染自包含 HTML 文件（含 `<style>`）到 RGBA 像素。
+/// 渲染自包含 HTML 文件（内嵌 + 同目录外链 CSS）到 RGBA 像素。
 ///
-/// 读取 `path` 指向的 HTML 文件，用 [`extract_inline_style`] 提取其中
-/// `<style>` 块作为 Author CSS，再走 [`render_page`] 全管线。用于
-/// 渲染检测页（纯 HTML+CSS fixture）→ 与浏览器对照。
+/// 读取 `path` 指向的 HTML 文件，以 `file://` URL 为 base 采集/抓取样式表
+///（`<style>` + `<link rel=stylesheet href>`，含 `@import`），再走
+/// [`render_page_with_sheets`] 全管线。用于渲染检测页（纯 HTML+CSS fixture）
+/// → 与浏览器对照。
 pub fn render_html_file(
     path: &str,
     width: u32,
@@ -86,38 +100,37 @@ pub fn render_html_file(
     scale: f32,
 ) -> Result<RenderOutput, Box<dyn std::error::Error>> {
     let html = std::fs::read_to_string(path)?;
-    let css = extract_inline_style(&html);
-    render_page(&html, &css, width, height, scale)
+    let document_url =
+        muskitty_network::url::file_url_from_path(path).ok_or("unmappable file path")?;
+    let dom = muskitty_html5_parser::parse(&html);
+    let sheets = {
+        let mut fetcher = DocumentFetcher::new(&document_url);
+        let (sheets, stats) = load_stylesheets(
+            &dom,
+            &document_url,
+            &mut |url| fetcher.fetch_text(url),
+            &LoadOptions::default(),
+        );
+        report_load_failures(&stats);
+        sheets
+    };
+    render_page_with_sheets(&html, &sheets, width, height, scale)
 }
 
-/// 从自包含 HTML 提取所有 `<style>...</style>` 块内容，拼接为 CSS。
-///
-/// 标签名与属性大小写不敏感（HTML），但当前按 ASCII 小写匹配即可覆盖
-/// 常见写法（`<style>`、`<style type="text/css">`）。无 `<style>` 时返回空串。
-/// （`pub(crate)` → `pub`：chrome 层文件模式热重载复用；D-7 随 page.rs
-/// 迁入 chrome crate。）
-pub fn extract_inline_style(html: &str) -> String {
-    const OPEN_TAG: &str = "<style";
-    const CLOSE_TAG: &str = "</style>";
-    let lower = html.to_ascii_lowercase();
-    let mut css = String::new();
-    let mut search_from = 0usize;
-    while let Some(i) = lower[search_from..].find(OPEN_TAG) {
-        let open = search_from + i;
-        // 跳过开始标签本身（含属性），定位到 '>'.
-        let Some(gt) = lower[open..].find('>') else {
-            break;
-        };
-        let gt = open + gt + 1;
-        let Some(close) = lower[gt..].find(CLOSE_TAG) else {
-            break;
-        };
-        let close = gt + close;
-        css.push_str(&html[gt..close]);
-        css.push('\n');
-        search_from = close + CLOSE_TAG.len();
+/// 抓取失败的可观测出口（失败不致命：页面照常渲染，只报一行汇总）。
+pub(crate) fn report_load_failures(stats: &crate::stylesheets::LoadStats) {
+    if stats.failed > 0 || stats.skipped > 0 {
+        eprintln!(
+            "muskitty-chrome: stylesheets: {} fetched, {} failed, {} skipped \
+             ({} sources, {} imports, {} cache hits)",
+            stats.fetched,
+            stats.failed,
+            stats.skipped,
+            stats.sources,
+            stats.imports,
+            stats.cache_hits
+        );
     }
-    css
 }
 
 /// 把 RGBA8 像素（行长 = `width * 4`）编码为 PNG。
@@ -223,35 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_inline_style_single_block() {
-        let html = r#"<!doctype html><html><head><style>body{margin:0}</style></head><body></body></html>"#;
-        assert_eq!(extract_inline_style(html), "body{margin:0}\n");
-    }
-
-    #[test]
-    fn extract_inline_style_with_attributes_and_multiple_blocks() {
-        let html = "<style type=\"text/css\">a{color:red}</style><body></body><style>b{display:block}</style>";
-        assert_eq!(
-            extract_inline_style(html),
-            "a{color:red}\nb{display:block}\n"
-        );
-    }
-
-    #[test]
-    fn extract_inline_style_missing_is_empty() {
-        assert_eq!(extract_inline_style("<body></body>"), "");
-    }
-
-    #[test]
-    fn extract_inline_style_keeps_css_semicolons_and_braces() {
-        let html = "<style>.a{border-top-width:1px;border-top-style:solid}</style>";
-        assert_eq!(
-            extract_inline_style(html),
-            ".a{border-top-width:1px;border-top-style:solid}\n"
-        );
-    }
-
-    #[test]
     fn render_html_file_renders_style_driven_page() {
         let dir = std::env::temp_dir();
         let path = dir.join("muskitty_render_html_file_test.html");
@@ -273,6 +257,54 @@ mod tests {
         let (r, g, b, _) = pixel(&data, width, 10, 10);
         assert_eq!((r, g, b), (255, 0, 0));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn render_html_file_follows_external_stylesheet() {
+        // CS-1：同目录外链 CSS（相对路径）必须生效。
+        let dir = std::env::temp_dir().join("muskitty_ext_css_fixture");
+        std::fs::create_dir_all(&dir).unwrap();
+        let html_path = dir.join("index.html");
+        std::fs::write(
+            &html_path,
+            r#"<!doctype html><html><head><link rel="stylesheet" href="css/page.css"></head><body><div></div></body></html>"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("css")).unwrap();
+        std::fs::write(
+            dir.join("css").join("page.css"),
+            "body{margin:0} div{display:block;width:100px;height:50px;background-color:#00cc00}",
+        )
+        .unwrap();
+
+        let out = render_html_file(&html_path.to_string_lossy(), 200, 100, 1.0).expect("render");
+        let RenderOutput::Pixels { width, data, .. } = out else {
+            panic!("expected Pixels");
+        };
+        assert_eq!(
+            pixel(&data, width, 10, 10),
+            (0, 204, 0, 255),
+            "external CSS applied"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_page_with_sheets_prefers_later_sheet() {
+        // 等特异性：后一张表胜出（cascade 的全局 order 语义）。
+        // 不能用 RED_DIV_HTML——它的 background 写在 style 属性里，内联声明
+        // 优先于两张表，断言会变成"内联胜出"。
+        let html = r#"<!doctype html><html><body><div></div></body></html>"#;
+        let first = author_sheet(
+            "body{margin:0} div{display:block;width:100px;height:50px;background-color:#ff0000}",
+        );
+        let second = author_sheet("div{background-color:#0000ff}");
+        let out = render_page_with_sheets(html, &[first, second], 200, 100, 1.0).expect("render");
+        let RenderOutput::Pixels { width, data, .. } = out else {
+            panic!("expected Pixels");
+        };
+        assert_eq!(pixel(&data, width, 10, 10), (0, 0, 255, 255));
     }
 
     #[test]

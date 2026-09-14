@@ -1,7 +1,7 @@
 //! 地址栏导航：URL 分类 + http(s) 后台抓取 + 响应 → 页面文档。
 //!
 //! HTML Standard §7.2 navigation 的极简子集——仅顶级文档 GET，无历史栈、
-//! 无子资源、无 MIME 嗅探：
+//! 无 MIME 嗅探：
 //!
 //! 1. 输入分类（[`classify_url`]）：`http`/`https` → 网络抓取；`file://` →
 //!    本地文件；无 scheme 补全（默认 `https://`，localhost/127.0.0.1 补
@@ -10,16 +10,21 @@
 //!    channel 送回 winit 事件循环（app 层统一 flush 点消费）——网络 IO
 //!    永不阻塞 UI 线程。加载语义与浏览器一致：加载期间保留旧页。
 //! 3. 响应 → 文档（[`document_from_response`]）按 Content-Type 分发：
-//!    `text/html` → 走完整渲染管线（提取 `<style>` 为 Author CSS）；
-//!    `text/plain` → `<pre>` 回显；其余 → 提示页。4xx/5xx 不算失败，
-//!    服务器错误页正文照常渲染；只有网络层错误（DNS / 连接 / TLS /
-//!    超时 / 体积上限）才生成 [`error_page`]。
+//!    `text/html` → 走完整渲染管线；`text/plain` → `<pre>` 回显；其余 → 提示页。
+//!    4xx/5xx 不算失败，服务器错误页正文照常渲染；只有网络层错误（DNS /
+//!    连接 / TLS / 超时 / 体积上限）才生成 [`error_page`]。
+//! 4. 样式表（CS-1）：`text/html` 文档在**抓取线程内**按文档序采集
+//!    `<style>`/`<link rel=stylesheet>`、抓外链、展开 `@import`
+//!    （[`crate::stylesheets`]）后随文档一并回传——外链 CSS 与页面同批到站。
 //!
 //! 纯函数层（分类 / 转换 / 错误页）无窗口可测；端到端用原生
 //! `TcpListener` 起离线 HTTP server（真 reqwest → 真线程 → 转换），
 //! 不依赖外网。
 
+use muskitty_cssom::CssStyleSheet;
 use muskitty_network::NetworkResponse;
+
+use crate::stylesheets::{load_stylesheets, DocumentFetcher, LoadOptions, LoadStats};
 
 /// 一次导航的最终结果（channel 回传给 app 层）。
 #[derive(Debug)]
@@ -38,12 +43,18 @@ pub struct NavigationOutcome {
 /// 抓取成功后转换出的页面文档。
 #[derive(Debug)]
 pub struct NavigationDoc {
-    /// 最终 URL（重定向后；标签标题用它而非请求 URL）。
+    /// 最终 URL（重定向后；标签标题用它而非请求 URL）。同时是样式表
+    /// 相对解析的 base（`<base href>` 另行覆盖）。
     pub final_url: String,
     /// 页面 HTML。
     pub html: String,
-    /// 提取的 Author CSS（`<style>` 块拼接；页外 CSS `<link>` 不在本轮范围）。
-    pub css: String,
+    /// 文档序样式表（内嵌 + 外链 + `@import` 展开；CS-1）。
+    pub sheets: Vec<CssStyleSheet>,
+    /// 是否作者 HTML（`text/html` 分支为 true；`text/plain`/提示页是
+    /// MusKitty 生成的页面，其样式表已内嵌在标记里，`sheets` 留空）。
+    pub is_html: bool,
+    /// 样式表加载统计（失败/跳过只观测）。
+    pub stats: LoadStats,
 }
 
 /// 地址栏输入的导航分类（[`classify_url`] 的结果）。
@@ -151,6 +162,8 @@ fn is_local_host(input: &str) -> bool {
 ///
 /// 状态码不筛选：4xx/5xx 的正文照常渲染（与浏览器渲染服务器错误页
 /// 一致）；charset 依赖 `NetworkResponse::text` 的 UTF-8 lossy 解码。
+/// 样式表**不在这里**加载（需要网络）——`text/html` 文档由抓取线程在
+/// 本函数之后调 [`load_document_stylesheets`] 填充。
 pub fn document_from_response(resp: &NetworkResponse) -> NavigationDoc {
     let ct = resp
         .header("content-type")
@@ -159,26 +172,43 @@ pub fn document_from_response(resp: &NetworkResponse) -> NavigationDoc {
     let final_url = resp.url.clone();
     if ct.contains("text/html") || ct.is_empty() {
         // 缺 Content-Type 按 HTML 处理（大量服务器对 HTML 页省略）。
-        let html = resp.text();
-        let css = crate::page::extract_inline_style(&html);
         NavigationDoc {
             final_url,
-            html,
-            css,
+            html: resp.text(),
+            sheets: Vec::new(),
+            is_html: true,
+            stats: LoadStats::default(),
         }
     } else if ct.contains("text/plain") {
         NavigationDoc {
             final_url,
             html: plain_text_page(&resp.text()),
-            css: String::new(),
+            sheets: Vec::new(),
+            is_html: false,
+            stats: LoadStats::default(),
         }
     } else {
         NavigationDoc {
             final_url,
             html: unsupported_type_page(&ct, resp.body_bytes().len()),
-            css: String::new(),
+            sheets: Vec::new(),
+            is_html: false,
+            stats: LoadStats::default(),
         }
     }
+}
+
+/// 加载文档样式表（CS-1）：DOM 文档序采集 + 抓外链 + 展开 `@import`。
+///
+/// 在**抓取线程内**调用（http(s) 文档）或加载点同步调用（file 文档）——
+/// `fetch` 是阻塞抓取器，绝不能在 UI 线程上用于 http 文档。
+pub fn load_document_stylesheets(
+    html: &str,
+    document_url: &str,
+    fetch: &mut dyn FnMut(&str) -> Result<String, String>,
+) -> (Vec<CssStyleSheet>, LoadStats) {
+    let dom = muskitty_html5_parser::parse(html);
+    load_stylesheets(&dom, document_url, fetch, &LoadOptions::default())
 }
 
 /// 网络错误页（DNS / 连接 / TLS / 超时 / 体积上限——HTML 文档加载失败，
@@ -225,6 +255,9 @@ fn unsupported_type_page(ct: &str, len: usize) -> String {
 /// 运行时——导航是用户级低频事件，不值得为此养常驻执行器。接收端
 /// （app 层）关闭后结果静默丢弃；抓取线程 panic 等价于 channel 断开，
 /// 由 app 层按"接收器失效"清理。
+///
+/// CS-1：`text/html` 文档的样式表（外链 + `@import` 递归）在**同一线程内**
+/// 抓完再回传——UI 线程不承担任何子资源网络 IO。
 pub fn spawn_http_navigation(
     url: String,
     tab: usize,
@@ -237,7 +270,20 @@ pub fn spawn_http_navigation(
         .name("muskitty-nav".to_string())
         .spawn(move || {
             let result = match muskitty_network::fetch_blocking(&url) {
-                Ok(resp) => Ok(document_from_response(&resp)),
+                Ok(resp) => {
+                    let mut doc = document_from_response(&resp);
+                    if doc.is_html {
+                        let mut fetcher = DocumentFetcher::new(&doc.final_url);
+                        let (sheets, stats) =
+                            load_document_stylesheets(&doc.html, &doc.final_url, &mut |target| {
+                                fetcher.fetch_text(target)
+                            });
+                        doc.sheets = sheets;
+                        doc.stats = stats;
+                        crate::page::report_load_failures(&stats);
+                    }
+                    Ok(doc)
+                }
                 Err(e) => Err(e.to_string()),
             };
             let _ = tx.send(NavigationOutcome {
@@ -403,7 +449,17 @@ mod tests {
         let doc = document_from_response(&resp);
         assert_eq!(doc.final_url, "https://example.com/");
         assert!(doc.html.contains("<p>hi</p>"));
-        assert!(doc.css.contains("p{color:red}"));
+        assert!(doc.is_html);
+        // 样式表由抓取线程在文档转换之后加载（需要网络），此处尚未填充。
+        assert!(doc.sheets.is_empty());
+
+        // 加载后：内嵌 `<style>` 成为文档序第一张表（无需网络）。
+        let mut fetch = |_: &str| Err::<String, String>("no network".to_string());
+        let (sheets, stats) = load_document_stylesheets(&doc.html, &doc.final_url, &mut fetch);
+        assert_eq!(sheets.len(), 1);
+        assert!(sheets[0].location.is_none());
+        assert_eq!(stats.sources, 1);
+        assert_eq!(stats.failed, 0);
     }
 
     #[test]
@@ -416,6 +472,7 @@ mod tests {
         );
         let doc = document_from_response(&resp);
         assert!(doc.html.contains("implicit html"));
+        assert!(doc.is_html);
     }
 
     #[test]
@@ -430,7 +487,8 @@ mod tests {
         assert!(doc.html.contains("<pre"));
         assert!(!doc.html.contains("<b>"), "raw markup must be escaped");
         assert!(doc.html.contains("&lt;b&gt;&amp;raw&lt;/b&gt;"));
-        assert!(doc.css.is_empty());
+        assert!(!doc.is_html);
+        assert!(doc.sheets.is_empty());
     }
 
     #[test]
@@ -444,6 +502,7 @@ mod tests {
         let doc = document_from_response(&resp);
         assert!(doc.html.contains("Unsupported content"));
         assert!(doc.html.contains("image/png"));
+        assert!(!doc.is_html);
     }
 
     #[test]
@@ -456,6 +515,7 @@ mod tests {
         );
         let doc = document_from_response(&resp);
         assert!(doc.html.contains("not found page"));
+        assert!(doc.is_html, "4xx 的 HTML 正文照常走管线（含其样式表）");
     }
 
     #[test]
@@ -499,7 +559,10 @@ content-length: {}\r\nconnection: close\r\n\r\n{body}",
         assert!(outcome.url.starts_with("http://127.0.0.1:"));
         let doc = outcome.result.expect("loaded");
         assert!(doc.html.contains("muskitty-nav-e2e"));
-        assert!(doc.css.contains("p{color:red}"));
+        // CS-1：内嵌 `<style>` 在抓取线程内成为文档序样式表。
+        assert_eq!(doc.sheets.len(), 1);
+        assert!(doc.sheets[0].location.is_none());
+        assert_eq!(doc.stats.sources, 1);
         assert!(doc.final_url.starts_with("http://127.0.0.1:"));
     }
 

@@ -14,19 +14,21 @@
 //! `docs/decisions/2026-08-16-external-dependency-decoupling.md`）。
 //! 规划见 `docs/plans/2026-08-23-windowing.md` §W-5。
 
+use muskitty_cssom::CssStyleSheet;
+
 /// 一份页面（一个标签）的全部状态。
 ///
 /// `pixels` / `width` / `height` 为最近一次渲染的 RGBA 输出（物理
 /// 分辨率，present 用）；`logical_width` / `logical_height` / `scale`
 /// 为最近一次渲染的布局状态（脏检查用，避免每帧全量渲染）。
-/// `html` / `css` 为页面内容（持有 `String`：标签内容需可区分/可变，
-/// 由导航（`crate::navigation`）或文件加载填充）。
+/// `html` / `sheets`（CS-1：文档序样式表——内嵌 + 外链 + `@import` 展开）为页面
+/// 内容（由导航（`crate::navigation`）或文件加载填充）。
 #[derive(Debug, Clone)]
 pub struct WebView {
     /// 页面 HTML。
     pub html: String,
-    /// 页面 CSS。
-    pub css: String,
+    /// 文档序样式表（Author origin；cascade 等特异性时后者胜）。
+    pub sheets: Vec<CssStyleSheet>,
     /// 标签标题（chrome 标签栏显示；导航提交后先更新为 URL，到站后为
     /// 最终 URL / 文件名）。
     pub title: String,
@@ -48,11 +50,17 @@ pub struct WebView {
 
 impl WebView {
     /// 构造 WebView：尚未渲染（`needs_repaint = true`，首个 flush 点
-    /// 渲染），布局状态为零值。
+    /// 渲染），布局状态为零值。`css` 文本按单张 Author 表处理
+    /// （多表 / 外链路径见 [`Self::set_sheets`]）。
     pub fn new(html: impl Into<String>, css: impl Into<String>) -> Self {
+        let css = css.into();
         Self {
             html: html.into(),
-            css: css.into(),
+            sheets: if css.is_empty() {
+                Vec::new()
+            } else {
+                vec![crate::stylesheets::author_sheet(&css)]
+            },
             title: String::from("新标签页"),
             navigation_epoch: 0,
             needs_repaint: true,
@@ -64,6 +72,11 @@ impl WebView {
             logical_height: 0,
             scale: 1.0,
         }
+    }
+
+    /// 替换样式表集合（文档序；导航到站 / 文件加载用）。
+    pub fn set_sheets(&mut self, sheets: Vec<CssStyleSheet>) {
+        self.sheets = sheets;
     }
 
     /// 更新标签标题。

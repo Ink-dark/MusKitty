@@ -47,6 +47,11 @@ pub fn path_from_file_url(url: &str) -> Option<String> {
     Some(parsed.to_file_path().ok()?.to_string_lossy().into_owned())
 }
 
+/// URL 的 scheme（小写；不可解析时 `None`）。
+pub fn scheme(url: &str) -> Option<String> {
+    Url::parse(url).ok().map(|u| u.scheme().to_string())
+}
+
 /// 子资源抓取策略：`base`（文档 URL）指向 `target` 的样式表请求是否允许。
 ///
 /// 这是本实现的安全边界（HTML/Security），不是规范算法：
@@ -304,6 +309,16 @@ mod tests {
     fn path_from_file_url_rejects_non_file() {
         assert_eq!(path_from_file_url("https://example.com/x.css"), None);
         assert_eq!(path_from_file_url("data:text/css,a{}"), None);
+    }
+
+    #[test]
+    fn scheme_of_url() {
+        assert_eq!(
+            scheme("https://example.com/a.css").as_deref(),
+            Some("https")
+        );
+        assert_eq!(scheme("FILE:///D:/a.css").as_deref(), Some("file"));
+        assert_eq!(scheme("not a url"), None);
     }
 
     #[test]
