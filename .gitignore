@@ -12,6 +12,21 @@ rendering-test.png
 # --- 个人工具文档（本地 skill 说明，含本机绝对路径，不入库）---
 docs/cat-fetch-skill.md
 
+# --- 本地工具与诊断产物（不入库）---
+# .ghlogin.py / .ghlogin_plain.log：本机 GitHub 登录辅助脚本与其输出日志（PROGRESS 的
+#   Mimosa 扫描一节已记录它们是根目录本地脚本）；.mimosa/：Mimosa hook 的本地状态；
+#   target-verify/：临时验证构建目录（CACHEDIR.TAG + debug）；diag_*.png：历史调试
+#   渲染产物（无任何 tracked 文件引用，仓库只保留 README/演示用图）。
+.ghlogin.py
+.ghlogin_plain.log
+.mimosa/
+target-verify/
+diag_*.png
+
+# AI 编码代理的本机会话设置（权限 allowlist，含本机路径；与 .zcode/ 同类。
+# 只忽略 local 变体，将来若要共享 .claude/settings.json 或 commands/ 不受影响）
+.claude/settings.local.json
+
 # --- 已剥离的独立 crate（各自有 .git 仓库，在 Cargo.toml exclude 列表中）---
 # 这些目录不在主仓库版本控制中。新设备 clone 后需通过 fetch-crates.ps1 / fetch-crates.sh
 # 拉取到 crates/ 下，workspace member 的 path 依赖才能解析。

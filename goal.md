@@ -1,121 +1,71 @@
-# Goal — W-3：WPT 选择器套件对齐（第一批，2026-09-13）
+# Goal — CS-1：外链 CSS 与其他 CSS 来源接入（2026-09-14）
 
-> **更新时间**：2026-09-13
-> **状态**：✅ **已完成**（S-1~S-6 全部满足退出条件，见文末"完成记录"）。
-> **实测结果**：75.6% → **94.3%（479/508）**，失败 124 → 29（28 例属 W-3b，
-> 1 例为已记录的 tentative 夹具自相矛盾）。
-> **任务来源**：用户指令"继续 w-3，对齐 wpt 测试实现"。仓库内 "W-3" 只有 windowing 轨道
-> 的输入事件项（已完成，仅剩页面命中测试），与本指令的"对齐 WPT"不符；按
-> [docs/wpt-compliance-2026-09-06.md](docs/wpt-compliance-2026-09-06.md) 一节的套件表，
-> **第三个套件正是 `css/selectors/parsing`（75.6%，384/508）**——CSS 系唯一仍有大缺口的
-> 套件。故本轮按"WPT 第三个套件对齐"执行；若用户另有所指可随时纠偏。
-> **复跑基线**（本轮实测，与文档一致）：
-> `cd crates/muskitty-selectors && cargo test --test wpt_parsing -- --nocapture`
-> → `PASS RATE: 75.6% (384/508)`，失败 124 例。
-
-## 失败分布（本轮实测，按夹具）
-
-| 夹具 | 失败 | 类别 |
-|------|-----:|------|
-| parse-part.html | 26 | `::part(<ident>+)` 未实现（+ 单冒号 `:part()` 等应拒已拒） |
-| css/css-syntax/anb-parsing.html | 20 | An+B 符号/重复符号应拒未拒（**需 tokenizer 改动**） |
-| parse-has-slotted.tentative.html | 19 | `:has-slotted` 未实现 |
-| parse-is-where.html | 14 | `:host(<compound>)` 6 + `::part():is/:where()` 8 |
-| parse-anplusb.html | 12 | An+B：8 符号（需 tokenizer）+ 4 空白形态 |
-| parse-state.html | 11 | `:state(<ident>)` 未实现 + 伪元素后置规则 |
-| parse-heading.html | 10 | `:heading` / `:heading(<integer>#)` 未实现 |
-| parse-slotted.html | 9 | `::slotted(<compound>)` 未实现（含后置伪类应拒） |
-| parse-not.html | 3 | `:host(:not(…))` 2 + `:not(::before)` 应拒未拒 |
-| **合计** | **124** | |
-
-**本轮范围**：124 − 28 = **96 例**（不依赖 tokenizer 的符号信息）→ 预期
-**480/508 ≈ 94.5%**。
-**显式留到 W-3b**：An+B 的 28 例符号保真（`n 5` 该拒、`n- +5` 该拒、`5n + +5` 该拒…），
-因为需要"数字 token 是否带符号"——[`muskitty-css-tokenizer`](../crates/muskitty-css-tokenizer)
-的 `Numeric`（pub struct，已发布 v0.2.0）只有 `value` / `is_integer`，其
-`consume_a_number` 按 §4.3.13 第 7 步本应返回 sign 却丢掉了（见 `impls.rs` 注释与
-`an_plus_b.rs` 模块文档的"更宽松"说明）。跨仓库改 tokenizer 公共 API + 6 个 crate 的
-约 48 个构造点，需独立一轮协调（serialization/发布顺序也受影响）。
-
-## 规范依据（本轮逐条核对本地规范源）
-
-| 特性 | 语法/规则 | 来源 |
-|------|-----------|------|
-| `::part(<ident>+)` | `::part() = ::part(<ident>+)`；多名字、顺序无关；"fully styleable"，允许后随伪类 | `D:\CSSWG\css-shadow-1\Overview.md` §part（L1157-1230） |
-| `::slotted(<compound-selector>)` | 语法即 `::slotted(<compound-selector>)`；"can be followed by a tree-abiding pseudo-element"，未提及伪类 → 伪类后置无效（夹具钉死） | css-shadow-1 §slotted（L444-490） |
-| `:host(<compound-selector>)` | `:host(<compound-selector>)`；裸 `:host` 亦合法 | css-shadow-1 §host（L313-380） |
-| `:has-slotted` | 裸 `:has-slotted` 匹配"有非空扁平 slot 节点"；**功能性形式属未来版本**（规范明说），夹具 `:has-slotted(div + div)` 断言接受选择器 | css-shadow-1 §has-slotted（L548-575） |
-| `:state(<custom-ident>)` | `:state()` 参数是字符串/自定义 ident；仅供自定义元素 | `D:\CSSWG\selectors-5\Overview.md` §state（L271-296）+ HTML custom state |
-| `:heading` / `:heading(<level>#)` | 裸形式合法；函数形式 `:heading(<level>#)`，`<level>` = **type flag 为 integer 的 number-token** | selectors-5 §heading（L296-330） |
-| `:not()` 参数 | `complex-real-selector-list` —— **real** 不含伪元素 → `:not(::before)` 无效 | `D:\CSSWG\selectors-4\Overview.md` §4.3（L1543、L4654-4666） |
-| `:has()` | "pseudo-elements are not valid selectors within `:has()`"（参数内）；`::part(foo):has(li)` 无效由夹具钉死（`:has()` 取 relative-selector-list，属"需要 complex selector 的上下文"，见 §4.5 note L1770-1775） | selectors-4 §4.5（L1754-1775） |
-| 伪元素后置规则 | `<pseudo-compound-selector> = pseudo-element-selector pseudo-class-selector*`；`.foo::before:hover` 合法（§3 L780-784）；但伪元素只能出现在**最右**（subject）复合选择器（夹具：`::part(foo) + ::part(bar)`、`::slotted(foo) + ::slotted(bar)` 均无效） | selectors-4 §3（L762-800、L4665-4672） |
-| `:state` 后置限制 | 仅允许紧跟 `::part(...)`（夹具：`::after:state()` / `::first-letter:state()` / `::slotted():state()` 无效，`::part():state()` 有效） | WPT parse-state.html 夹具（规范未逐条列举，注释注明以夹具为准） |
-
-**本项目既有裁决（沿用）**：WPT 夹具 > 规范文字 > 审计报告文字（见
-PROGRESS 第 15 条旁的 SEL-2 勘误先例）。
+> **状态**：✅ **已完成**（CS-1a~CS-1f 全部满足退出条件，见文末"完成记录"）。
+> **依据**：[docs/plans/2026-09-13-external-css-and-css-sources.md](docs/plans/2026-09-13-external-css-and-css-sources.md)
+> （规划轮已交：现状证据表、决策 D1–D7、批次划分、规范本地源行号）。
+> **上一轮**：W-3b（An+B 符号保真，WPT selectors 99.8%）——记录见 PROGRESS 头部与
+> [docs/wpt-compliance-2026-09-06.md](docs/wpt-compliance-2026-09-06.md)。
 
 ## 任务与退出条件
 
 | # | 任务 | 退出条件 |
 |---|------|---------|
-| S-1 | **AST + 伪元素参数**：`PseudoElement` 增 `argument: Option<PseudoElementArgument>`（`Part(Vec<String>)` / `Slotted(CompoundSelector)`）；`PseudoClassArgument` 增 `Compound(CompoundSelector)`（`:host()` 用）；`specificity.rs` 补新分支 | 编译通过；既有 169+ 测试全绿（含 specificity 用例）；无 `Eq` 依赖破裂（PseudoElement 去掉 `Eq` 派生的影响已排查） |
-| S-2 | **`::part()` / `::slotted()`**：函数形式伪元素解析（`part` = 1+ ident；`slotted` = 单个 compound 选择器）；裸 `::slotted` / `::part(x)` 单冒号形式仍无效；`::slotted(...)` 后不得跟伪类；`::part(...)` 后允许伪类（`:has` 除外）；伪元素仅允许出现在最右复合选择器（禁 `::part(a) + ::part(b)`） | parse-part.html + parse-slotted.html 全绿（45 例，含 invalid/forgiving 两侧） |
-| S-3 | **`:host(<compound>)`**：`:host` 函数形式接受 compound 选择器（裸 `:host` 保持合法）；`:host(:is(div))` / `:host(:not(.a))` / `:host(:is(,,,))`（forgiving）均按夹具 | parse-is-where.html + parse-not.html 的 `:host` 例全绿（16 例） |
-| S-4 | **新伪类**：`:state(<ident>)`（裸形式无效、参数必须是单个 ident、仅可紧跟 `::part`）、`:heading`（裸 + `<integer>#`，非整数/An+B/函数/`of` 全部拒）、`:has-slotted`（裸 + 选择器参数；`::has-slotted` 与 `:has-slotted()` 拒） | parse-state.html + parse-heading.html + parse-has-slotted.tentative.html 全绿（57 例） |
-| S-5 | **real-selector 规则 + An+B 空白**：`:is`/`:where`/`:not`/`:has`/`nth-* of S` 参数内禁止伪元素（`not(::before)` 拒）；An+B 接受"符号与整数之间的空白"与"`)` 前空白"（`( +n + 7 )`、`( 23n\n\n+\n\n123 )`） | parse-not.html 全绿；parse-anplusb.html 的 4 例空白形态转绿（8 例符号例仍红且**计入 W-3b**，故该夹具不进硬断言） |
-| S-6 | **harness + 文档**：把本轮转绿的夹具加入 `HARD_ASSERT_100`（防回归）；`docs/wpt-compliance-2026-09-06.md` 更新实测数字与剩余依赖说明；PROGRESS 行与 goal.md 收尾；selectors 仓库 commit + push | harness 实测 ≥94%；硬断言夹具 0 失败；文档数字与实跑一致；commit 落盘并推送 |
+| CS-1a | **URL 基建**：`muskitty-network` 引 `url = "2"`（非可选，纯 Rust，已在 lock 经 reqwest 传递存在）；新增 `src/url.rs`：`resolve(base, reference)` / `file_url_from_path` / `path_from_file_url` / `is_fetchable_subresource`；pub 签名只出现 `&str`/`String`（对齐 decoupling ADR） | 解析用例表全绿（`../`、`./`、`//host/p`、`?q`、`#f`、百分号与非 ASCII、`file:///D:/x` ↔ `D:\x`、空串、绝对 URL）；scheme 策略表全绿（http→file 拒、file→http 允、`data:` 允、`about:`/`javascript:` 拒）；`cargo test -p muskitty-network` 全绿；fmt/clippy 干净 |
+| CS-1b/c | **采集 + 抓取**：新 `chrome/src/stylesheets.rs`——`collect_sheet_sources`（DOM 先序 = 文档序；`<style>` 取 `text_content()`；`<link>` 按 rel 词表/`href`/`media`/`type`/`title`/`alternate`/`disabled` 语义；首个可用 `<base href>` 作文档 base）；`SheetLoader`（抓取 + 去重缓存 + 上限：单表 8 MiB / 每文档 64 表 / 深度 16 + 失败非致命）；`DocumentFetcher`（http(s) 走网络层 + Content-Type 必须 `text/css`；file 走本地读；`data:` 最小解码；http 页拒 `file://`）；删 `extract_inline_style` 与 4 个调用点 | 采集顺序/属性语义逐条有断言（注释内 `<style>` 不命中、`rel="next stylesheet"`、`type="text/plain"` 跳过、`disabled`、`alternate`、空 `href`）；抓取去重与上限有断言；`render_page` 增 sheets 入口且保留单表旧入口；chrome/workspace 编译与既有测试全绿 |
+| CS-1d | **sheet 级字段**：cascade `prepare_sheets_with_context` 跳过 `disabled`/`alternate` 表、按 `sheet.media` 求值（复用 `eval_media_query_list`）；chrome 把 `media` 属性经 `parse_comma_separated_list_of_component_values` 填入 | cascade 单测：`print` 表被跳过、`disabled` 表被跳过、空/非法 media 语义；端到端：`media="print"` 表不生效 |
+| CS-1e | **`@import`**：加载期就地展开——合法位置判定（其他规则之后出现的 import 无效）、以**导入表自身 URL** 为基准解析、条件导入包 `CssRule::Media`、循环/深度/失败跳过；`layer()`/`supports()` 前缀整条跳过（注释引规范） | 单测：顺序、相对基准、条件包裹、A→B→A 不挂死、深度上限、失败跳过、后置 import 无效；e2e：`@import url("a.css")` 与 `@import "b.css" screen` |
+| CS-1g | **热重载**：`SourceFile` 监视集合扩到「HTML + 该页 file:// 外链表路径」，任一 mtime 变化 → 重新采集/加载 | 改外链 CSS 文件触发重载且像素变化；改 HTML 仍触发 |
+| CS-1f | **UA 样式表（最后做，会改全仓像素预期）**：`chrome/src/ua.css` + `ua.rs`，`render_page` 系列入口把 UA 表置于表列表首位；内容按 HTML §15.3.1/§15.3.2/§15.3.3/§15.3.6/§15.3.7 最小集（逻辑属性按 horizontal-tb 等价物理属性写，偏差记录）；layout `is_non_rendered_tag` 保留为防御并注释指向 UA 表 | 像素断言：7 个此前会出盒的标签（`area/datalist/basefont/noembed/noframes/param/rp`）不再出盒、`<p>`/`<h1>` 默认边距与字号生效、`body` 默认 8px、`[hidden]` 不渲染；chrome/renderer/layout 全量测试绿（预期变化一次性校准并在 commit 说明） |
+| CS-1e2e | **离线端到端**：`std::net::TcpListener` 迷你静态服务器（多文件 fixture） | 7 条断言全绿：相对路径生效、后出现的表胜出、404 表跳过且其余生效、`media="print"` 不生效、`@import` 链以导入表为基准（子目录 fixture）、成环限时返回、`data:` 表生效 |
+| CS-1z | **收尾**：文档（PROGRESS 行、本 goal 完成记录、规划文档状态改"已实施"） | 全量 `cargo test --workspace` + cascade/layout 各自仓库测试全绿；`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 干净；commit 落盘并 push（cascade 改动提交到其独立仓库） |
 
-## 显式非目标（本轮不做）
+## 显式非目标（本轮不做，理由见规划文档"非目标"表）
 
-- An+B 符号保真（28 例）与随之而来的 `Numeric` 公共 API 扩展 → **W-3b**
-- 选择器序列化（`serializations` 字段全程不参与断言，crate 无 serializer）
-- 匹配语义：`:state`/`:heading`/`:has-slotted`/`::part`/`::slotted`/`:host()` **只做解析保真**，
-  匹配侧保持"不匹配"（本套件是 parsing 套件；匹配语义需 shadow DOM 模型，另行成轮）
+- `@import` 的 `layer()`/`supports()` 前缀（整条跳过，注释引规范）
+- CORS / `integrity` / `crossorigin` / `referrerpolicy`
+- alternate 样式表的切换 UI（本轮按 disabled 处理）
+- `Link:` 响应头、`preload`/`prefetch` 等链接类型
+- CSS 编码全解码（BOM 嗅探 + UTF-8 为准，其余 lossy；触发条件已记录）
+- `url()` 相对解析（renderer 无图像管线）
+- 首屏渐进渲染（外链本轮为 render-blocking）
 
 ## 风险与既定裁决
 
-- **AST 公共 API 变更**：`PseudoElement` 增字段、`PseudoClassArgument` 增变体——crate 未发布到
-  crates.io（v0.1.0 本地），消费者仅本仓库（cascade/cssom 经 `selectors` 使用解析 API），
-  已 grep 匹配点：`specificity.rs` 2 处、`simple.rs` 构造 2 处，其余在 tests。
-- **不能过度收紧**：只实现夹具钉死的限制（`:has` 后置、`:state` 后置、伪元素仅最右、
-  real-selector 列表），不发明规范未写的限制；每条注释写明依据（规范行号或夹具名）。
-- **`:has-slotted` 功能性形式是 tentative**：规范明说属未来版本，故按夹具接受选择器参数，
-  在该分支注释标明 tentative 来源，避免后人误以为已成文。
+- **`CssStyleSheet: Send` 未验证**：第一步加静态断言测试；不成立则改为"线程回传文本+元数据，UI 线程建表"（规划 D2）。
+- **签名涟漪**：`render_page` 新增 sheets 入口但保留单表旧入口，把测试改动降到最小；`NavigationDoc.css: String` → `sheets`，`WebView.css` → `sheets`，调用点逐个机械改。
+- **UA 表注入**改变既有像素预期 → 放最后一批，集中一次校准，不保留旧口径兼容分支。
+- **上限是本实现策略**（浏览器无硬限），值写在代码注释与规划文档，触发条件：真实页面命中。
 
-## 完成记录（2026-09-13）
+## 复跑命令
+
+```bash
+cd D:/Muskitty && cargo test -p muskitty-network          # CS-1a
+cd D:/Muskitty && cargo test -p muskitty-chrome           # CS-1b/c/e/g/e2e
+cd D:/Muskitty/crates/muskitty-cascade && cargo test      # CS-1d
+cd D:/Muskitty/crates/muskitty-layout && cargo test       # CS-1f 回归
+cd D:/Muskitty && cargo test --workspace
+cd D:/Muskitty && cargo clippy --workspace --all-targets -- -D warnings
+cd D:/Muskitty && cargo fmt --all -- --check
+```
+
+## 完成记录（2026-09-14）
 
 | # | 交付 | commit | 验证 |
 |---|------|--------|------|
-| S-1 | AST：`PseudoElement{name,legacy,argument}` + `PseudoElementArgument{Part,Slotted}` + `PseudoClassArgument::Compound`；specificity 补 `:host()`（伪类 + 参数特异性，css-shadow-1 L336-343） | selectors `f8d2002`（已推送） | 既有 169 测试全绿（无 `Eq` 依赖破裂） |
-| S-2 | `::part(<ident>+)` / `::slotted(<compound-selector>)`；伪元素仅最右复合；`::slotted` 后禁伪类；`:has` 不可后置 | 同上 | parse-part 26/26、parse-slotted 9/9 |
-| S-3 | `:host(<compound-selector>)`，参数与嵌套 `:is/:where/:not` 递归 compound-only | 同上 | parse-is-where、parse-not 的 host 例全绿（16 例） |
-| S-4 | `:state(<custom-ident>)` + 仅跟 `::part`；`:heading` / `:heading(<integer>#)`；`:has-slotted`；`:lang()`/`:dir()` 注册 | 同上 | parse-state 11/11、parse-heading 10/10、parse-has-slotted 18/19 |
-| S-5 | real-selector-list 禁伪元素（解析失败路径，令 `:not(::before)` invalid 而 `:is(::before)` forgiving-valid）；An+B 空白形态 | 同上 | parse-not 3/3；An+B 空白 4 例转绿 |
-| S-5b | **附带**：css-tokenizer 的 `--`/`--0` 被切成 `Delim`（§4.3.1 的 `-` 分支漏 §4.3.9 子句） | css-tokenizer `23ec4ec`（已推送） | 新增 `double_dash_is_ident`；tokenizer 84 测试全绿 |
-| S-6 | harness 硬断言扩到 9 夹具；新增 13 例回归测试 `tests/parser_shadow_wpt.rs`；文档（wpt-compliance 第七节 / PROGRESS / 本 goal） | 主仓库文档 commit | 硬断言夹具 0 失败 |
+| CS-1a | `muskitty-network::url`：`resolve` / `file_url_from_path` / `path_from_file_url` / `scheme` / `is_fetchable_subresource` / `decode_data_url`；`url = "2"` 非可选依赖（原为 reqwest 传递依赖），pub 签名只出 `&str`/`Vec<u8>` | 主仓库 `30cfca6` | 12 模块测试（相对/协议相对/query/fragment/百分号与 CJK/file 往返/策略表/data URL 变体与错误）；network 10 + 4 doc-tests 全绿 |
+| CS-1b/c | chrome `stylesheets` 模块：DOM 文档序采集（属性语义表 + `<base>`）、`DocumentFetcher`（scheme 分发 + MIME + BOM 编码）、`SheetLoader`（去重缓存 + 三项上限 + 失败非致命）；删 `extract_inline_style` 与 4 个调用点 | 主仓库 `6f25857` | 22 模块测试（顺序/注释与脚本免疫/属性语义表/base/上限/去重/`Send` 断言/fetcher 跨 scheme 拒绝） |
+| CS-1c | 接线：`render_page_with_sheets`（旧单表入口保留）、`NavigationDoc{final_url,html,sheets,is_html,stats}`、导航线程内抓表、`WebView.sheets`、file 模式与 `file://` 导航走同一加载路径 | 同上 | chrome 108 lib + 3 headless + 6 probe 全绿；`--no-default-features` check 通过 |
+| CS-1d | cascade：sheet 级 `disabled`/`alternate`/`media` 门控（复用 `eval_media_query`） | cascade `6ed08a0`（已 push） | 6 条新 filter 测试；cascade 231 全绿 |
+| CS-1e | `@import` 加载期就地展开：合法位置、以导入表 URL 为基准、条件导入包 `@media`、循环/深度/失败跳过、`layer()`/`supports()` 前缀整条跳过 | 随 `6f25857` | 7 条模块测试 + 2 条 e2e（子目录相对基准、成环限时、内嵌表以文档为基准） |
+| CS-1e2e | 离线多文件服务器（`TcpListener`）+ 9 条全链路像素断言 | 随 `6f25857` | 全绿（相对路径/后表胜出/404/media=print/disabled/@import 链/成环/data:/内嵌 import） |
+| CS-1g | 热重载监视集合扩到 HTML + 其 `file://` 样式表 | 随 `6f25857` | `hot_reload_picks_up_external_css_change`（只改 CSS → 重载 → 声明值 red→green） |
+| CS-1f | 最小 UA 样式表（`ua.css` + `ua.rs`，HTML §15 Rendering，只用有消费方的属性，未写规则与偏差逐条记录）+ `render_page_with_sheets` 统一注入（`OnceLock` 缓存） | 主仓库 `0f7df1e` | 7 条像素断言（15 标签清单中此前出盒的 7 个零墨迹 + 对照、body 8px、h1 2em/边距、p 1em、`[hidden]` 与作者覆盖、列表/引用缩进、hr） |
+| CS-1f-doc | layout `is_non_rendered_tag` 注释化为防御并记录删除条件 | layout `ef63936`（已 push） | layout 127 全绿 |
 
-**下游回归**（tokenizer/selectors 属公共底层）：css-tokenizer 84、css-parser 100、
-css-values 150、cssom 104、cascade 225、layout 127、html5-parser 113、workspace 218 —— 全绿，
-`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 干净。
+**全量复跑**：`cargo test --workspace`（chrome 108+3+6+9+7、renderer 110、network 21+4）、cascade 231、layout 127 全绿；`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 干净。
 
-**已知偏差（1 例，已记录）**：`parse-has-slotted.tentative.json` 把
-`:has-slotted(div + div)` 判 valid、`:has-slotted(div > span)` 判 invalid；`+` 与 `>`
-同为组合器，任何单一选择器文法都无法同时满足。本实现取与 `::slotted()` 一致的
-"参数为复合选择器"读法（两者皆 invalid），并在 harness 注释、实现注释与本记录三处
-写明来源与理由；该夹具不做硬断言。项目既有先例支持"夹具自相矛盾时记录并偏离"
-（html5lib XML-only 3 例、html5-parser `tests_innerHTML_1` #76）。
+**实测语义**（与新行为对照的验收点）：外链 CSS（含同目录/子目录相对路径）端到端生效且像素正确；后出现的表在等特异性下胜出；404/抓取失败的表跳过而页面其余照渲；`media="print"` 与 `disabled` 表不生效；`@import` 以**导入表自身** URL 为基准解析、成环限时返回；`data:text/css,...` 表生效；UA 表使 7 个原出盒标签零墨迹、body 8px、h1 32px/边距 21.44px、`ul` 左缩进 40px、`[hidden]` 隐藏且作者 `display:block` 可覆盖。
 
-**Mimosa 交互记录**：本轮 commit/push 仍为"未取得完整扫描结论"的兼容放行警告；
-另在 `compound.rs` 的多处机械替换时用过一次 Bash+python 改源码（随后改回 Edit），
-该做法与仓库约定相悖，已停止。
+**已知偏差与债务（已记录，不修）**：`@import` 的 `layer()`/`supports()` 前缀整条跳过（`supports` 不匹配时规范要求不得抓取，`layer()` 按 media 求值会误丢整表）；外链为 render-blocking（无首屏渐进渲染）；编码 BOM 嗅探 + UTF-8 为准，其余 lossy；`<base href>` 影响全部来源（规范只影响其后出现的 URL）；`url()` 相对解析随图像管线另排；layout 硬编码跳过表与 UA 表双轨（删除条件写在函数注释）。
 
-**W-3b 待办（下一轮，已定方案）**：An+B 的 28 例需要"number-token 是否带符号"。
-落点：css-tokenizer `Numeric` 增加符号位（`consume_a_number` 按 §4.3.13 第 7 步
-本应返回 sign），随后 selectors 的 `an_plus_b.rs` 按 `<signed-integer>` /
-`<signless-integer>` 区分：
-- `n 5` / `-n 5` 该拒（plain `n` 后只接带符号整数）；
-- `n- +5` / `n- -5` / `5n + +5` / `5n - -5` 该拒（符号位后只接无符号整数）；
-- `n-+1` / `-n-+1` 该拒（`<ndash-ident>` 后同上）。
-代价：`Numeric` 是已发布 crate 的 pub struct，加字段会波及约 48 个构造点
-（cascade/layout/css-parser 测试里的合成值构造），需一次跨仓库协调 + 版本 0.2.1 发布。
+**Mimosa 交互记录**：本轮 commit/push 与 layout/cascade 两个独立仓库的推送都收到"未取得完整扫描结论"的兼容放行警告；按仓库约定继续。另：曾试图用 Bash 追加测试文件被 hook 拦下，已改用 Edit 提交同一内容。

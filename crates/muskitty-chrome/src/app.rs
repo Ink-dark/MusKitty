@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use muskitty_cssom::CssStyleSheet;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -21,6 +22,7 @@ use winit::window::{Window, WindowId};
 
 use crate::navigation::{self, NavigationKind, NavigationOutcome};
 use crate::shortcut::{self, InputEvent, Key, ShortcutAction};
+use crate::stylesheets::{load_stylesheets, DocumentFetcher, LoadOptions};
 use crate::webview::WebViewCollection;
 
 use crate::chrome::input::{apply_hover, apply_key, apply_mouse, ChromeEffect, ChromeKey};
@@ -39,6 +41,62 @@ pub const HOT_RELOAD_POLL: Duration = Duration::from_millis(200);
 struct SourceFile {
     path: PathBuf,
     mtime: Option<std::time::SystemTime>,
+    /// CS-1g：该页 file:// 外链样式表的路径与 mtime——改 CSS 也触发重载。
+    css_files: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+}
+
+/// 一个被监视文件当前的 mtime（缺失 → None）。
+fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+/// 文件模式/`file://` 导航的加载结果。
+struct FileDocument {
+    html: String,
+    sheets: Vec<CssStyleSheet>,
+    /// HTML 引用到的本地样式表路径（file:// 表；热重载监视用）。
+    css_files: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+}
+
+/// 读取本地 HTML 并加载其样式表（内嵌 + `file://`/http(s) 外链 + `@import`）。
+///
+/// file 模式同步读（文件小、调用点本就在 UI 线程/加载点）；http(s) 外链
+/// 在 file 页面里也被允许（浏览器同）——此处同步抓取，与本进程既有 file
+/// 分支语义一致（导航级低频事件）。
+fn load_file_document(path: &str) -> Result<FileDocument, Box<dyn std::error::Error>> {
+    let html = std::fs::read_to_string(path)?;
+    let document_url = muskitty_network::url::file_url_from_path(path)
+        .ok_or_else(|| format!("unmappable file path: {path}"))?;
+    let dom = muskitty_html5_parser::parse(&html);
+    let sheets = {
+        let mut fetcher = DocumentFetcher::new(&document_url);
+        let (sheets, stats) = load_stylesheets(
+            &dom,
+            &document_url,
+            &mut |url| fetcher.fetch_text(url),
+            &LoadOptions::default(),
+        );
+        crate::page::report_load_failures(&stats);
+        sheets
+    };
+    // 监视集合：只含 file:// 表（http(s) 表无 mtime 可轮询）。
+    let mut css_files = Vec::new();
+    for sheet in &sheets {
+        let Some(location) = &sheet.location else {
+            continue;
+        };
+        let Some(css_path) = muskitty_network::url::path_from_file_url(location) else {
+            continue;
+        };
+        let css_path = PathBuf::from(css_path);
+        let mtime = file_mtime(&css_path);
+        css_files.push((css_path, mtime));
+    }
+    Ok(FileDocument {
+        html,
+        sheets,
+        css_files,
+    })
 }
 
 /// RGBA8 → softbuffer 0RGB u32（row-major；softbuffer 0.4 契约 =
@@ -145,17 +203,17 @@ impl App {
         }
     }
 
-    /// 文件模式：加载自包含 HTML 文件（含 `<style>`）为首标签并**监视
-    /// 变更（热重载）**——文件修改后 200ms 内自动重渲染，无需重启。
+    /// 文件模式：加载 HTML 文件（内嵌 + 外链 CSS）为首标签并**监视变更
+    /// （热重载）**——HTML 或其 `file://` 样式表修改后 200ms 内自动重渲染，
+    /// 无需重启。
     pub fn with_source_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let html = std::fs::read_to_string(path)?;
-        let mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
-        let css = crate::page::extract_inline_style(&html);
+        let doc = load_file_document(path)?;
+        let mtime = file_mtime(&PathBuf::from(path));
         let mut app = Self::new("", "");
         {
             let view = app.views.active_mut();
-            view.html = html;
-            view.css = css;
+            view.html = doc.html;
+            view.set_sheets(doc.sheets);
             let name = std::path::Path::new(path)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -166,6 +224,7 @@ impl App {
         app.source = Some(SourceFile {
             path: PathBuf::from(path),
             mtime,
+            css_files: doc.css_files,
         });
         Ok(app)
     }
@@ -177,39 +236,41 @@ impl App {
         event_loop.run_app(&mut self).expect("run app");
     }
 
-    /// 轮询源文件：mtime 变化 → 重新读入内容到源标签并标脏。返回是否变化。
+    /// 轮询源文件：HTML 或其 `file://` 样式表的 mtime 变化 → 重新完整加载
+    /// （HTML + 全部样式表）到源标签并标脏。返回是否重读了内容。
     fn poll_source(&mut self) -> bool {
-        let Some(path) = self.source.as_ref().map(|s| s.path.clone()) else {
+        let Some(source) = self.source.as_ref() else {
             return false;
         };
-        let mtime = std::fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok());
-        if mtime == self.source.as_ref().and_then(|s| s.mtime) {
+        let html_changed = file_mtime(&source.path) != source.mtime;
+        let css_changed = source
+            .css_files
+            .iter()
+            .any(|(path, mtime)| file_mtime(path) != *mtime);
+        if !html_changed && !css_changed {
             return false;
         }
+        let path = source.path.clone();
         // 文件读失败（编辑器原子写瞬间）保留旧内容，下轮再试。
-        let Ok(html) = std::fs::read_to_string(&path) else {
+        let Ok(doc) = load_file_document(&path.to_string_lossy()) else {
             return false;
         };
+        let mtime = file_mtime(&path);
         if let Some(src) = self.source.as_mut() {
             src.mtime = mtime;
+            src.css_files = doc.css_files;
         }
-        let css = crate::page::extract_inline_style(&html);
-        let title = std::path::Path::new(&path)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned());
+        let title = path.file_name().map(|n| n.to_string_lossy().into_owned());
         let Some(view) = self.views.get_mut(self.source_tab) else {
             return false;
         };
-        let changed = view.html != html;
-        view.html = html;
-        view.css = css;
+        view.html = doc.html;
+        view.set_sheets(doc.sheets);
         if let Some(t) = title {
             view.set_title(t);
         }
         view.mark_needs_repaint();
-        changed
+        true
     }
 
     /// 启动浏览器窗口（阻塞直到关闭）。
@@ -261,7 +322,7 @@ impl App {
         if dirty {
             let out = {
                 let a = self.views.active();
-                crate::page::render_page(&a.html, &a.css, vw, vh, scale)
+                crate::page::render_page_with_sheets(&a.html, &a.sheets, vw, vh, scale)
             };
             match out {
                 Ok(muskitty_renderer::RenderOutput::Pixels {
@@ -375,10 +436,10 @@ impl App {
                 {
                     let view = self.views.active_mut();
                     view.navigation_epoch += 1;
-                    match std::fs::read_to_string(&path) {
-                        Ok(html) => {
-                            view.css = crate::page::extract_inline_style(&html);
-                            view.html = html;
+                    match load_file_document(&path) {
+                        Ok(doc) => {
+                            view.html = doc.html;
+                            view.set_sheets(doc.sheets);
                             let name = std::path::Path::new(&path)
                                 .file_name()
                                 .map(|n| n.to_string_lossy().into_owned())
@@ -386,7 +447,7 @@ impl App {
                             view.set_title(name);
                         }
                         Err(e) => {
-                            view.css = String::new();
+                            view.set_sheets(Vec::new());
                             view.html = navigation::error_page(&path, &e.to_string());
                             view.set_title(&path);
                         }
@@ -398,7 +459,7 @@ impl App {
                 {
                     let view = self.views.active_mut();
                     view.navigation_epoch += 1;
-                    view.css = String::new();
+                    view.set_sheets(Vec::new());
                     view.html = url_placeholder_page(&url);
                     view.set_title(&url);
                 }
@@ -432,11 +493,11 @@ impl App {
             match outcome.result {
                 Ok(doc) => {
                     view.html = doc.html;
-                    view.css = doc.css;
+                    view.set_sheets(doc.sheets);
                     view.set_title(doc.final_url);
                 }
                 Err(message) => {
-                    view.css = String::new();
+                    view.set_sheets(Vec::new());
                     view.html = navigation::error_page(&outcome.url, &message);
                     view.set_title(&outcome.url);
                 }
@@ -636,7 +697,9 @@ mod tests {
             result: Ok(NavigationDoc {
                 final_url: "https://example.com/".to_string(),
                 html: "<html>new</html>".to_string(),
-                css: "p{color:red}".to_string(),
+                sheets: vec![crate::stylesheets::author_sheet("p{color:red}")],
+                is_html: true,
+                stats: Default::default(),
             }),
         })
         .unwrap();
@@ -646,7 +709,7 @@ mod tests {
         // 到站：应用 + 重绘；断开的接收器被清理。
         assert!(app.drain_navigation_results());
         assert_eq!(app.views.active().html, "<html>new</html>");
-        assert_eq!(app.views.active().css, "p{color:red}");
+        assert_eq!(app.views.active().sheets.len(), 1);
         assert_eq!(app.views.active().title, "https://example.com/");
         assert!(app.views.active().needs_repaint());
         assert!(app.nav_results.is_empty());
@@ -661,7 +724,9 @@ mod tests {
             result: Ok(NavigationDoc {
                 final_url: "https://stale.example/".to_string(),
                 html: "<html>stale</html>".to_string(),
-                css: String::new(),
+                sheets: Vec::new(),
+                is_html: true,
+                stats: Default::default(),
             }),
         })
         .unwrap();
@@ -690,7 +755,7 @@ mod tests {
         assert!(app.drain_navigation_results());
         assert!(app.views.active().html.contains("Navigation failed"));
         assert!(app.views.active().html.contains("connection refused"));
-        assert!(app.views.active().css.is_empty());
+        assert!(app.views.active().sheets.is_empty());
         assert_eq!(app.views.active().title, "https://down.example");
     }
 
@@ -706,7 +771,8 @@ mod tests {
         let mut app = App::new("<html>old</html>", "");
         app.navigate_active(&format!("file:///{}", path.to_string_lossy()));
         assert!(app.views.active().html.contains("nav-file"));
-        assert_eq!(app.views.active().css, "p{color:blue}\n");
+        assert_eq!(app.views.active().sheets.len(), 1);
+        assert!(app.views.active().sheets[0].location.is_none());
         assert_eq!(app.views.active().title, "muskitty_nav_file_test.html");
         assert!(app.views.active().needs_repaint());
         let _ = std::fs::remove_file(&path);
@@ -762,6 +828,57 @@ mod tests {
         // 无变更再轮询：false。
         assert!(!app.poll_source());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn hot_reload_picks_up_external_css_change() {
+        // CS-1g：监视集合含 HTML + 其 file:// 外链样式表；只改 CSS 也重载。
+        let dir = std::env::temp_dir().join("muskitty_hot_reload_css_fixture");
+        std::fs::create_dir_all(&dir).unwrap();
+        let html_path = dir.join("index.html");
+        let css_path = dir.join("style.css");
+        std::fs::write(
+            &html_path,
+            r#"<!doctype html><html><head><link rel="stylesheet" href="style.css"></head><body><div></div></body></html>"#,
+        )
+        .unwrap();
+        std::fs::write(&css_path, "div{color:red}").unwrap();
+
+        let mut app = App::with_source_file(&html_path.to_string_lossy()).expect("load file");
+        assert_eq!(app.views.active().sheets.len(), 1);
+        assert_eq!(app.source.as_ref().unwrap().css_files.len(), 1);
+        assert_eq!(declaration_texts(app.views.active(), "color"), vec!["red"]);
+        // 未变更：false。
+        assert!(!app.poll_source());
+
+        // 只动 CSS 文件 → 重载并换成新值。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&css_path, "div{color:green}").unwrap();
+        assert!(app.poll_source(), "CSS mtime 变化应触发重载");
+        assert_eq!(
+            declaration_texts(app.views.active(), "color"),
+            vec!["green"]
+        );
+        assert!(app.views.active().needs_repaint());
+        // 无变更再轮询：false。
+        assert!(!app.poll_source());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 取某属性的全部声明值文本（测试用；序列化 component values）。
+    fn declaration_texts(view: &crate::webview::WebView, property: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for sheet in &view.sheets {
+            for rule in &sheet.css_rules {
+                if let muskitty_cssom::CssRule::Style(style) = rule {
+                    if let Some(value) = style.style.get_property_value(property) {
+                        out.push(muskitty_cssom::serialize_component_values(value));
+                    }
+                }
+            }
+        }
+        out
     }
 
     #[test]

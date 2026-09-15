@@ -57,9 +57,9 @@ cssom `charset_at_rule_is_dropped` / `roundtrip_other_at_rule_statement`）。
 
 ## 四、实测差距（未修复，按 crate 归档）
 
-> **更新（2026-09-13）**：本节 selectors 的 128 例差距已修掉 96 例，套件升至
-> **94.3%（479/508）**；剩余 29 例（28 例 An+B 符号 + 1 例 tentative 夹具
-> 自相矛盾）的说明见文末第七节。
+> **更新（2026-09-13）**：本节 selectors 的 128 例差距已修掉 127 例，套件升至
+> **99.8%（507/508）**；剩余唯一 1 例（`:has-slotted(div + div)`，tentative 夹具
+> 自相矛盾）的说明见文末第七节与第八节。
 
 ### muskitty-selectors — 128 失败（74.8%）
 
@@ -148,3 +148,19 @@ has-slotted 保持 informational（前者待 W-3b，后者含已知偏差）。
 
 另有针对新语义的独立回归测试 `crates/muskitty-selectors/tests/parser_shadow_wpt.rs`
 （13 例，正反两向 + AST 形状断言）。
+
+## 八、修复记录（2026-09-13，W-3b：An+B 符号保真）
+
+第七节剩下的 28 例全部是同一根因，本轮修掉，套件到 **99.8%（507/508）**。
+
+| 项 | 内容 |
+|----|------|
+| 根因 | CSS Syntax §7 L3377-3378 区分 `<signed-integer>`（integer 类型 + **有**符号字符）与 `<signless-integer>`（**无**符号字符），但 tokenizer 的 `consume_a_number` 算出了 sign 又丢弃（§4.3.13 第 7 步本应返回），使 `5` 与 `+5` 在 token 层同类 |
+| tokenizer | `consume_a_number` 返回 sign；`Numeric` 增 `has_sign: bool` + `Numeric::new()`（css-tokenizer `aaeebd9`，**0.2.0 → 0.3.0**，加 pub 字段属破坏性变更） |
+| 下游跟进 | css-parser `f0e7a56`、css `fc1621e`（依赖声明与测试字面量）；cascade `0f32951`、layout `a22bd84`（合成值补 `has_sign: false`，共 28 处，无一处读该标志） |
+| selectors | `finish_after_n` 按 §7 落实三类 B 形态的符号约束（selectors `9371ab6`） |
+| 收紧的形态 | plain `n` / `-n` / `<n-dimension>` 的 B 必须是**带符号**整数（`n +5` ✓ / `n 5` ✗）；`n-` / `-n-` / `<ndash-dimension>` 与 `['+'\|'-']` 之后必须是**无符号**整数（`n- 5` ✓ / `n- +5` ✗、`n-+1` ✗、`5n + +5` ✗）；裸 `<integer>`（`5` / `+5` / `-5`）符号不限 |
+| 未改 | `Display` 仍不打印 `+`（既有行为，避免波及 CSSOM 序列化断言）；`:has-slotted(div + div)` 那 1 例维持上一批的"夹具自相矛盾"判定 |
+
+`HARD_ASSERT_100` 增至 **11 个夹具**（第七节的 9 个 + An+B 两个）。回归测试
+`tests/parser_shadow_wpt.rs` 增 4 组符号矩阵（38 条断言，正反两向 + 裸整数对照）。
