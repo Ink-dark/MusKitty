@@ -1,6 +1,6 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-09-14 | **CS-1（外链 CSS 与其他 CSS 来源接入）**：`<link rel=stylesheet>` **从零到通**——采集/抓取/`@import` 展开/UA 样式表四条线落地。修复前实测（规划文档证据表）：`<style>` 靠**字符串扫描**提取（忽略全部属性、能命中注释/脚本里的 `<style`）、外链 CSS 完全无实现（`navigation.rs` 注释明示"不在本轮范围"）、无任何 base URL 与相对 URL 解析能力、`CssStyleSheet` 的 `location/media/title/alternate/disabled` 字段**无人填也无人读**、`CssRule::Import` 解析后被 cascade 直接跳过、无 UA 样式表（layout 用硬编码 8 标签跳过表顶替，规范 §15.3.1 的 15 个非渲染标签里 `area/datalist/basefont/noembed/noframes/param/rp` 会出盒，`p/h1/body` 无默认边距字号）。落地：`muskitty-network` 新增 `url` 模块（`resolve` / `file://` ↔ 路径 / 子资源 scheme 策略 / `data:` 解码，委托 URL Standard 参考实现 `url` crate，pub 签名只出 `&str`，`30cfca6`）；chrome 新增 `stylesheets` 模块（DOM 先序 = 文档序采集、`rel` 词表/`type`/`media`/`title`/`alternate`/`disabled` 语义、首个可用 `<base href>`、抓取去重缓存 + 单表 8 MiB/每文档 64 表/深度 16 上限、失败非致命、`@import` 加载期就地展开含循环与 `layer()`/`supports()` 前缀的显式跳过）、`render_page_with_sheets` 多表入口、`WebView.sheets` 取代 css 字符串、文件模式与热重载（监视 HTML + 其 `file://` 样式表，改 CSS 也重载，`6f25857`）；cascade 消费 sheet 级 `disabled`/`alternate`/`media`（`6ed08a0`，独立仓库）；chrome 新增最小 UA 样式表（HTML §15 Rendering，只用有消费方的属性，`0f7df1e`）+ layout 的硬编码跳过表注释化为防御（`ef63936`）。验证：chrome 108 lib + 3 headless + 6 probe + **9 离线多文件 e2e**（相对路径 / 后表胜出 / 404 非致命 / `media=print` 跳过 / `disabled` 跳过 / `@import` 链以导入表为基准 / 成环限时 / `data:` 表 / 内嵌 `@import` 以文档为基准，全像素断言）+ **7 UA 像素断言**（7 个原出盒标签零墨迹、body 8px、h1 2em 与边距、`[hidden]` 与作者覆盖、列表/引用缩进、hr 线）；cascade 231 / layout 127 / workspace 218 全绿；fmt 与 clippy `-D warnings` 干净。
+> 最后更新: 2026-09-14 | **CS-1（外链 CSS 与其他 CSS 来源接入）**：`<link rel=stylesheet>` **从零到通**——采集/抓取/`@import` 展开/UA 样式表四条线落地。修复前实测（规划文档证据表）：`<style>` 靠**字符串扫描**提取（忽略全部属性、能命中注释/脚本里的 `<style`）、外链 CSS 完全无实现（`navigation.rs` 注释明示"不在本轮范围"）、无任何 base URL 与相对 URL 解析能力、`CssStyleSheet` 的 `location/media/title/alternate/disabled` 字段**无人填也无人读**、`CssRule::Import` 解析后被 cascade 直接跳过、无 UA 样式表（layout 用硬编码 8 标签跳过表顶替，规范 §15.3.1 的 15 个非渲染标签里 `area/datalist/basefont/noembed/noframes/param/rp` 会出盒，`p/h1/body` 无默认边距字号）。落地：`muskitty-network` 新增 `url` 模块（`resolve` / `file://` ↔ 路径 / 子资源 scheme 策略 / `data:` 解码，委托 URL Standard 参考实现 `url` crate，pub 签名只出 `&str`，`30cfca6`）；chrome 新增 `stylesheets` 模块（DOM 先序 = 文档序采集、`rel` 词表/`type`/`media`/`title`/`alternate`/`disabled` 语义、首个可用 `<base href>`、抓取去重缓存 + 单表 8 MiB/每文档 64 表/深度 16 上限、失败非致命、`@import` 加载期就地展开含循环与 `layer()`/`supports()` 前缀的显式跳过）、`render_page_with_sheets` 多表入口、`WebView.sheets` 取代 css 字符串、文件模式与热重载（监视 HTML + 其 `file://` 样式表，改 CSS 也重载，`6f25857`）；cascade 消费 sheet 级 `disabled`/`alternate`/`media`（`6ed08a0`，独立仓库）；chrome 新增最小 UA 样式表（HTML §15 Rendering，只用有消费方的属性，`0f7df1e`）+ layout 的硬编码跳过表注释化为防御（`ef63936`）。验证：chrome 108 lib + 3 headless + 6 probe + **9 离线多文件 e2e**（相对路径 / 后表胜出 / 404 非致命 / `media=print` 跳过 / `disabled` 跳过 / `@import` 链以导入表为基准 / 成环限时 / `data:` 表 / 内嵌 `@import` 以文档为基准，全像素断言）+ **7 UA 像素断言**（7 个原出盒标签零墨迹、body 8px、h1 2em 与边距、`[hidden]` 与作者覆盖、列表/引用缩进、hr 线）；cascade 231 / layout 127 / workspace 269 全绿（chrome 108+3+6+9+7 / renderer 51+17+42 / network 12+10+4 doc-tests）；fmt 与 clippy `-D warnings` 干净。
 >
 > 上一轮（2026-09-13）**W-3b（An+B 符号保真，WPT 选择器套件收尾）**：`css/selectors/parsing` 从 **94.3%（479/508）** 提到 **99.8%（507/508）**——第七节剩下的 28 例全是同一根因：§7 区分 `<signed-integer>`（integer 类型 + **有**符号字符）与 `<signless-integer>`（**无**符号字符），而 tokenizer 的 `consume_a_number` 算出了 sign 又丢弃（§4.3.13 第 7 步本应返回），使 `5` 与 `+5` 在 token 层同类。修复：`Numeric` 增 `has_sign`（css-tokenizer **0.2.0 → 0.3.0**，加 pub 字段属破坏性变更，`aaeebd9`）；下游字面量机械跟进（css-parser `f0e7a56` / css `fc1621e` / cascade `0f32951` / layout `a22bd84`，共 28 处合成值，无一处读该标志）；selectors `finish_after_n` 落实 §7 三类 B 形态（`n +5` ✓ / `n 5` ✗ / `n- 5` ✓ / `n- +5` ✗ / `5n + +5` ✗，裸 `<integer>` 符号不限，`9371ab6`）。`HARD_ASSERT_100` 增至 11 个夹具，符号矩阵回归 38 条断言。剩余唯一 1 例为已记录的 tentative 夹具自相矛盾（`:has-slotted(div + div)`）。全链复跑：tokenizer 85 / css-parser 100 / css-values 150 / cssom 104 / html5-parser 113 / selectors 186 / cascade 225 / layout 127 / workspace 218
 >
@@ -18,21 +18,21 @@
 
 | 模块 | 状态 | 规范覆盖 | 测试通过率 | crates.io | 独立仓库 |
 |------|------|---------|-----------|-----------|---------|
-| **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | v0.1.2 | muskitty-dev/muskitty-html5-tokenizer |
-| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | WPT tree-construction 99.0% (1905/1924, 14 script-on skipped) | v0.1.2 | muskitty-dev/muskitty-html5-parser |
-| **muskitty-dom** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | v0.1.0 | muskitty-dev/muskitty-dom |
+| **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | v0.1.4 | muskitty-dev/muskitty-html5-tokenizer |
+| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | WPT tree-construction 99.0% (1905/1924, 14 script-on skipped) | v0.2.1 | muskitty-dev/muskitty-html5-parser |
+| **muskitty-dom** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | v0.2.1 | muskitty-dev/muskitty-dom |
 | **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking + `Numeric::has_sign`（§4.3.13 第 7 步的 sign，供 An+B 区分 signed/signless） | 单元全绿 + WPT css/css-syntax tokenizer 层 100% (99/99) | v0.2.1 已发布（含 `--`/`--0` ident 修复）/ 本地 0.3.0 待发布（has_sign，破坏性） | muskitty-dev/muskitty-css-tokenizer |
-| **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 单元全绿 + WPT css/css-syntax parser 层 100% (27/27) | v0.2.0 | muskitty-dev/muskitty-css-parser |
-| **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.5.0 | muskitty-dev/muskitty-css |
-| **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 + L5 §state/§heading + Shadow L1（`::part`/`::slotted`/`:host()`/`:has-slotted`）+ An+B 符号保真（§7 signed/signless） | 单元全绿 + WPT selectors/parsing **99.8% (507/508)**，11 个夹具硬断言 | v0.1.0 | muskitty-dev/muskitty-selectors |
-| **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 单元全绿 + WPT 数值语法 100% (16/16) | v0.1.0 | muskitty-dev/muskitty-css-values |
-| **muskitty-cssom** | ✅ 完成 | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | 81 测试全绿 | v0.1.0 | muskitty-dev/muskitty-cssom |
-| **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 + Backgrounds L3 §4（border 方向性简写）+ UI L4 §4（outline 简写）+ Inline L3 §4.2 / Text L3 §2.1（line-height / text-transform 使用值） | 225 测试全绿 (101 lib + 31 filter + 73 集成 + 19 style_tree + 1 doctest) | 本地 v0.1.0 (未发布) | muskitty-dev/muskitty-cascade (已剥离) |
-| **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3（含 border 盒模型）+ Flexbox L1 §4-§8 + Inline L3 §4.2（行高测量）+ Text L3 §2.1（转换后文本测量） + taffy 0.12 集成 | 121 测试全绿 | 本地 v0.1.0 (未发布) | 🔗 muskitty-dev/muskitty-layout (已剥离) |
-| **muskitty-renderer** | ✅ Phase 4 B-3/B-4 | tiny-skia 后端：DOM→CSS→Layout→Render 全链路 + HTML+CSS→PNG demo | — | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
+| **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 单元全绿 + WPT css/css-syntax parser 层 100% (27/27) | v0.3.1 | muskitty-dev/muskitty-css-parser |
+| **muskitty-css** | ✅ 完成 (facade) | 组合 tokenizer + parser | — | v0.6.0 | muskitty-dev/muskitty-css |
+| **muskitty-selectors** | ✅ 完成 | Selectors L4 §3/§4/§5/§6/§13/§14/§15/§17/§18 + L5 §state/§heading + Shadow L1（`::part`/`::slotted`/`:host()`/`:has-slotted`）+ An+B 符号保真（§7 signed/signless） | 单元全绿 + WPT selectors/parsing **99.8% (507/508)**，11 个夹具硬断言 | v0.2.1 | muskitty-dev/muskitty-selectors |
+| **muskitty-css-values** | ✅ 完成 | CSS Values L4 §4/§5/§6/§8/§9 + CSS Variables §2/§3 | 单元全绿 + WPT 数值语法 100% (16/16) | v0.1.1 | muskitty-dev/muskitty-css-values |
+| **muskitty-cssom** | ✅ 完成 | CSSOM §3/§8.1/§8.4/§8.5/§8.6 | 104 测试全绿 | v0.1.1 | muskitty-dev/muskitty-cssom |
+| **muskitty-cascade** | ✅ 完成 | CSS Cascade L5 §4.1-§4.4/§5/§6.1/§7 + Backgrounds L3 §4（border 方向性简写）+ UI L4 §4（outline 简写）+ Inline L3 §4.2 / Text L3 §2.1（line-height / text-transform 使用值）+ CS-1d（sheet 级 disabled/alternate/media 门控） | 231 测试全绿 | v0.1.1 | muskitty-dev/muskitty-cascade (已剥离) |
+| **muskitty-layout** | ✅ 完成 | CSS Display L3 §2 + Box Model L3 §2/§3（含 border 盒模型）+ Flexbox L1 §4-§8 + Inline L3 §4.2（行高测量）+ Text L3 §2.1（转换后文本测量） + taffy 0.12 集成 | 127 测试全绿 | v0.1.1 | 🔗 muskitty-dev/muskitty-layout (已剥离) |
+| **muskitty-renderer** | ✅ Phase 4 B-3/B-4 | tiny-skia 后端：DOM→CSS→Layout→Render 全链路 + HTML+CSS→PNG demo | 51 + 17 + 42 测试全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | **muskitty-chrome** | ✅ 窗口层 + CSS 来源接入 (CS-1) | 自绘 chrome（标签栏/工具栏/地址栏）+ winit 窗口 + 地址栏导航（http/https/file）+ **样式表来源**：DOM 文档序采集（`<style>`/`<link>`）、外链抓取（scheme 策略/上限/去重）、`@import` 加载期展开、最小 UA 样式表（HTML §15）、文件热重载（监视 HTML + 外链 CSS） | 108 lib + 3 headless + 6 probe + 9 离线 e2e + 7 UA 像素，全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 | DOM 完整 API (Events/Style/innerHTML) | ✅ 完成 (2026-08-09) | Events → dom `event.rs` · element.style → cssom `element_style.rs` · innerHTML/outerHTML → html5-parser `serialize.rs`+`parse_fragment` | dom/cssom 全绿 + html5-parser WPT 99.0% (1889/1908) | — | — |
-| **muskitty-network** | 🚧 Phase 5 接驳 | NetworkFetcher trait 抽象 + reqwest 后端 + `fetch_blocking` 同步入口 + `url` 模块（WHATWG URL 解析/相对化/file↔路径/子资源 scheme 策略/data: 解码）；chrome 地址栏导航 + 子资源（样式表）抓取已接驳（远期自研 HTTP/1.1+2+3 栈，见 [plan](docs/plans/2026-08-09-phase5-network.md)） | 21 + 4 doc-tests 全绿 (wiremock 离线)；chrome navigation/stylesheets 离线 e2e 全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
+| **muskitty-network** | 🚧 Phase 5 接驳 | NetworkFetcher trait 抽象 + reqwest 后端 + `fetch_blocking` 同步入口 + `url` 模块（WHATWG URL 解析/相对化/file↔路径/子资源 scheme 策略/data: 解码）；chrome 地址栏导航 + 子资源（样式表）抓取已接驳（远期自研 HTTP/1.1+2+3 栈，见 [plan](docs/plans/2026-08-09-phase5-network.md)） | 12 + 10 + 4 doc-tests 全绿 (wiremock 离线)；chrome navigation/stylesheets 离线 e2e 全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 
 **14 个 html5lib tokenizer 失败说明**：3 个 xmlViolation（infoset 强制转换，规范范围外）+ 11 个 `<?...>` PI 边界（test2/test3，html5lib 测试套件过时，期望 `Comment` 但现行 WHATWG §13.2.5.72-76 规定产生 `ProcessingInstruction`）。代码遵循现行 WHATWG 规范，测试套件过时。对浏览器级应用无影响（真实网页几乎不会触发这些边界）。
 
@@ -227,23 +227,23 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ## 仓库策略
 
-**11 个 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下，含 cascade/cssom，2026-08-09 剥离），并通过 GitHub Actions 自动发布到 crates.io（发布状态见下表）。`muskitty-renderer`、`muskitty-network` 作为主仓库 workspace member 开发（未剥离、未发布）。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-renderer", "crates/muskitty-network"]`，`exclude` 列表排除 11 个已剥离 crate。新设备 clone 主仓库后通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
+**11 个 crate 已剥离为独立 git 仓库**（位于 muskitty-dev org 下，含 cascade/cssom，2026-08-09 剥离），并通过 GitHub Actions 自动发布到 crates.io（发布状态见下表）。`muskitty-renderer`、`muskitty-network`、`muskitty-chrome` 作为主仓库 workspace member 开发（未剥离、未发布）。主仓库 `d:\Muskitty` 的 workspace `members = ["crates/muskitty-renderer", "crates/muskitty-network", "crates/muskitty-chrome"]`，`exclude` 列表排除 11 个已剥离 crate。新设备 clone 主仓库后通过 `fetch-crates.ps1` / `fetch-crates.sh` 一次性拉取。
 
-### crates.io 发布状态（截至 2026-08-09）
+### crates.io 发布状态（截至 2026-09-18；2026-09-13 架构师批量发了一批 patch 版本对齐已发布代码）
 
 | crate | 版本 | crates.io 发布时间 | 仓库 |
 |-------|------|-------------------|------|
-| muskitty-dom | 0.2.0 | — | [muskitty-dev/muskitty-dom](https://github.com/muskitty-dev/muskitty-dom) |
-| muskitty-html5-tokenizer | 0.1.3 | — | [muskitty-dev/muskitty-html5-tokenizer](https://github.com/muskitty-dev/muskitty-html5-tokenizer) |
-| muskitty-html5-parser | 0.2.0 | — | [muskitty-dev/muskitty-html5-parser](https://github.com/muskitty-dev/muskitty-html5-parser) |
-| muskitty-css-tokenizer | 0.2.0 | 2026-07-24 | [muskitty-dev/muskitty-css-tokenizer](https://github.com/muskitty-dev/muskitty-css-tokenizer) |
-| muskitty-css-parser | 0.3.0 | 2026-07-24 | [muskitty-dev/muskitty-css-parser](https://github.com/muskitty-dev/muskitty-css-parser) |
-| muskitty-css | 0.6.0 | 2026-07-24 | [muskitty-dev/muskitty-css](https://github.com/muskitty-dev/muskitty-css) |
-| muskitty-selectors | 0.2.0 | 2026-07-19T12:11:16Z | [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors) |
-| muskitty-css-values | 0.1.0 | 2026-07-24 | [muskitty-dev/muskitty-css-values](https://github.com/muskitty-dev/muskitty-css-values) |
-| muskitty-cssom | 0.1.0 | 2026-07-24 | [muskitty-dev/muskitty-cssom](https://github.com/muskitty-dev/muskitty-cssom) |
-| muskitty-layout | 0.1.0 | — | [muskitty-dev/muskitty-layout](https://github.com/muskitty-dev/muskitty-layout) |
-| muskitty-cascade | 0.1.0 (未发布) | — | [muskitty-dev/muskitty-cascade](https://github.com/muskitty-dev/muskitty-cascade) |
+| muskitty-dom | 0.2.1 | 2026-09-13 | [muskitty-dev/muskitty-dom](https://github.com/muskitty-dev/muskitty-dom) |
+| muskitty-html5-tokenizer | 0.1.4 | 2026-09-13 | [muskitty-dev/muskitty-html5-tokenizer](https://github.com/muskitty-dev/muskitty-html5-tokenizer) |
+| muskitty-html5-parser | 0.2.1 | 2026-09-13 | [muskitty-dev/muskitty-html5-parser](https://github.com/muskitty-dev/muskitty-html5-parser) |
+| muskitty-css-tokenizer | 0.2.1 | 2026-09-13（本地 0.3.0 待发布，has_sign 破坏性变更随下次 tag 走） | [muskitty-dev/muskitty-css-tokenizer](https://github.com/muskitty-dev/muskitty-css-tokenizer) |
+| muskitty-css-parser | 0.3.1 | 2026-09-13 | [muskitty-dev/muskitty-css-parser](https://github.com/muskitty-dev/muskitty-css-parser) |
+| muskitty-css | 0.6.0 | 2026-08-09 | [muskitty-dev/muskitty-css](https://github.com/muskitty-dev/muskitty-css) |
+| muskitty-selectors | 0.2.1 | 2026-09-13 | [muskitty-dev/muskitty-selectors](https://github.com/muskitty-dev/muskitty-selectors) |
+| muskitty-css-values | 0.1.1 | 2026-09-13 | [muskitty-dev/muskitty-css-values](https://github.com/muskitty-dev/muskitty-css-values) |
+| muskitty-cssom | 0.1.1 | 2026-09-13 | [muskitty-dev/muskitty-cssom](https://github.com/muskitty-dev/muskitty-cssom) |
+| muskitty-layout | 0.1.1 | 2026-09-13 | [muskitty-dev/muskitty-layout](https://github.com/muskitty-dev/muskitty-layout) |
+| muskitty-cascade | 0.1.1 | 2026-09-13 | [muskitty-dev/muskitty-cascade](https://github.com/muskitty-dev/muskitty-cascade) |
 
 ### CI/CD 模式
 
@@ -255,8 +255,8 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 
 ### 主仓库职责
 
-- **workspace 协调中心**：保留 `d:\Muskitty\Cargo.toml` 作为 workspace 根（`members = ["crates/muskitty-renderer", "crates/muskitty-network"]` + `exclude = [11 个已剥离 crate]`），便于本地开发时一次性构建所有 crate。
-- **新 crate 孵化器**：`muskitty-renderer` / `muskitty-network` 作为 workspace member 在主仓库内开发（未剥离）；已剥离 crate 各自独立维护。
+- **workspace 协调中心**：保留 `d:\Muskitty\Cargo.toml` 作为 workspace 根（`members = ["crates/muskitty-renderer", "crates/muskitty-network", "crates/muskitty-chrome"]` + `exclude = [11 个已剥离 crate]`），便于本地开发时一次性构建所有 crate。
+- **新 crate 孵化器**：`muskitty-renderer` / `muskitty-network` / `muskitty-chrome` 作为 workspace member 在主仓库内开发（未剥离）；已剥离 crate 各自独立维护。
 - **文档中心**：保留 `PROGRESS.md` / `CLAUDE.md` / `AGENTS.md` / `goal.md` / `docs/plans/` 作为项目级文档。
 
 ## Phase 2 规划：muskitty-css (CSS 解析层)
@@ -316,12 +316,12 @@ Initial / BeforeHtml / BeforeHead / InHead / InHeadNoscript / AfterHead / InBody
 ## 源代码结构
 
 主仓库作为 workspace 协调中心；11 个 crate 各自独立 git 仓库（在 `exclude` 列表中），`muskitty-renderer` / `muskitty-network` / `muskitty-chrome` 作为 workspace member 在主仓库内开发（未剥离）。具体每个独立 crate 的内部结构见各自仓库的 README。
-
 ```
 d:\Muskitty\                              # 主仓库 (Ink-dark/MusKitty)
 ├── Cargo.toml                           # workspace 根：members = [renderer, network, chrome], exclude = [11 个已剥离 crate]
 ├── .gitignore                           # 排除已剥离 crate 目录
-├── fetch-crates.ps1 / .sh              # 一次性拉取 11 个独立 crate 的脚本
+├── crates.json                          # crate 清单单一来源：standalone (11) + bundled (3)
+├── fetch-crates.ps1 / .sh              # 一次性拉取 11 个独立 crate 的脚本（清单读 crates.json）
 ├── PROGRESS.md                          # 本文件
 ├── CLAUDE.md / AGENTS.md                # 硬约束
 ├── goal.md                              # 当轮任务清单与退出条件
@@ -329,64 +329,49 @@ d:\Muskitty\                              # 主仓库 (Ink-dark/MusKitty)
 ├── .trae/archive/                     # 阶段规划文档
 └── crates/                              # 子 crate
     ├── muskitty-renderer/              # 主仓库成员 (v0.1.0, 未剥离, tiny-skia 后端)
-    ├── muskitty-network/               # 主仓库成员 (v0.1.0, 未剥离, NetworkFetcher + reqwest)
-    ├── muskitty-cascade/               # → muskitty-dev/muskitty-cascade (v0.1.0, 已剥离)
-    ├── muskitty-cssom/                 # → muskitty-dev/muskitty-cssom (v0.1.0, 已剥离)
-    ├── muskitty-layout/                # → muskitty-dev/muskitty-layout (v0.1.0, 独立仓库)
-    ├── muskitty-dom/                    # → muskitty-dev/muskitty-dom (v0.2.0, 独立仓库)
-    ├── muskitty-html5-tokenizer/        # → muskitty-dev/muskitty-html5-tokenizer (v0.1.3, 独立仓库)
-    ├── muskitty-html5-parser/           # → muskitty-dev/muskitty-html5-parser (v0.2.0, 独立仓库)
-    ├── muskitty-css-tokenizer/          # → muskitty-dev/muskitty-css-tokenizer (v0.2.0, 独立仓库)
-    ├── muskitty-css-parser/             # → muskitty-dev/muskitty-css-parser (v0.3.0, 独立仓库)
+    ├── muskitty-network/               # 主仓库成员 (v0.1.0, 未剥离, NetworkFetcher + reqwest + url 模块)
+    ├── muskitty-chrome/                # 主仓库成员 (v0.1.0, 未剥离, 自绘 chrome + winit + 导航 + 样式表来源)
+    ├── muskitty-cascade/               # → muskitty-dev/muskitty-cascade (v0.1.1, 独立仓库)
+    ├── muskitty-cssom/                 # → muskitty-dev/muskitty-cssom (v0.1.1, 独立仓库)
+    ├── muskitty-layout/                # → muskitty-dev/muskitty-layout (v0.1.1, 独立仓库)
+    ├── muskitty-dom/                    # → muskitty-dev/muskitty-dom (v0.2.1, 独立仓库)
+    ├── muskitty-html5-tokenizer/        # → muskitty-dev/muskitty-html5-tokenizer (v0.1.4, 独立仓库)
+    ├── muskitty-html5-parser/           # → muskitty-dev/muskitty-html5-parser (v0.2.1, 独立仓库)
+    ├── muskitty-css-tokenizer/          # → muskitty-dev/muskitty-css-tokenizer (v0.2.1 已发布 / 本地 0.3.0, 独立仓库)
+    ├── muskitty-css-parser/             # → muskitty-dev/muskitty-css-parser (v0.3.1, 独立仓库)
     ├── muskitty-css/                    # → muskitty-dev/muskitty-css (v0.6.0, 独立仓库)
-    ├── muskitty-selectors/              # → muskitty-dev/muskitty-selectors (v0.2.0, 独立仓库)
-    └── muskitty-css-values/             # → muskitty-dev/muskitty-css-values (v0.1.0, 独立仓库)
+    ├── muskitty-selectors/              # → muskitty-dev/muskitty-selectors (v0.2.1, 独立仓库)
+    └── muskitty-css-values/             # → muskitty-dev/muskitty-css-values (v0.1.1, 独立仓库)
 ```
 
-未来 crate 预留：`crates/muskitty-network`（Layer 5）。
+未来 crate 预留：无（Layer 5 的 `muskitty-network` 已落地并接驳 chrome 导航）。
 
 ## Git 提交历史（近期）
 
+主仓库近期（完整历史见 `git log`；各独立 crate 的历史在其自身仓库）：
+
 ```
-d9a8a9b [css-values] CV-6: lib top-level API + doctests (9 tests)
-44e80cb [css-values] CV-5: ValuesGrammar impl Grammar + serialization (§5.4.1, §8.1, §9.7)
-0c3f519 [css-values] CV-3: MathExpression AST + calc/min/max/clamp parsing (§9)
-6edd8f9 [css-values] CV-4: VarReference parsing (CSS Variables §3)
-c18c153 [css-values] CV-2: textual types - Keyword/CustomIdent/DashedIdent/CssString/Url
-084809a [css-values] CV-1: numeric types + crate skeleton (§4.4-§4.7, §5, §6)
-bafaebd [workspace] hard-extract muskitty-css from workspace members
-1168434 [workspace] hard-extract dom/html5-parser/selectors from members
-3e2d8fb [css] re-export grammar module from muskitty-css-parser
-7629c41 [chore] update PROGRESS.md: muskitty-selectors extracted to independent repo
-11cbdf1 [chore] untrack muskitty-selectors (extracted to independent repo)
-1b27bae [selectors] SP-8: mark Phase 2 子阶段 2 (Selectors Level 4) complete in PROGRESS.md
-b1e15f4 [css-parser] CP-7: lib.rs top-level API + crate-level doc
-cacad17 [css-parser] CP-6: 5.4 Parser Entry Points (9 of 10)
-980e429 [css-parser] CP-5: 5.5.1-5.5.5 stylesheet/rule/block algorithms
-7f143b7 [css-parser] CP-4: 5.5.6 consume_a_declaration + remnants_of_bad_decl
-239cd34 [css-parser] CP-3: 5.5.7-5.5.11 lower-level parser algorithms
-ab82733 [css-parser] CP-2: 5.3 TokenStream struct + 8 operations
-fcb35e6 [css-parser] CP-1: 5.2 CSS Parsing Results data structures
-d3dba7d [workspace] Untrack crates/muskitty-html5-tokenizer/ (already .gitignored)
-7e4a19c [workspace] Split muskitty-html5-tokenizer into standalone git repo
-c233c74 [tokenizer] Extract muskitty-html5-tokenizer as standalone crate
-5f767da P3-d-10: fix in-cell/applet/marquee/object end-tag namespace check
-1b889fc P3-d-9: fix adoption agency furthest block matching SVG elements as special
-d7c4eb2 P3-d-8: fix harness parse_dat truncating #document on embedded blank lines
-1285460 fix(parser): Noah's Ark clause 移除最早而非最晚的匹配条目
-dae15ed fix(parser): <a> 起始标签按 §13.2.6.4.7 正确处理 AFE 搜索范围与重构顺序
-9077b14 fix(parser): <select> 起始标签后压入 active formatting 标记    [P3-d-5]
-86c8271 feat(parser): 实现 selectedcontent 元素与 option selectedness 处理    [P3-d-4]
-be4bba0 fix(parser): adoption agency step 15 经由 adjusted insertion location 插入
-e0b5828 fix(parser): InTableBody "anything else" 直接调用 InTable 处理器
-5fced9e fix(parser): noembed 起始标签设置 appropriate end tag name
-10e4cda fix(parser): AfterAfterFrameset 把 DOCTYPE/whitespace/<html> 委派 InBody
-8635e92 feat(parser): 实现 applet/marquee/object 起始与结束标签处理
-85e13cd fix(parser): area/br/embed 起始标签设 frameset-ok 为 not ok
-b55e31a feat(parser): 实现 Foreign Content (SVG/MathML) 与 Template 交互修复
-f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixes
+2b3923c [deps] Cargo.lock follows muskitty-html5-tokenizer's 0.1.3 -> 0.1.4 release bump
+5c94f73 [chore] track deny.toml and ignore the local tool/diagnostic artifacts in the root
+cf3c15b [docs] close CS-1 (stylesheet sources): PROGRESS row, goal completion record, plan marked implemented
+0f7df1e [chrome] CS-1f: ship a minimal UA stylesheet and inject it into every render entry
+6f25857 [chrome] CS-1b/c/e/g: load stylesheets in document order (external <link>, @import, fetch policy, hot reload)
+30cfca6 [network] CS-1a: add the URL primitive layer (resolve / file:// <-> path / subresource scheme policy / data: decoding)
+4ecace5 [deps] Cargo.lock follows the merged release bumps (cascade 0.1.1 / css-parser 0.3.1 / layout 0.1.1 / selectors 0.2.1 + tokenizer 0.3.0)
+5172c1e [docs] record the W-3b merge/reconciliation outcome (architect's patch releases, merge resolutions, cascade filter.rs gap fix)
+0702153 [docs] close W-3b (An+B sign fidelity): WPT selectors 99.8% (507/508)
+c1cb1cc [docs] close W-3 batch 1 (WPT selectors alignment): 75.6% -> 94.3%
+43742b8 [docs] stop tracking docs/cat-fetch-skill.md (personal tool doc)
+e5b538f [docs] record the toolchain recovery in the batch-3 notes (stable 1.98.1 re-verification)
+9522d32 [build] re-green the lint gate after the toolchain update to rustc/clippy 1.98
+9ad3041 [tools] crate list single source of truth (crates.json)
+3d32f46 [docs] align all documentation with current reality (2026-09-08)
 ... (完整历史见 git log)
 ```
+
+历史各阶段（Phase 2/3/4 各子阶段的完整 commit 序列，如 css-values CV-1~CV-6、
+css-parser CP-1~CP-8、tokenizer/parser P3-d 系列修复）同样见 `git log` 与
+`.trae/archive/` 内的各阶段规划文档，此处不再重复罗列。
 
 ## 下一步
 
@@ -415,7 +400,7 @@ f901a0d [parser] Phase 5: html5lib tree construction test integration + bug fixe
 
 18. ~~**muskitty-chrome 窗口层（自绘 chrome，取代 shell）**~~ ✅ 已完成（2026-08-29）：决策见 ADR `2026-08-29-chrome-window-layer`（egui GPU 管线冲突 / iced 框架开销，选 Chromium Views 式自绘合成）。`chrome::model`（布局纯函数 9 测）/ `paint`（tiny-skia + cosmic-text 0.13 + swash outline，7 像素测）/ `input`（hit_test/apply 6 测）/ `compositor`（页面+chrome 同帧合成）/ `app`（winit + softbuffer、标签集合、脏位 flush）。功能：多标签快捷键、地址栏（Ctrl+L/输入/回车提交 → http/https/file 顶级文档导航，`navigation` 模块 2026-09-06 接驳 muskitty-network；不支持 scheme 留占位页；`(tab, epoch)` 过期导航丢弃）、**文件热重载**（mtime 200ms 轮询）、`render_window_to_png` 无窗口 CI 测试（62 条，`--no-default-features` 全绿）。真窗口验证（自动化 + 用户实测）发现并修复按键双发（漏 Pressed 过滤）与首帧 R/B 通道互换（`rgba_to_0rgb` 与 softbuffer `0x00RRGGBB` 契约不符，`9562f0f`）。`muskitty-shell` 退役删除（`84b07a4`，git rename 保留历史），W-1~W-5 语义由 chrome 承接。
 
-19. ~~**CS-1 外链 CSS 与其他 CSS 来源接入**~~ ✅ 已完成（2026-09-14）：规划见 [docs/plans/2026-09-13-external-css-and-css-sources.md](docs/plans/2026-09-13-external-css-and-css-sources.md)（含逐条 file:line 现状证据、决策 D1–D7、规范本地源行号）。四层落地——① **URL 基建**：`muskitty-network::url`（`resolve` 相对解析、`file_url_from_path`/`path_from_file_url`、`is_fetchable_subresource` scheme 策略（http(s) 页拒 `file://`、file 页允 http(s)、`data:` 恒允、其余拒）、`decode_data_url`（媒体类型 + forgiving base64 + 百分号解码）；委托 `url` crate（WHATWG URL 参考实现，纯 Rust，原为 reqwest 传递依赖）——不引它的替代方案是手写 RFC 3986 子集，取舍写在模块文档）。② **chrome `stylesheets` 模块**：DOM 先序（= 文档序）采集 `<style>`/`<link>`，`rel` 词表（`next stylesheet` 仍建链）、`type` 非 `text/css` 不抓、空/缺 `href` 忽略、首个可解析 `<base href>` 生效、`media`/`title`/`alternate`/`disabled` 落位到 `CssStyleSheet`；抓取按 scheme 分发（http(s) 必须 2xx + `text/css`，缺 Content-Type 按样式表默认类型；file 本地读；data 解码；BOM 嗅探 + UTF-8 为准的编码策略），单表 8 MiB / 每文档 64 表 / `@import` 深度 16 上限、按 URL 去重缓存（失败也缓存、每个引用点各建一张表——规范 §4.2.4 "每个 link 是独立资源"）、失败非致命；`@import` **加载期就地展开**（合法位置判定、以导入表自身 URL 为基准、条件导入包 `@media`、循环/深度/失败跳过、`layer()`/`supports()` 前缀整条跳过并记录）。③ **接线**：`render_page_with_sheets` 多表入口（旧单表入口保留）、`NavigationDoc` 携带 final_url + sheets（样式表在导航线程内抓，UI 线程零子资源 IO）、`WebView.sheets` 取代 css 字符串、file 模式/`file://` 导航走同一路径、热重载监视集合扩到 HTML + 其 `file://` 样式表。④ **cascade 消费 sheet 级字段**（`disabled`/`alternate`/`media` 属性的整表门控，独立仓库 `6ed08a0`）与 **最小 UA 样式表**（HTML §15 Rendering：15 标签 `display:none` 清单 + `[hidden]` + body 8px + 流内容 1em/40px 边距 + 标题 `:heading(n)` 表展开 + 列表缩进 + hr；只用当前有消费方的属性，未写的规则（italic/larger-smaller/`sub`/`sup`/`:link` 颜色/text-decoration/content-visibility/表格/表单控件/presentational hints）与两处偏差（`bolder`→`bold`、`noscript` 无条件隐藏）逐条记录在 `ua.css` 头部；UA 表由渲染入口统一注入，`OnceLock` 缓存）。**范围与偏差**：外链为 render-blocking（无首屏渐进渲染）；编码非 UTF-8 走 lossy（触发条件已记录）；`url()` 相对解析随图像管线另排。验证：chrome 108 lib + 3 headless + 6 probe + 9 离线 e2e（真 `TcpListener` 多文件 + 像素级断言）+ 7 UA 像素断言；cascade 231 / layout 127 / workspace 218；fmt 与 clippy `-D warnings` 干净。
+19. ~~**CS-1 外链 CSS 与其他 CSS 来源接入**~~ ✅ 已完成（2026-09-14）：规划见 [docs/plans/2026-09-13-external-css-and-css-sources.md](docs/plans/2026-09-13-external-css-and-css-sources.md)（含逐条 file:line 现状证据、决策 D1–D7、规范本地源行号）。四层落地——① **URL 基建**：`muskitty-network::url`（`resolve` 相对解析、`file_url_from_path`/`path_from_file_url`、`is_fetchable_subresource` scheme 策略（http(s) 页拒 `file://`、file 页允 http(s)、`data:` 恒允、其余拒）、`decode_data_url`（媒体类型 + forgiving base64 + 百分号解码）；委托 `url` crate（WHATWG URL 参考实现，纯 Rust，原为 reqwest 传递依赖）——不引它的替代方案是手写 RFC 3986 子集，取舍写在模块文档）。② **chrome `stylesheets` 模块**：DOM 先序（= 文档序）采集 `<style>`/`<link>`，`rel` 词表（`next stylesheet` 仍建链）、`type` 非 `text/css` 不抓、空/缺 `href` 忽略、首个可解析 `<base href>` 生效、`media`/`title`/`alternate`/`disabled` 落位到 `CssStyleSheet`；抓取按 scheme 分发（http(s) 必须 2xx + `text/css`，缺 Content-Type 按样式表默认类型；file 本地读；data 解码；BOM 嗅探 + UTF-8 为准的编码策略），单表 8 MiB / 每文档 64 表 / `@import` 深度 16 上限、按 URL 去重缓存（失败也缓存、每个引用点各建一张表——规范 §4.2.4 "每个 link 是独立资源"）、失败非致命；`@import` **加载期就地展开**（合法位置判定、以导入表自身 URL 为基准、条件导入包 `@media`、循环/深度/失败跳过、`layer()`/`supports()` 前缀整条跳过并记录）。③ **接线**：`render_page_with_sheets` 多表入口（旧单表入口保留）、`NavigationDoc` 携带 final_url + sheets（样式表在导航线程内抓，UI 线程零子资源 IO）、`WebView.sheets` 取代 css 字符串、file 模式/`file://` 导航走同一路径、热重载监视集合扩到 HTML + 其 `file://` 样式表。④ **cascade 消费 sheet 级字段**（`disabled`/`alternate`/`media` 属性的整表门控，独立仓库 `6ed08a0`）与 **最小 UA 样式表**（HTML §15 Rendering：15 标签 `display:none` 清单 + `[hidden]` + body 8px + 流内容 1em/40px 边距 + 标题 `:heading(n)` 表展开 + 列表缩进 + hr；只用当前有消费方的属性，未写的规则（italic/larger-smaller/`sub`/`sup`/`:link` 颜色/text-decoration/content-visibility/表格/表单控件/presentational hints）与两处偏差（`bolder`→`bold`、`noscript` 无条件隐藏）逐条记录在 `ua.css` 头部；UA 表由渲染入口统一注入，`OnceLock` 缓存）。**范围与偏差**：外链为 render-blocking（无首屏渐进渲染）；编码非 UTF-8 走 lossy（触发条件已记录）；`url()` 相对解析随图像管线另排。验证：chrome 108 lib + 3 headless + 6 probe + 9 离线 e2e（真 `TcpListener` 多文件 + 像素级断言）+ 7 UA 像素断言；cascade 231 / layout 127 / workspace 269；fmt 与 clippy `-D warnings` 干净。
 
 ## Phase 3 (Layout 层) — 已完成
 
@@ -635,7 +620,7 @@ crate 已剥离为独立 git 仓库（[muskitty-dev/muskitty-cssom](https://gith
 | `src/lib.rs` doctests | 1 | 顶层 API 编译验证 |
 | **总计** | **71**（7 + 14 + 9 + 13 + 12 + 15 + 1） | 全部通过 |
 
-> 工作区回归：`cargo test --workspace` 全部通过（300+ 测试，含 css-values 148 / cssom 81 / cascade 71 / selectors / html5-parser / dom / css 等）。
+> 工作区回归：`cargo test --workspace` 全部通过（含 css-values / cssom / cascade / selectors / html5-parser / dom / css 等；当时的 per-crate 数字见上表，当前总量 269）——本行为 2026-07 阶段历史记录。
 
 ### 架构（单向数据流）
 
