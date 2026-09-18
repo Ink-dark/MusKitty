@@ -223,20 +223,21 @@ pub async fn fetch(url: &str) -> NetworkResult<NetworkResponse>;
 
 ## 当前状态与下一步
 
-### 本轮已完成（2026-08-09）
-
-- [x] `muskitty-network` crate 骨架（trait + reqwest 后端 + feature flag）
-- [x] 7 个 wiremock 离线测试全绿
-- [x] `fetch_demo` example 可跑
-- [x] 主 `Cargo.toml` 加入 `members`
-- [x] 本规划文档（含自研路线图）
-- [x] CLAUDE.md / PROGRESS.md 同步标注
+> **状态（2026-09-18 更新）**：基础搭建 + chrome 导航接驳 + 样式表子资源均已完成，
+> 自研栈（N-1~N-7）未启动。演进时间线：
+> ① 2026-08-09 crate 骨架（trait + reqwest 后端 + feature flag，7 个 wiremock 离线测试）；
+> ② 2026-09-06 chrome 地址栏导航接驳（顶级文档 GET，见下文"接驳"节）；
+> ③ 2026-09-14 CS-1 样式表子资源：新增 `src/url.rs`（`resolve` 相对解析 / `file://` ↔ 路径 /
+> 子资源 scheme 策略 / `data:` 解码，委托 WHATWG URL 参考实现 `url` crate）+
+> chrome `stylesheets` 模块在导航线程内抓取外链 CSS（见
+> [2026-09-13-external-css-and-css-sources.md](2026-09-13-external-css-and-css-sources.md)）。
+> 当前测试：network 12 单元 + 10 集成 + 4 doc-tests 全绿（wiremock 离线）。
 
 ### 下一步（待用户指令）
 
-- **不立即启动自研**：本轮只搭基础 + 锚定路线图
+- **不立即启动自研**：只搭基础 + 锚定路线图
 - **触发自研的条件**：上层（fetch 标准 / resource loader）开始需要 reqwest 不支持的能力（如精细流控 / 自定义协议拦截 / 性能调优），或用户明确要求启动 N-1
-- **接现有链路的条件**：N-6（WHATWG Fetch 集成）启动时，才会与 DOM/CSS/Layout/Renderer 链路接轨
+- **待接驳的子资源**：img/script 子资源与历史栈（同 CS-1 的导航线程内抓取模式）——N-6（WHATWG Fetch 集成）才是规范指定的 DOM/子资源全面接驳阶段
 
 ---
 
