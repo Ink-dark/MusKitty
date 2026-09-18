@@ -650,3 +650,86 @@ fn end_to_end_text_transform_changes_rendered_glyphs() {
         "uppercase glyphs must not produce pixel-identical ink (none={ink_none}, upper={ink_upper})"
     );
 }
+
+// —— M-3 batch 3c: white-space 全链路像素验证 ——
+
+#[test]
+fn end_to_end_collapsed_source_inks_like_the_literal_line() {
+    // normal 折叠是布局前语义：含源码换行缩进的文本与手写单行文本在同一
+    // 容器下测出同样的排版 → 墨迹行号逐行一致（等值断言，非字体量值比较）。
+    let source = "the quick   brown fox
+        jumps over
+        the lazy dog";
+    let (_, rows_source, ink_source) = render_text_ink(
+        &format!(r#"<div style="width: 80px">{source}</div>"#),
+        80,
+        400,
+    );
+    let (_, rows_literal, ink_literal) = render_text_ink(
+        r#"<div style="width: 80px">the quick brown fox jumps over the lazy dog</div>"#,
+        80,
+        400,
+    );
+    assert_eq!(
+        rows_source, rows_literal,
+        "collapsed source text must render the exact same ink rows as the literal text"
+    );
+    assert_eq!(
+        ink_source, ink_literal,
+        "collapsed folding must not change glyph output"
+    );
+}
+
+#[test]
+fn end_to_end_pre_keeps_line_breaks() {
+    // pre：三个源行保留为 3 行墨迹块（行块之间有空白间隔），且总墨迹范围
+    // 明显高于折叠成单行的对照组。
+    let source = "line one
+line two
+line three";
+    let (_, rows_pre, _) = render_text_ink(
+        &format!(r#"<div style="white-space: pre">{source}</div>"#),
+        300,
+        200,
+    );
+    let (_, rows_normal, _) = render_text_ink(&format!(r#"<div>{source}</div>"#), 300, 200);
+    // normal 折叠 → 一行（墨迹行少且连续）；pre → 三行块。
+    assert!(
+        rows_normal.len() < 24,
+        "collapsed text should be a single line block, got {} ink rows",
+        rows_normal.len()
+    );
+    let gaps = rows_pre.windows(2).filter(|w| w[1] - w[0] > 3).count();
+    assert!(
+        gaps >= 2,
+        "pre must keep the two forced line breaks (3 ink blocks), got {gaps} gaps: rows={rows_pre:?}"
+    );
+}
+
+#[test]
+fn end_to_end_nowrap_overflows_without_wrapping() {
+    // nowrap：同一段文本在窄容器里，normal 折多行（最底墨迹行远低于首行），
+    // nowrap 单行溢出（墨迹只出现在首行高度附近）。
+    let text = "The quick brown fox jumps over the lazy dog";
+    let (_, rows_normal, _) = render_text_ink(
+        &format!(r#"<div style="width: 100px">{text}</div>"#),
+        100,
+        300,
+    );
+    let (_, rows_nowrap, _) = render_text_ink(
+        &format!(r#"<div style="width: 100px; white-space: nowrap">{text}</div>"#),
+        100,
+        300,
+    );
+    let last_normal = *rows_normal.last().expect("normal must ink");
+    let last_nowrap = *rows_nowrap.last().expect("nowrap must ink");
+    assert!(last_normal > last_nowrap + 10,
+        "normal wraps (last ink row {last_normal}); nowrap must stay on one line (last ink row {last_nowrap})"
+    );
+    // nowrap 的墨迹垂直范围不超过两倍行高（单行，1.2em ≈ 19.2px → <40px）。
+    let span_nowrap = last_nowrap - rows_nowrap[0];
+    assert!(
+        span_nowrap < 40,
+        "nowrap ink must stay within one line height, got span={span_nowrap}"
+    );
+}

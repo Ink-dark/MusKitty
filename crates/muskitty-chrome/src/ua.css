@@ -58,8 +58,7 @@ body {
 }
 
 /* HTML §15.3.3 Flow content（L125-155）。margin-block: 1em → margin: 1em 0；
- * margin-inline: 40px → 左右 40px。listing/plaintext/pre/xmp 的
- * `white-space: pre` 待 batch 3c（white-space 无消费方），先只写字体。 */
+ * margin-inline: 40px → 左右 40px。 */
 address, blockquote, center, dialog, div, figure, figcaption, footer, form,
 header, hr, legend, listing, main, p, plaintext, pre, search, xmp {
   display: block;
@@ -76,6 +75,12 @@ blockquote, figure {
 
 listing, plaintext, pre, xmp {
   font-family: monospace;
+}
+
+/* M-3 batch 3c：white-space 有消费方了，补上 §15.3.3 规定的
+ * listing/plaintext/pre/xmp { white-space: pre }。 */
+listing, plaintext, pre, xmp {
+  white-space: pre;
 }
 
 dialog:not([open]) {

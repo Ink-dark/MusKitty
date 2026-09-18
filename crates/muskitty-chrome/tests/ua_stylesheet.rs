@@ -191,3 +191,64 @@ fn pre_is_monospace_and_hr_draws_a_line() {
     let (data, w, h) = render("<!doctype html><html><body><hr></body></html>");
     assert!(ink(&data, w, h) > 0, "hr 应画出边框线");
 }
+
+#[test]
+fn pre_keeps_source_line_breaks_via_ua_sheet() {
+    // M-3 batch 3c：UA 表的 `pre { white-space: pre }` 生效——<pre> 里三个
+    // 源行渲染为 3 行（最底墨迹行 ≥ 两个行高之下），同一源文本放进 div
+    // （normal）则折叠为一行（最底墨迹行在首行行高内）。
+    // 注：不用"墨迹块间隔"计数——19.2px 行距与字形 ascent/descent 几乎
+    // 相接（实测行块间隔 2–10px），量值脆弱；只断言"总垂直范围"。
+    let source = "alpha
+beta
+gamma";
+    let (data, w, h) = render(&format!(
+        r#"<!doctype html><html><body><pre>{source}</pre></body></html>"#
+    ));
+    let mut rows = Vec::new();
+    for y in 0..h {
+        let mut has = false;
+        for x in 0..w {
+            let (r, g, b, _) = px(&data, w, x, y);
+            if r < 200 || g < 200 || b < 200 {
+                has = true;
+                break;
+            }
+        }
+        if has {
+            rows.push(y);
+        }
+    }
+    let first = *rows.first().expect("<pre> 应有墨迹");
+    let last = *rows.last().expect("<pre> 应有墨迹");
+    let span = last - first;
+    assert!(
+        span > 38,
+        "<pre> 必须保留两个强制换行（3 行 × 19.2px 行距 ≈ 58px 总范围），\
+         实际首行 y={first} 末行 y={last} span={span}"
+    );
+
+    let (data2, w2, h2) = render(&format!(
+        r#"<!doctype html><html><body><div>{source}</div></body></html>"#
+    ));
+    let mut rows2 = Vec::new();
+    for y in 0..h2 {
+        let mut has = false;
+        for x in 0..w2 {
+            let (r, g, b, _) = px(&data2, w2, x, y);
+            if r < 200 || g < 200 || b < 200 {
+                has = true;
+                break;
+            }
+        }
+        if has {
+            rows2.push(y);
+        }
+    }
+    let first2 = *rows2.first().expect("div 应有墨迹");
+    let last2 = *rows2.last().expect("div 应有墨迹");
+    assert!(
+        last2 - first2 < 30,
+        "div（normal 折叠）必须是单行（范围 < 30px），实际 {first2}..{last2}"
+    );
+}

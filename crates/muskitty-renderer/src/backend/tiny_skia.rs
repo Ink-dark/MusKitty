@@ -232,6 +232,7 @@ impl Backend for TinySkiaBackend {
                     font_weight,
                     text_align,
                     color,
+                    wrap,
                 } => {
                     let font_system = self.font_system.get_or_insert_with(FontSystem::new);
                     let swash_cache = self.swash_cache.get_or_insert_with(SwashCache::new);
@@ -255,6 +256,7 @@ impl Backend for TinySkiaBackend {
                         *font_weight,
                         *text_align,
                         *color,
+                        *wrap,
                         scale,
                         font_system,
                         swash_cache,
@@ -451,6 +453,7 @@ fn draw_text(
     font_weight: u16,
     text_align: TextAlign,
     color: Color,
+    wrap: bool,
     scale: f32,
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
@@ -460,8 +463,10 @@ fn draw_text(
     // 不再用 `font_size * 1.2` —— 与 layout 测量的行高一致，否则绘制行位置
     // 与布局盒高对不上（T-3 的"汉字位移"教训）。
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
-    // 按布局宽度换行（T-3）。
-    buffer.set_size(font_system, Some(width), None);
+    // 按布局宽度换行（T-3）；M-3 batch 3c：`white-space: nowrap`/`pre` 时
+    // layout 测量同样不折（wrap=false → None 单行），两侧保持一致。
+    let max_width = if wrap { Some(width) } else { None };
+    buffer.set_size(font_system, max_width, None);
     let attrs = Attrs::new()
         .family(family_from_css(font_family))
         .weight(Weight(font_weight));
@@ -581,6 +586,7 @@ mod tests {
             font_weight: 400,
             text_align: TextAlign::Left,
             color: Color::rgb(0, 0, 0),
+            wrap: true,
         }];
         // 画布足够高，让翻转后的字形（横杠落到 baseline 之下）完整可见。
         let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 160, 1.0);
@@ -645,6 +651,7 @@ mod tests {
             font_weight: 400,
             text_align: TextAlign::Left,
             color: Color::rgb(0, 0, 0),
+            wrap: true,
         }];
         let (width, height, data) = render_pixels(&mut backend, &cmds, 200, 50, 1.0);
 
@@ -725,6 +732,7 @@ mod tests {
             font_weight: 400,
             text_align: TextAlign::Left,
             color: Color::rgb(0, 0, 0),
+            wrap: true,
         }];
         let mut backend = TinySkiaBackend::new();
         let (w, h, data) = render_pixels(&mut backend, &cmds, 60, 160, 1.0);
@@ -795,6 +803,7 @@ mod tests {
             font_weight: 400,
             text_align: TextAlign::Left,
             color: Color::rgb(0, 0, 0),
+            wrap: true,
         }];
         let _ = render_pixels(&mut backend, &cmds_text, 50, 20, 1.0);
         assert!(

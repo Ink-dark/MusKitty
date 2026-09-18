@@ -50,6 +50,11 @@ pub enum RenderCommand {
     /// `apply_text_transform`）；`line_height` 是 `line-height` 的使用值（px，
     /// cascade `used_line_height_px` 解析），后端须用它换行与排行，否则
     /// 绘制行位置与布局盒高不一致（T-3 的"汉字位移"教训）。
+    ///
+    /// M-3 batch 3c：`text` 同时是**已应用 white-space 折叠**的内容（cascade
+    /// `apply_white_space`，与 layout 测量同一实现）；`wrap` 是 `white-space`
+    /// 的换行行为位（`nowrap`/`pre` 为 false → 后端按单行绘制不折行，
+    /// 与 layout 测量的容器宽语义一致）。
     Text {
         /// 左上角 X（px，画布坐标系）。
         x: f32,
@@ -57,7 +62,7 @@ pub enum RenderCommand {
         y: f32,
         /// 布局宽度（px），用于换行（T-3），与 layout 层 measure 的容器宽一致。
         width: f32,
-        /// 文本内容（已应用 `text-transform`）。
+        /// 文本内容（已应用 `text-transform` 与 white-space 折叠）。
         text: String,
         /// 字号（px）。
         font_size: f32,
@@ -71,6 +76,8 @@ pub enum RenderCommand {
         text_align: TextAlign,
         /// 文字颜色。
         color: Color,
+        /// 是否允许软换行（`white-space` 行为位，M-3 batch 3c）。
+        wrap: bool,
     },
     /// 开始裁剪（L-2）：后续指令裁剪到该矩形内，直到 [`RenderCommand::EndClip`]。
     Clip {

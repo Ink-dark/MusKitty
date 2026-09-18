@@ -59,11 +59,12 @@ pub fn paint(input: &PaintInput) -> Vec<RenderCommand> {
         input.viewport,
         &mut commands,
         &mut children,
-        16.0,       // 默认 font-size（medium = 16px）
-        "serif",    // 默认 font-family
-        400,        // 默认 font-weight（normal）
+        16.0,                                             // 默认 font-size（medium = 16px）
+        "serif",                                          // 默认 font-family
+        400,                                              // 默认 font-weight（normal）
         16.0 * 1.2, // 默认 line-height（normal = 1.2 × font-size）
         None,       // 默认 text-transform（none）
+        muskitty_cascade::WhiteSpace::from_keyword(None), // 默认 white-space（normal）
         TextAlign::Left,
         Color::BLACK,
     );
@@ -87,15 +88,26 @@ fn paint_recursive(
     inherited_font_weight: u16,
     inherited_line_height: f32,
     inherited_text_transform: Option<&str>,
+    inherited_white_space: muskitty_cascade::WhiteSpace,
     inherited_text_align: TextAlign,
     inherited_color: Color,
 ) {
     let addr = Rc::as_ptr(node) as usize;
 
-    // 本节点的继承上下文：Element 从自身 style 解析字体样式/行高/转换/color，
-    // 其余节点（Text/Comment/...）沿用继承值。text-transform 与 line-height
-    // 的语义均由 cascade 单一来源给出（M-3 batch 3），与 layout 测量一致。
-    let (font_size, font_family, font_weight, line_height, text_transform, text_align, color) = {
+    // 本节点的继承上下文：Element 从自身 style 解析字体样式/行高/转换/
+    // white-space/color，其余节点（Text/Comment/...）沿用继承值。
+    // text-transform 与 line-height（M-3 batch 3）、white-space（batch 3c）
+    // 的语义均由 cascade 单一来源给出，与 layout 测量一致。
+    let (
+        font_size,
+        font_family,
+        font_weight,
+        line_height,
+        text_transform,
+        white_space,
+        text_align,
+        color,
+    ) = {
         let node_ref = node.borrow();
         match &node_ref.kind {
             NodeKind::Element(_) => {
@@ -116,11 +128,18 @@ fn paint_recursive(
                     .and_then(muskitty_cascade::text_transform_keyword)
                     .map(str::to_string)
                     .or_else(|| inherited_text_transform.map(str::to_string));
+                let ws = style
+                    .map(|cs| {
+                        muskitty_cascade::WhiteSpace::from_keyword(
+                            muskitty_cascade::white_space_keyword(cs),
+                        )
+                    })
+                    .unwrap_or(inherited_white_space);
                 let ta = style
                     .map(resolve_text_align)
                     .unwrap_or(inherited_text_align);
                 let c = style.map(extract_text_color).unwrap_or(inherited_color);
-                (fs, ff, fw, lh, tt, ta, c)
+                (fs, ff, fw, lh, tt, ws, ta, c)
             }
             _ => (
                 inherited_font_size,
@@ -128,6 +147,7 @@ fn paint_recursive(
                 inherited_font_weight,
                 inherited_line_height,
                 inherited_text_transform.map(str::to_string),
+                inherited_white_space,
                 inherited_text_align,
                 inherited_color,
             ),
@@ -153,24 +173,34 @@ fn paint_recursive(
         let node_ref = node.borrow();
         match &node_ref.kind {
             // Text 节点 → Text 命令（T-2）。text 无自身 style，用继承上下文。
-            // 纯空白文本（HTML 缩进/换行）不产生可见墨迹，跳过（white-space
-            // 折叠的完整语义推迟到 T-3）。
-            NodeKind::Text(text) if !text.data.trim().is_empty() => {
-                if let Some(node_layout) = layout.get(addr).filter(|l| in_viewport(l, viewport)) {
-                    // M-3 batch 3：内容先过 text-transform（与 layout 测量同一实现）。
-                    let content = apply_text_transform(&text.data, text_transform.as_deref());
-                    commands.push(RenderCommand::Text {
-                        x: node_layout.abs_x,
-                        y: node_layout.abs_y,
-                        width: node_layout.width,
-                        text: content.into_owned(),
-                        font_size,
-                        line_height,
-                        font_family: font_family.clone(),
-                        font_weight,
-                        text_align,
-                        color,
-                    });
+            // M-3 batch 3c：内容先过 white-space 折叠（cascade `apply_white_space`
+            // 单一来源，与 layout 测量同一实现）；折叠后为空的纯空白节点无
+            // 墨迹可画，跳过。`pre` 系保留空白 → 空白本身可能仍是墨迹间内容，
+            // 不再一刀切 trim 判断，以折叠输出为准。
+            NodeKind::Text(text) => {
+                // 先 transform 后折叠（§4 Order；与 layout convert 同序）。
+                let transformed = apply_text_transform(&text.data, text_transform.as_deref());
+                let content = muskitty_cascade::apply_white_space(&transformed, white_space);
+                if !content
+                    .trim_matches(|c: char| c != '\n' && c.is_ascii_whitespace())
+                    .is_empty()
+                {
+                    if let Some(node_layout) = layout.get(addr).filter(|l| in_viewport(l, viewport))
+                    {
+                        commands.push(RenderCommand::Text {
+                            x: node_layout.abs_x,
+                            y: node_layout.abs_y,
+                            width: node_layout.width,
+                            text: content.into_owned(),
+                            font_size,
+                            line_height,
+                            font_family: font_family.clone(),
+                            font_weight,
+                            text_align,
+                            color,
+                            wrap: white_space.wrap,
+                        });
+                    }
                 }
             }
             // Element 节点 → Rect 命令（背景 + 四边边框）。
@@ -236,6 +266,7 @@ fn paint_recursive(
             font_weight,
             line_height,
             text_transform.as_deref(),
+            white_space,
             text_align,
             color,
         );
