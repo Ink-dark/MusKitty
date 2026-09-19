@@ -843,3 +843,90 @@ fn end_to_end_missing_background_image_keeps_page() {
         "background-color must still paint when the image cannot be resolved"
     );
 }
+
+// —— IS-V: inline style 属性的全链路像素验证（§6.1 准则 3/4）——
+
+#[test]
+fn end_to_end_inline_style_beats_same_specificity_stylesheet() {
+    // 内联声明胜过等特异性（乃至更高特异性）的作者规则——层叠准则 4 在
+    // 整条链路上生效：cascade 收集 → 排序 → computed → paint → 像素。
+    // CSS 里用 #id 提高特异性，内联仍应胜出。
+    let (width, data) = render_raw_pixels(
+        r#"<div id="box" style="background-color: blue; width: 40px; height: 20px"></div>"#,
+        "#box { background-color: red; }",
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (0, 0, 255, 255),
+        "inline declaration must beat a higher-specificity author rule"
+    );
+}
+
+#[test]
+fn end_to_end_important_stylesheet_beats_inline_normal() {
+    // §6.1 准则 1 先于准则 4：作者的 `!important` 声明胜过内联普通声明
+    // （内联只在**同等重要性**下凭准则 4 胜出）。
+    let (width, data) = render_raw_pixels(
+        r#"<div id="box" style="background-color: blue; width: 40px; height: 20px"></div>"#,
+        "div { background-color: red !important; }",
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (255, 0, 0, 255),
+        "author !important must beat the inline normal declaration"
+    );
+}
+
+#[test]
+fn end_to_end_inline_shorthand_expands_like_a_stylesheet() {
+    // 内联走同一个 §5.4.5 解析入口：简写展开（这里用 border 简写）与样式表
+    // 声明块行为一致 → 四边都画出来。
+    let (width, data) = render_raw_pixels(
+        r#"<div style="border: 4px solid red; width: 20px; height: 20px"></div>"#,
+        "",
+        40,
+        40,
+    );
+    // 盒 = 内容 20 + 边框 4×2 = 28px；四条边分别在 0..4 与 24..28 区间。
+    assert_eq!(
+        pixel_at(&data, width, 10, 1),
+        (255, 0, 0, 255),
+        "top border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 1, 10),
+        (255, 0, 0, 255),
+        "left border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 10, 26),
+        (255, 0, 0, 255),
+        "bottom border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 26, 10),
+        (255, 0, 0, 255),
+        "right border"
+    );
+}
+
+#[test]
+fn end_to_end_inline_important_beats_stylesheet_important_of_lower_specificity() {
+    // 同等重要性下的第二种对照：内联 `!important` 对作者 `!important`
+    // 仍按准则 4 胜出（此处作者规则特异性更高，仍应落败）。
+    let (width, data) = render_raw_pixels(
+        r#"<div id="box" style="background-color: blue !important; width: 40px; height: 20px"></div>"#,
+        "#box { background-color: red !important; }",
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (0, 0, 255, 255),
+        "inline !important must beat author !important (criterion 4)"
+    );
+}
