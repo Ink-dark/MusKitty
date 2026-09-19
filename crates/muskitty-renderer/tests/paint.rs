@@ -11,8 +11,8 @@ use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::Node;
 use muskitty_layout::{build_layout_tree, compute_layout, LayoutResult};
 use muskitty_renderer::{
-    no_images, paint, Backend, Border, BorderStyle, Color, MockBackend, PaintInput, RenderCommand,
-    RenderOutput, TinySkiaBackend,
+    no_images, paint, Backend, Border, BorderRadius, BorderStyle, Color, MockBackend, PaintInput,
+    RenderCommand, RenderOutput, TinySkiaBackend,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -872,6 +872,7 @@ fn clip_semantics_unchanged_after_lazy_mask() {
             background: Some(Color::rgb(255, 0, 0)),
             border: None,
             image: None,
+            border_radius: BorderRadius::default(),
         },
         RenderCommand::EndClip,
         // clip 结束后的蓝色小矩形：完整绘制。
@@ -883,6 +884,7 @@ fn clip_semantics_unchanged_after_lazy_mask() {
             background: Some(Color::rgb(0, 0, 255)),
             border: None,
             image: None,
+            border_radius: BorderRadius::default(),
         },
     ];
     let mut backend = TinySkiaBackend::new();

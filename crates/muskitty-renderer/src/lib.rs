@@ -44,8 +44,8 @@ pub use backend::tiny_skia::TinySkiaBackend;
 pub use backend::{mock::MockBackend, Backend, RenderOutput};
 pub use color::Color;
 pub use command::{
-    BackgroundImage, BackgroundPosition, BackgroundSize, Border, BorderStyle, LengthOrPercent,
-    RenderCommand, RepeatStyle, SideBorder, TextAlign,
+    BackgroundImage, BackgroundPosition, BackgroundSize, Border, BorderRadius, BorderStyle,
+    LengthOrPercent, Radius, RenderCommand, RepeatStyle, SideBorder, TextAlign,
 };
 pub use image::ImageBits;
 pub use paint::{no_images, paint, PaintInput};

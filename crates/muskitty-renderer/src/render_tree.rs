@@ -9,8 +9,8 @@
 
 use crate::color::Color;
 use crate::command::{
-    BackgroundPosition, BackgroundSize, Border, BorderStyle, LengthOrPercent, RepeatStyle,
-    SideBorder, TextAlign,
+    BackgroundPosition, BackgroundSize, Border, BorderRadius, BorderStyle, LengthOrPercent, Radius,
+    RepeatStyle, SideBorder, TextAlign,
 };
 use muskitty_cascade::{ComputedStyle, ComputedValue};
 use muskitty_css::parser::ComponentValue;
@@ -395,6 +395,60 @@ fn extract_side(
         color,
         style: border_style,
     })
+}
+
+/// 从 ComputedStyle 提取四角圆角（M-3 batch 5，Backgrounds L3 §5.1）。
+///
+/// 四个 `border-<corner>-radius` 长属性由 cascade 的 `border-radius` 简写
+/// 展开或长属性直接声明。每个属性值是 x 半径（及可选的 y 半径，来自 `/`
+/// 简写）的 token 序列：
+/// - px `Dimension` → 直接用；
+/// - `Percentage` → 首值（x）按盒**宽**折算、次值（y）按盒**高**折算（`width`
+///   /`height` 参数即调用方传入的盒子尺寸）；
+/// - 裸 `0` → 0；
+/// - 缺失 → 0，且 y 缺省时 = x（圆角）。
+///
+/// 只认 px 与百分比；其他单位（em 等）本次忽略（该分量视为缺失），并把半径
+/// 钳制在盒半宽/半高内（§5.1 的 corner 重叠时收敛为半圆）。
+pub fn extract_border_radius(style: &ComputedStyle, width: f32, height: f32) -> BorderRadius {
+    let corner = |prop: &str, box_w: f32, box_h: f32| {
+        let mut vals: Vec<f32> = Vec::with_capacity(2);
+        if let Some(cv) = style.get(prop) {
+            for t in cv.tokens() {
+                if vals.len() >= 2 {
+                    break;
+                }
+                match t {
+                    ComponentValue::PreservedToken(Token::Dimension(n, unit))
+                        if unit.eq_ignore_ascii_case("px") =>
+                    {
+                        vals.push(n.value as f32);
+                    }
+                    ComponentValue::PreservedToken(Token::Percentage(p)) => {
+                        // 首值（x）相对宽，次值（y）相对高。
+                        let basis = if vals.is_empty() { box_w } else { box_h };
+                        vals.push(basis * (p.value as f32) / 100.0);
+                    }
+                    ComponentValue::PreservedToken(Token::Number(n)) if n.value == 0.0 => {
+                        vals.push(0.0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let x = vals.first().copied().unwrap_or(0.0);
+        let y = vals.get(1).copied().unwrap_or(x);
+        Radius {
+            x: x.clamp(0.0, box_w / 2.0),
+            y: y.clamp(0.0, box_h / 2.0),
+        }
+    };
+    BorderRadius {
+        top_left: corner("border-top-left-radius", width, height),
+        top_right: corner("border-top-right-radius", width, height),
+        bottom_right: corner("border-bottom-right-radius", width, height),
+        bottom_left: corner("border-bottom-left-radius", width, height),
+    }
 }
 
 /// 从 ComputedStyle 提取轮廓（CSS UI Level 4 §4）。

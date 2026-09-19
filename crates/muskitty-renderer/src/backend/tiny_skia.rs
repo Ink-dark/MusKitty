@@ -23,14 +23,15 @@ use cosmic_text::{
     Attrs, Buffer, Command, Family, FontSystem, Metrics, Shaping, SwashCache, Weight,
 };
 use tiny_skia::{
-    FillRule, FilterQuality, Mask, Paint, PathBuilder, Pattern, Pixmap, Rect, SpreadMode, Transform,
+    FillRule, FilterQuality, Mask, Paint, Path, PathBuilder, Pattern, Pixmap, Rect, SpreadMode,
+    Transform,
 };
 
 use crate::backend::{Backend, RenderOutput};
 use crate::color::Color;
 use crate::command::{
-    BackgroundImage, BackgroundSize, Border, BorderStyle, LengthOrPercent, RenderCommand,
-    RepeatStyle, TextAlign,
+    BackgroundImage, BackgroundSize, Border, BorderRadius, BorderStyle, LengthOrPercent,
+    RenderCommand, RepeatStyle, TextAlign,
 };
 
 /// tiny-skia CPU 渲染后端。
@@ -157,6 +158,7 @@ impl Backend for TinySkiaBackend {
                     background,
                     border,
                     image,
+                    border_radius,
                 } => {
                     // 跳过零尺寸矩形
                     if *width <= 0.0 || *height <= 0.0 {
@@ -168,7 +170,7 @@ impl Backend for TinySkiaBackend {
                     if background.is_none() && !has_border && image.is_none() {
                         continue;
                     }
-                    // RN-1：实际消费 clip 时才懒构建 Mask。
+                    // RN-1：实际消费 clip 时才懒构建 Mask（矩形外层裁剪，缓存）。
                     let clip = clip_mask_for(
                         &pixmap,
                         clip_rect,
@@ -176,14 +178,47 @@ impl Backend for TinySkiaBackend {
                         &mut mask_built_for,
                         scale_xform,
                     );
+                    // M-3 batch 5：圆角几何。`border_radius` 非零时构建盒路径
+                    // 与圆角裁剪 Mask（背景 / 背景图 / 边框统一按此切角）；全
+                    // 0 → 直角，完全走既有路径零额外开销。
+                    let rounded_path = if border_radius.is_zero() {
+                        None
+                    } else {
+                        build_rounded_rect_path(*x, *y, *width, *height, *border_radius)
+                    };
+                    // 圆角裁剪 = 外层矩形裁剪 ∩ 圆角盒路径（逐像素 AND）。仅
+                    // 圆角元素才构建（O(画布) 一次，低频，不缓存，见批注）。
+                    // 延迟初始化：直角分支（None 臂）返回外层 clip 不动它，圆角分支
+                    // 才赋值并在后续 fill/border/image 全程持有。
+                    let rounded_clip;
+                    let effective_clip: Option<&Mask> = match (rounded_path.as_ref(), clip) {
+                        (Some(path), outer) => {
+                            rounded_clip =
+                                Some(rounded_clip_mask(&pixmap, outer, path, scale_xform));
+                            rounded_clip.as_ref()
+                        }
+                        (None, c) => c,
+                    };
 
                     // 填充背景色（CSS Backgrounds L3 §2 绘制顺序：color 在最下）
                     if let Some(bg) = background {
                         if let Some(rect) = Rect::from_xywh(*x, *y, *width, *height) {
                             let mut paint = Paint::default();
                             paint.set_color_rgba8(bg.r, bg.g, bg.b, bg.a);
-                            paint.anti_alias = false;
-                            pixmap.fill_rect(rect, &paint, scale_xform, clip);
+                            // 圆角路径带抗锯齿（四角平滑）；直角矩形维持既有
+                            // 无抗锯齿填充（边缘落在像素边界）。
+                            paint.anti_alias = rounded_path.is_some();
+                            if let Some(path) = rounded_path.as_ref() {
+                                pixmap.fill_path(
+                                    path,
+                                    &paint,
+                                    FillRule::Winding,
+                                    scale_xform,
+                                    effective_clip,
+                                );
+                            } else {
+                                pixmap.fill_rect(rect, &paint, scale_xform, effective_clip);
+                            }
                         }
                     }
 
@@ -198,14 +233,23 @@ impl Backend for TinySkiaBackend {
                             *height,
                             img,
                             scale,
-                            clip,
+                            effective_clip,
                         );
                     }
 
-                    // 绘制四边边框（最上层）
+                    // 绘制四边边框（最上层；圆角下四角的条被裁剪成切角）
                     if let Some(b) = border {
                         if !b.is_empty() {
-                            draw_borders(&mut pixmap, *x, *y, *width, *height, b, scale, clip);
+                            draw_borders(
+                                &mut pixmap,
+                                *x,
+                                *y,
+                                *width,
+                                *height,
+                                b,
+                                scale,
+                                effective_clip,
+                            );
                         }
                     }
                 }
@@ -363,6 +407,93 @@ fn clip_mask_for<'a>(
         *built_for = clip_rect;
     }
     clip_mask.as_ref()
+}
+
+/// 构建四角圆角的盒路径（逻辑坐标，M-3 batch 5）。
+///
+/// 每角用一段三次贝塞尔（kappa ≈ 0.5523）近似 90° 椭圆弧：`x`/`y` 半径
+/// 相等时是圆角，不等时是椭圆角（Backgrounds L3 §5.1 `<length-percentage>
+/// [ / <length-percentage>]` 的两维形式）。半径已由 paint 层钳制在盒子
+/// 半宽/半高内，故四角弧不重叠。四角全 0 时退化为直角矩形轮廓。
+fn build_rounded_rect_path(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    br: BorderRadius,
+) -> Option<Path> {
+    // 单位圆 90° 弧的贝塞尔控制距离常数：4/3·tan(π/8)。
+    let k = 0.5523_f32;
+    let (tl, tr, brr, bl) = (br.top_left, br.top_right, br.bottom_right, br.bottom_left);
+
+    let mut pb = PathBuilder::new();
+    pb.move_to(x + tl.x, y);
+    pb.line_to(x + width - tr.x, y);
+    // 右上角：圆心 (x+width, y)，从顶部横边向右侧纵边。
+    pb.cubic_to(
+        x + width - tr.x * (1.0 - k),
+        y,
+        x + width,
+        y + tr.y * (1.0 - k),
+        x + width,
+        y + tr.y,
+    );
+    pb.line_to(x + width, y + height - brr.y);
+    // 右下角：圆心 (x+width, y+height)，从右侧纵边向底部横边。
+    pb.cubic_to(
+        x + width,
+        y + height - brr.y * (1.0 - k),
+        x + width - brr.x * (1.0 - k),
+        y + height,
+        x + width - brr.x,
+        y + height,
+    );
+    pb.line_to(x + bl.x, y + height);
+    // 左下角：圆心 (x, y+height)，从底部横边向左侧纵边。
+    pb.cubic_to(
+        x + bl.x * (1.0 - k),
+        y + height,
+        x,
+        y + height - bl.y * (1.0 - k),
+        x,
+        y + height - bl.y,
+    );
+    pb.line_to(x, y + tl.y);
+    // 左上角：圆心 (x, y)，从左侧纵边向顶部横边。
+    pb.cubic_to(
+        x,
+        y + tl.y * (1.0 - k),
+        x + tl.x * (1.0 - k),
+        y,
+        x + tl.x,
+        y,
+    );
+    pb.close();
+    pb.finish()
+}
+
+/// 圆角裁剪 Mask：圆角盒路径的白色覆盖 mask 与外层矩形裁剪 mask 逐像素
+/// 求交（AND，白色=允许、黑色=屏蔽 → 取 min）。圆角轮廓开启抗锯齿，让四角
+/// 像素平滑过渡。
+///
+/// 每次圆角元素调用 O(画布) 构建一次**全新** Mask（不缓存）——圆角是低频
+/// 装饰场景，接受此代价（CR-1 批注仅针对高频矩形裁剪；圆角不受其缓冲）。
+fn rounded_clip_mask(
+    pixmap: &Pixmap,
+    outer: Option<&Mask>,
+    path: &Path,
+    scale_xform: Transform,
+) -> Mask {
+    let mut m = Mask::new(pixmap.width(), pixmap.height()).expect("mask alloc");
+    m.fill_path(path, FillRule::Winding, true, scale_xform);
+    if let Some(outer) = outer {
+        let od = outer.data();
+        let md = m.data_mut();
+        for (mo, o) in md.iter_mut().zip(od) {
+            *mo = (*mo).min(*o);
+        }
+    }
+    m
 }
 
 /// 绘制四边边框（每个可见边填充一条 border box 内缘的矩形条）。
@@ -707,7 +838,7 @@ fn family_from_css(name: &str) -> Family<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::{RenderCommand, SideBorder};
+    use crate::command::{BorderRadius, RenderCommand, SideBorder};
     use crate::Color;
 
     /// 渲染并取出 RGBA 像素数据（width, height, data）。
@@ -1144,6 +1275,7 @@ mod tests {
                 background: Some(Color::rgb(255, 0, 0)),
                 border: None,
                 image: None,
+                border_radius: BorderRadius::default(),
             },
             RenderCommand::Rect {
                 x: 0.0,
@@ -1153,6 +1285,7 @@ mod tests {
                 background: Some(Color::rgb(0, 255, 0)),
                 border: None,
                 image: None,
+                border_radius: BorderRadius::default(),
             },
         ];
         let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10, 1.0);
@@ -1172,6 +1305,7 @@ mod tests {
             height: 60.0,
             background: None,
             image: None,
+            border_radius: BorderRadius::default(),
             border: Some(Border::uniform(
                 2.0,
                 Color::rgb(0, 0, 255),
@@ -1207,6 +1341,7 @@ mod tests {
             height: 20.0,
             background: None,
             image: None,
+            border_radius: BorderRadius::default(),
             border: Some(Border {
                 left: Some(SideBorder {
                     width: 4.0,
@@ -1236,6 +1371,61 @@ mod tests {
             pixel(&data, width, 20, 20),
             (255, 255, 255, 255),
             "interior"
+        );
+    }
+
+    #[test]
+    fn border_radius_clips_corners_of_fill() {
+        // M-3 batch 5 e2e：圆角矩形四角被切（切掉的角露出白底），中心仍着色；
+        // 无圆角对照矩形同角保持着色。半径 20 的盒 100×100：角部 x/y < 20
+        // 的象限被裁掉。
+        let mk = |br| RenderCommand::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+            background: Some(Color::rgb(255, 0, 0)),
+            image: None,
+            border: None,
+            border_radius: br,
+        };
+        let mut backend = TinySkiaBackend::new();
+        let (w, _, rd) = render_pixels(
+            &mut backend,
+            &[mk(BorderRadius::uniform(20.0, 20.0))],
+            100,
+            100,
+            1.0,
+        );
+        let (_, _, sd) = render_pixels(&mut backend, &[mk(BorderRadius::default())], 100, 100, 1.0);
+
+        // 圆角：角部被切 → 露出画布白底（255,255,255，非红）；非角区与中心仍红。
+        // 半径 20 的盒 100×100：四角象限内、距角 < 半径的点被裁掉。红通道无法
+        // 区分"被切出的白底"（R=255）与"未被切的红填充"（R=255），故看绿通道：
+        // 白底 G=255，红填充 G=0。（角上允许少量 AA 残留在白底边缘，用阈值。）
+        let green = |d: &[u8], x: u32, y: u32| pixel(d, w, x, y).1;
+        assert!(
+            green(&rd, 5, 5) > 200,
+            "rounded cuts top-left corner revealing white bg (got {:?})",
+            pixel(&rd, w, 5, 5)
+        );
+        assert!(
+            green(&rd, 95, 95) > 200,
+            "rounded cuts bottom-right corner revealing white bg (got {:?})",
+            pixel(&rd, w, 95, 95)
+        );
+        assert_eq!(pixel(&rd, w, 50, 50), (255, 0, 0, 255), "center stays red");
+        assert_eq!(
+            pixel(&rd, w, 30, 10),
+            (255, 0, 0, 255),
+            "point clear of the corner arc stays red"
+        );
+
+        // 对照直角：同角保持红色
+        assert_eq!(
+            pixel(&sd, w, 5, 5),
+            (255, 0, 0, 255),
+            "straight box keeps corner red"
         );
     }
 
@@ -1392,6 +1582,7 @@ mod tests {
             height: 60.0,
             background: None,
             image: None,
+            border_radius: BorderRadius::default(),
             border: Some(Border::uniform(
                 2.0,
                 Color::rgb(0, 0, 255),

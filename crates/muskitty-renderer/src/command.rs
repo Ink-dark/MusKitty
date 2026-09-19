@@ -143,6 +143,9 @@ pub enum RenderCommand {
         /// natural size）与 BG-1 初始值一致。绘制顺序为**背景色之上、边框
         /// 之下**（CSS Backgrounds L3 §2：color → image → border）。
         image: Option<BackgroundImage>,
+        /// 四角圆角（M-3 batch 5，Backgrounds L3 §5.1）。全 0 = 直角矩形
+        /// （默认，不影响既有像素）。背景、背景图与边框都按此几何切角。
+        border_radius: BorderRadius,
     },
     /// 文本绘制（T-2 / T-3）。
     ///
@@ -318,8 +321,70 @@ impl BorderStyle {
     }
 }
 
+/// 单个角的圆角半径（CSS `border-<corner>-radius` 的 x/y 使用值，M-3 batch 5）。
+///
+/// 两个分量已由 paint 阶段按盒尺寸折算为**绝对值 px**（百分比 → 盒宽/高 ×
+/// 百分比，见 render_tree::extract_border_radius）。`x`/`y` 相等即圆形角。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Radius {
+    /// 水平半径（px；`0` = 直角）。
+    pub x: f32,
+    /// 垂直半径（px；`0` = 直角）。
+    pub y: f32,
+}
+
+impl Default for Radius {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0 }
+    }
+}
+
+impl Radius {
+    /// 是否为 0（直角）。
+    pub fn is_zero(self) -> bool {
+        self.x <= 0.0 && self.y <= 0.0
+    }
+}
+
+/// 四角圆角（CSS Backgrounds & Borders L3 §5.1）。
+///
+/// 独立于 [`Border`] 并行传递的额外信息——圆角**不**改变 border 模型，只给
+/// 后端提供把背景/背景图/边框切角的几何参数。全 0 = 直角矩形（等同无圆角）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BorderRadius {
+    /// 左上角。
+    pub top_left: Radius,
+    /// 右上角。
+    pub top_right: Radius,
+    /// 右下角。
+    pub bottom_right: Radius,
+    /// 左下角。
+    pub bottom_left: Radius,
+}
+
+impl BorderRadius {
+    /// 四角是否都 ≤ 0（直角矩形，等价无圆角）。
+    pub fn is_zero(self) -> bool {
+        self.top_left.is_zero()
+            && self.top_right.is_zero()
+            && self.bottom_right.is_zero()
+            && self.bottom_left.is_zero()
+    }
+
+    /// 四角取相同 `x`/`y` 半径（测试 / 快捷构造）。
+    pub fn uniform(x: f32, y: f32) -> Self {
+        let r = Radius { x, y };
+        Self {
+            top_left: r,
+            top_right: r,
+            bottom_right: r,
+            bottom_left: r,
+        }
+    }
+}
+
 impl RenderCommand {
-    /// 构造一个纯背景填充矩形（无边框、无背景图）。
+    /// 构造一个纯背景填充矩形（无边框、无背景图、直角）。
     pub fn rect(x: f32, y: f32, width: f32, height: f32, background: Color) -> Self {
         RenderCommand::Rect {
             x,
@@ -329,6 +394,7 @@ impl RenderCommand {
             background: Some(background),
             border: None,
             image: None,
+            border_radius: BorderRadius::default(),
         }
     }
 }
@@ -349,6 +415,7 @@ mod tests {
                 background,
                 border,
                 image,
+                border_radius,
             } => {
                 assert_eq!(x, 10.0);
                 assert_eq!(y, 20.0);
@@ -357,9 +424,29 @@ mod tests {
                 assert_eq!(background, Some(Color::rgb(255, 0, 0)));
                 assert_eq!(border, None);
                 assert_eq!(image, None);
+                assert_eq!(border_radius, BorderRadius::default(), "rect() 默认直角");
             }
             _ => panic!("expected Rect"),
         }
+    }
+
+    #[test]
+    fn border_radius_construction() {
+        let br = BorderRadius::uniform(4.0, 4.0);
+        assert!(!br.is_zero());
+        for c in [br.top_left, br.top_right, br.bottom_right, br.bottom_left] {
+            assert_eq!(c.x, 4.0);
+            assert_eq!(c.y, 4.0);
+        }
+        // 单角非零 → 非全直角。
+        let br = BorderRadius {
+            top_left: Radius { x: 2.0, y: 2.0 },
+            ..BorderRadius::default()
+        };
+        assert!(!br.is_zero());
+        assert!(br.top_right.is_zero());
+        // 全 0 → is_zero。
+        assert!(BorderRadius::default().is_zero());
     }
 
     #[test]

@@ -16,8 +16,9 @@ use crate::image::ImageBits;
 use crate::render_tree::{
     apply_text_transform, extract_background_color, extract_background_image_url,
     extract_background_position, extract_background_repeat, extract_background_size,
-    extract_border, extract_outline, extract_text_color, resolve_font_family, resolve_font_size,
-    resolve_font_weight, resolve_line_height, resolve_text_align,
+    extract_border, extract_border_radius, extract_outline, extract_text_color,
+    resolve_font_family, resolve_font_size, resolve_font_weight, resolve_line_height,
+    resolve_text_align,
 };
 use muskitty_cascade::ComputedStyle;
 use muskitty_dom::{Node, NodeKind};
@@ -248,6 +249,10 @@ fn paint_recursive(
                                     size: extract_background_size(style),
                                 });
 
+                            // M-3 batch 5：四角圆角（% 按盒宽/高折算）。
+                            let border_radius =
+                                extract_border_radius(style, node_layout.width, node_layout.height);
+
                             // 有背景色/背景图/边框时生成绘制指令（绝对坐标）。
                             if bg.is_some() || border.is_some() || image.is_some() {
                                 commands.push(RenderCommand::Rect {
@@ -258,6 +263,7 @@ fn paint_recursive(
                                     background: bg,
                                     border,
                                     image,
+                                    border_radius,
                                 });
                             }
                         }
