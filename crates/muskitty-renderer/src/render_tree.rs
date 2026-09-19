@@ -68,16 +68,34 @@ pub fn extract_background_image_url(style: &ComputedStyle) -> Option<String> {
 /// cascade 已把 font-size 归一化为 px Dimension（`normalize_font_size`），
 /// 此处直接解析 `Token::Dimension(_, "px")`。无法解析时返回 `None`
 /// （调用方回退到继承的 font-size 或默认 16px）。
+///
+/// 审计 H-11：出口钳制，与 layout `style_map::clamp_length`（F-1）同语义
+/// ——NaN → 0、±inf/超界 → `±MAX_FONT_SIZE_PX`。cascade 只归一化关键字、
+/// 显式长度原样通过（tokenizer 对 `1e39px` 产出 inf），若不钳制则布局
+/// 测量（有钳制）与绘制字号分叉，inf 还会进入 cosmic-text 的缩放路径。
 pub fn resolve_font_size(style: &ComputedStyle) -> Option<f32> {
     let cv = style.get("font-size")?;
     for v in cv.tokens() {
         if let ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) = v {
             if unit.eq_ignore_ascii_case("px") {
-                return Some(numeric.value as f32);
+                return Some(clamp_font_size(numeric.value));
             }
         }
     }
     None
+}
+
+/// 长度上限（f32，与 layout `MAX_LENGTH_PX` = 2^25 一致）。
+pub const MAX_FONT_SIZE_PX: f32 = 33_554_432.0;
+
+/// F-1 同语义钳制：NaN → 0；±inf / 超界 → `±MAX_FONT_SIZE_PX`。
+fn clamp_font_size(v: f64) -> f32 {
+    let v = v as f32;
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(-MAX_FONT_SIZE_PX, MAX_FONT_SIZE_PX)
+    }
 }
 
 /// 从 ComputedStyle 提取 font-family（取首个字体族名，T-3）。
@@ -305,4 +323,54 @@ fn parse_border_width(cv: &ComputedValue) -> Option<f32> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 构造 `font-size: <value>px` 的 ComputedStyle。
+    fn style_with_font_size_px(value: f64) -> ComputedStyle {
+        let mut cs = ComputedStyle::new();
+        cs.set(
+            "font-size",
+            ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Dimension(
+                muskitty_css::tokenizer::Numeric {
+                    value,
+                    is_integer: false,
+                    has_sign: false,
+                },
+                "px".to_string(),
+            ))]),
+        );
+        cs
+    }
+
+    #[test]
+    fn resolve_font_size_clamps_non_finite_and_huge_values() {
+        // 审计 H-11：`font-size: 1e39px`（tokenizer 产出 inf）此前原样进入
+        // 绘制（cosmic-text Metrics 的 scale_factor=inf），而 layout 测量侧
+        // 经 F-1 钳制——两侧字号分叉。现与 layout clamp_length 同语义。
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(f64::INFINITY)),
+            Some(MAX_FONT_SIZE_PX)
+        );
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(f64::NEG_INFINITY)),
+            Some(-MAX_FONT_SIZE_PX)
+        );
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(f64::NAN)),
+            Some(0.0)
+        );
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(1e300)),
+            Some(MAX_FONT_SIZE_PX)
+        );
+        // 正常值不受影响。
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(16.0)),
+            Some(16.0)
+        );
+    }
 }

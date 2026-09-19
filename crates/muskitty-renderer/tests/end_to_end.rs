@@ -760,6 +760,17 @@ fn render_with_images(
     vw: u32,
     vh: u32,
 ) -> (u32, Vec<u8>) {
+    render_with_images_scaled(html, images, vw, vh, 1.0)
+}
+
+/// 全链路渲染（含图像资源表 + HiDPI scale）并返回 RGBA（物理像素）。
+fn render_with_images_scaled(
+    html: &str,
+    images: &HashMap<String, muskitty_renderer::ImageBits>,
+    vw: u32,
+    vh: u32,
+    scale: f32,
+) -> (u32, Vec<u8>) {
     let dom = muskitty_html5_parser::parse(html);
     let styles = compute_styles_tree(&dom, &[], &StyleTreeOptions::default());
     let mut tree = build_layout_tree(&dom, &styles);
@@ -773,7 +784,7 @@ fn render_with_images(
     };
     let commands = paint(&input);
     let mut backend = TinySkiaBackend::new();
-    match backend.render(&commands, vw, vh, 1.0) {
+    match backend.render(&commands, vw, vh, scale) {
         RenderOutput::Pixels { width, data, .. } => (width, data),
         other => panic!("expected Pixels, got {other:?}"),
     }
@@ -842,6 +853,34 @@ fn end_to_end_missing_background_image_keeps_page() {
         (255, 0, 0, 255),
         "background-color must still paint when the image cannot be resolved"
     );
+}
+
+#[test]
+fn end_to_end_background_image_hidpi_covers_full_box() {
+    // 审计 H-9：scale=2 下背景图必须覆盖**整个**盒的物理区域。此前
+    // fill_rect 误传 identity，逻辑坐标被当物理坐标 → 背景图只画在盒
+    // 左上角之外的区域。盒 60×40 逻辑 → 物理 (0,0)-(120,80)；画布
+    // 160×120 物理。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/tile.png".to_string(), img);
+    let (width, data) = render_with_images_scaled(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/tile.png')"></div>"#,
+        &images,
+        160,
+        120,
+        2.0,
+    );
+    // 盒右下角内侧（物理 (110, 70) = 逻辑 (55, 35)）：修复前是白画布。
+    assert_eq!(
+        pixel_at(&data, width, 110, 70),
+        (0, 0, 255, 255),
+        "background image must cover the whole box in physical pixels"
+    );
+    // 盒中心同样被平铺覆盖。
+    assert_eq!(pixel_at(&data, width, 60, 40), (0, 0, 255, 255));
+    // 盒外（物理 (140, 100) = 逻辑 (70, 50)）仍是白画布。
+    assert_eq!(pixel_at(&data, width, 140, 100), (255, 255, 255, 255));
 }
 
 // —— IS-V: inline style 属性的全链路像素验证（§6.1 准则 3/4）——
