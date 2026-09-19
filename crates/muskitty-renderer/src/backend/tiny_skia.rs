@@ -28,8 +28,10 @@ use tiny_skia::{
 
 use crate::backend::{Backend, RenderOutput};
 use crate::color::Color;
-use crate::command::{Border, BorderStyle, RenderCommand, TextAlign};
-use crate::image::ImageBits;
+use crate::command::{
+    BackgroundImage, BackgroundSize, Border, BorderStyle, LengthOrPercent, RenderCommand,
+    RepeatStyle, TextAlign,
+};
 
 /// tiny-skia CPU 渲染后端。
 ///
@@ -462,8 +464,14 @@ fn draw_outline(
 ///
 /// 实现方式：以图像为 pattern shader、`SpreadMode::Repeat`，用一次
 /// `fill_rect` 铺满整个元素盒——平铺与盒边界裁剪都由 rasterizer 一次完成
-/// （比逐块 `draw_pixmap` 更省，且天然处理非整数尺寸）。图像左上角锚定盒
-/// 左上角由 pattern transform 表达（逻辑坐标下 identity 平移 + 统一 scale）。
+/// （比逐块 `draw_pixmap` 更省，且天然处理非整数尺寸）。图像左上角锚定
+/// 盒左上角由 pattern transform 表达（逻辑坐标下 identity 平移 + 统一 scale）。
+///
+/// BG-1 收尾：`background-repeat` / `background-position` / `background-size`
+/// 三参数在此应用——start 偏移经 `position` 折算（百分比按盒宽/高），图像
+/// 目标尺寸经 `size` 折算（auto=natural / 绝对 / contain / cover），绘制
+/// 区域按 `repeat` 决定（双轴/单向平铺或单块）并裁剪到盒内。三者全取默认值
+/// （repeat 平铺、起点 0% 0%、auto）时结果与 BG-1 初始值逐像素一致。
 ///
 /// 绘制顺序由调用方保证（背景色之上、边框之下）。
 #[allow(clippy::too_many_arguments)]
@@ -473,13 +481,59 @@ fn draw_background_image(
     y: f32,
     width: f32,
     height: f32,
-    image: &ImageBits,
+    bg: &BackgroundImage,
     scale: f32,
     clip_mask: Option<&Mask>,
 ) {
+    let image = &bg.bits;
     if image.width == 0 || image.height == 0 || width <= 0.0 || height <= 0.0 {
         return;
     }
+    // 目标图像尺寸（逻辑 CSS px；百分比相对盒尺寸）。
+    let (fw, fh) = resolve_bg_size(
+        &bg.size,
+        image.width as f32,
+        image.height as f32,
+        width,
+        height,
+    );
+    if fw <= 0.0 || fh <= 0.0 {
+        return;
+    }
+    // 起点偏移（逻辑 CSS px）。
+    let start_x = x + resolve_bg_offset(bg.position.x, width);
+    let start_y = y + resolve_bg_offset(bg.position.y, height);
+
+    // 物理坐标。
+    let spx = start_x * scale;
+    let spy = start_y * scale;
+    let fw_p = fw * scale;
+    let fh_p = fh * scale;
+    let bl = x * scale;
+    let bt = y * scale;
+    let br = (x + width) * scale;
+    let bb = (y + height) * scale;
+
+    // 绘制区域（物理）按 repeat 决定：双轴/单向平铺覆盖到盒边，不重复只覆盖
+    // 单个目标块。
+    let (d_l, d_t, d_w, d_h) = match bg.repeat {
+        RepeatStyle::Repeat => (spx, spy, br - spx, bb - spy),
+        RepeatStyle::RepeatX => (spx, spy, br - spx, fh_p),
+        RepeatStyle::RepeatY => (spx, spy, fw_p, bb - spy),
+        RepeatStyle::NoRepeat => (spx, spy, fw_p, fh_p),
+    };
+    // 与盒矩形求交（背景图不画出无尺寸区域的盒，cover 超出的部分被裁掉）。
+    let l = d_l.max(bl);
+    let t = d_t.max(bt);
+    let r = (d_l + d_w).min(br);
+    let b = (d_t + d_h).min(bb);
+    if r <= l || b <= t {
+        return;
+    }
+    let Some(rect) = Rect::from_xywh(l, t, r - l, b - t) else {
+        return;
+    };
+
     // 图像字节 → tiny-skia Pixmap（本函数内部，类型不外泄）。
     let Some(mut tile) = Pixmap::new(image.width, image.height) else {
         return;
@@ -489,9 +543,17 @@ fn draw_background_image(
     }
     tile.data_mut().copy_from_slice(&image.data);
 
-    // pattern 以图像像素为单位平铺；盒的左上角锚定需要把 pattern 原点移到
-    // 盒位置，并按 HiDPI scale 放大（与其它绘制一致的逻辑→物理映射）。
-    let pattern_xform = Transform::from_row(scale, 0.0, 0.0, scale, scale * x, scale * y);
+    // pattern 以原图像素为单位；xform 把单元变换到画布物理坐标：按最终目标
+    // 尺寸缩放 + 平移到起点（本轴不重复时 region 高度/宽度即单个目标块，
+    // SpreadMode::Repeat 也只显示第一块）。
+    let pattern_xform = Transform::from_row(
+        fw_p / image.width as f32,
+        0.0,
+        0.0,
+        fh_p / image.height as f32,
+        spx,
+        spy,
+    );
     let paint = Paint {
         shader: Pattern::new(
             tile.as_ref(),
@@ -503,10 +565,39 @@ fn draw_background_image(
         ..Paint::default()
     };
 
-    // 用完整盒矩形作为覆盖范围（clip 由 rasterizer 与调用方传入的 mask 共同
-    // 保证），identity transform：pattern 自身已表达全部映射。
-    if let Some(rect) = Rect::from_xywh(x, y, width, height) {
-        pixmap.fill_rect(rect, &paint, Transform::identity(), clip_mask);
+    pixmap.fill_rect(rect, &paint, Transform::identity(), clip_mask);
+}
+
+/// `background-position` / 长度分量折算为盒内偏移（px）。
+fn resolve_bg_offset(l: LengthOrPercent, box_len: f32) -> f32 {
+    match l {
+        LengthOrPercent::Px(v) => v,
+        LengthOrPercent::Percent(p) => box_len * p / 100.0,
+    }
+}
+
+/// `background-size` → 目标逻辑尺寸（px；百分比相对盒尺寸，auto 用自然尺寸）。
+fn resolve_bg_size(size: &BackgroundSize, iw: f32, ih: f32, bw: f32, bh: f32) -> (f32, f32) {
+    match size {
+        BackgroundSize::Auto => (iw, ih),
+        BackgroundSize::Length { width, height } => {
+            let w = resolve_bg_offset(*width, bw);
+            match height {
+                // 显式高度：直接使用。
+                Some(h) => (w, resolve_bg_offset(*h, bh)),
+                // 高度 auto：按图像纵横比推导。
+                None => (w, w * ih / iw),
+            }
+        }
+        // 等比缩放：contain 完全放入盒内，cover 铺满盒（多出的被盒裁剪）。
+        BackgroundSize::Contain => {
+            let s = (bw / iw).min(bh / ih);
+            (iw * s, ih * s)
+        }
+        BackgroundSize::Cover => {
+            let s = (bw / iw).max(bh / ih);
+            (iw * s, ih * s)
+        }
     }
 }
 

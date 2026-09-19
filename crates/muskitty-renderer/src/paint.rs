@@ -11,11 +11,12 @@
 //! DOM 累加会在未来 `position: absolute` / transform 下双重计数。
 
 use crate::color::Color;
-use crate::command::{RenderCommand, TextAlign};
+use crate::command::{BackgroundImage, RenderCommand, TextAlign};
 use crate::image::ImageBits;
 use crate::render_tree::{
-    apply_text_transform, extract_background_color, extract_background_image_url, extract_border,
-    extract_outline, extract_text_color, resolve_font_family, resolve_font_size,
+    apply_text_transform, extract_background_color, extract_background_image_url,
+    extract_background_position, extract_background_repeat, extract_background_size,
+    extract_border, extract_outline, extract_text_color, resolve_font_family, resolve_font_size,
     resolve_font_weight, resolve_line_height, resolve_text_align,
 };
 use muskitty_cascade::ComputedStyle;
@@ -233,11 +234,19 @@ fn paint_recursive(
                                 extract_background_color(style).filter(|c| !c.is_transparent());
                             // `currentcolor` 取本元素文字色（M-3 batch 2）
                             let border = extract_border(style, color);
-                            // BG-1：背景图按绝对 URL 查已解码资源表；抓取或
-                            // 解码失败的 key 缺失 → 不画图（页面照常渲染）。
+                            // BG-1 收尾：背景图按绝对 URL 查已解码资源表，并
+                            // 合并 background-repeat/position/size 绘制参数。
+                            // 抓取或解码失败的 key 缺失 → 不画图（页面照常
+                            // 渲染）。
                             let image = extract_background_image_url(style)
                                 .and_then(|url| images.get(&url))
-                                .cloned();
+                                .cloned()
+                                .map(|bits| BackgroundImage {
+                                    bits,
+                                    repeat: extract_background_repeat(style),
+                                    position: extract_background_position(style),
+                                    size: extract_background_size(style),
+                                });
 
                             // 有背景色/背景图/边框时生成绘制指令（绝对坐标）。
                             if bg.is_some() || border.is_some() || image.is_some() {

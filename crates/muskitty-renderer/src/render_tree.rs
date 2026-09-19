@@ -8,7 +8,10 @@
 //! 场景需要中间结构时再引入，当前无消费者。
 
 use crate::color::Color;
-use crate::command::{Border, BorderStyle, SideBorder, TextAlign};
+use crate::command::{
+    BackgroundPosition, BackgroundSize, Border, BorderStyle, LengthOrPercent, RepeatStyle,
+    SideBorder, TextAlign,
+};
 use muskitty_cascade::{ComputedStyle, ComputedValue};
 use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
@@ -61,6 +64,181 @@ pub fn extract_background_image_url(style: &ComputedStyle) -> Option<String> {
         }
     }
     None
+}
+
+/// 从 ComputedStyle 提取 `background-repeat` 平铺样式（BG-1 收尾）。
+///
+/// 支持子集（Backgrounds L3 §3.2）：`repeat`/`repeat-x`/`repeat-y`/
+/// `no-repeat`。未知关键字 / 缺失 / 不可解析 → 回退 [`RepeatStyle::Repeat`]
+/// （初始值），不致命。
+pub fn extract_background_repeat(style: &ComputedStyle) -> RepeatStyle {
+    let Some(cv) = style.get("background-repeat") else {
+        return RepeatStyle::Repeat;
+    };
+    for t in cv.tokens() {
+        if let ComponentValue::PreservedToken(Token::Ident(s)) = t {
+            return match s.to_ascii_lowercase().as_str() {
+                "repeat-x" => RepeatStyle::RepeatX,
+                "repeat-y" => RepeatStyle::RepeatY,
+                "no-repeat" => RepeatStyle::NoRepeat,
+                // "repeat" 及任何未知 → Repeat（初始值）。
+                _ => RepeatStyle::Repeat,
+            };
+        }
+    }
+    RepeatStyle::Repeat
+}
+
+/// 从 ComputedStyle 提取 `background-position` 起点偏移（BG-1 收尾）。
+///
+/// 支持子集（Backgrounds L3 §3.6）：`left`/`right`/`center`/`top`/
+/// `bottom` 关键字或 `<length-percentage>`，至多两个分量（x y）。未提供 /
+/// 无法解析 → 回退 `0% 0%`（初始值）。
+pub fn extract_background_position(style: &ComputedStyle) -> BackgroundPosition {
+    let default = BackgroundPosition::default();
+    let Some(cv) = style.get("background-position") else {
+        return default;
+    };
+    // 收集 position 数值分量（跳过非数值 token，如 whitespace）。
+    let vals: Vec<&Token> = cv
+        .tokens()
+        .iter()
+        .filter_map(|t| match t {
+            ComponentValue::PreservedToken(tok) => Some(tok),
+            _ => None,
+        })
+        .filter(|tok| {
+            matches!(
+                tok,
+                Token::Ident(_) | Token::Dimension(..) | Token::Percentage(..)
+            )
+        })
+        .take(2)
+        .collect();
+    match vals.as_slice() {
+        [] => default,
+        [single] => single_value_position(single),
+        [x, y] => {
+            // 双值：前者水平，后者垂直；任一轴归属不符 → 回退默认。
+            let (Some(px), Some(py)) = (bg_axis_value(x), bg_axis_value(y)) else {
+                return default;
+            };
+            BackgroundPosition { x: px, y: py }
+        }
+        _ => default,
+    }
+}
+
+/// 单值 position：垂直关键字（top/bottom）作 y（x=center），其余作 x（y=center）。
+fn single_value_position(tok: &Token) -> BackgroundPosition {
+    if let Token::Ident(s) = tok {
+        match s.to_ascii_lowercase().as_str() {
+            "top" => {
+                return BackgroundPosition {
+                    x: LengthOrPercent::Percent(50.0),
+                    y: LengthOrPercent::Percent(0.0),
+                };
+            }
+            "bottom" => {
+                return BackgroundPosition {
+                    x: LengthOrPercent::Percent(50.0),
+                    y: LengthOrPercent::Percent(100.0),
+                };
+            }
+            _ => {}
+        }
+    }
+    // 其余（left/right/center/长度/百分比）作水平值，垂直取 center。
+    match bg_axis_value(tok) {
+        Some(x) => BackgroundPosition {
+            x,
+            y: LengthOrPercent::Percent(50.0),
+        },
+        // 无法归属（如 registry 初始值整串 "0% 0%" 被合成为一个 Ident）→
+        // 回退初始值 0% 0%（Backgrounds L3 §3.6）。
+        None => BackgroundPosition::default(),
+    }
+}
+
+/// 把单个 position 分量 token 解析为水平/垂直偏移；无法归属返回 `None`。
+fn bg_axis_value(tok: &Token) -> Option<LengthOrPercent> {
+    match tok {
+        Token::Ident(s) => match s.to_ascii_lowercase().as_str() {
+            "left" | "top" => Some(LengthOrPercent::Percent(0.0)),
+            "right" | "bottom" => Some(LengthOrPercent::Percent(100.0)),
+            "center" => Some(LengthOrPercent::Percent(50.0)),
+            _ => None,
+        },
+        Token::Dimension(n, u) if u.eq_ignore_ascii_case("px") => {
+            Some(LengthOrPercent::Px(n.value as f32))
+        }
+        Token::Percentage(p) => Some(LengthOrPercent::Percent(p.value as f32)),
+        _ => None,
+    }
+}
+
+/// 从 ComputedStyle 提取 `background-size` 尺寸（BG-1 收尾）。
+///
+/// 支持子集（Backgrounds L3 §3.9）：`auto` / `cover` / `contain` 或
+/// `<length-percentage>{1,2}`（第二值 `auto` = [`BackgroundSize::Length`]
+/// 的 `height: None`）。未知 / 无法解析 → 回退 [`BackgroundSize::Auto`]。
+pub fn extract_background_size(style: &ComputedStyle) -> BackgroundSize {
+    let Some(cv) = style.get("background-size") else {
+        return BackgroundSize::Auto;
+    };
+    let vals: Vec<&Token> = cv
+        .tokens()
+        .iter()
+        .filter_map(|t| match t {
+            ComponentValue::PreservedToken(tok) => Some(tok),
+            _ => None,
+        })
+        .filter(|tok| {
+            matches!(
+                tok,
+                Token::Ident(..) | Token::Dimension(..) | Token::Percentage(..)
+            )
+        })
+        .take(2)
+        .collect();
+    match vals.as_slice() {
+        [] => BackgroundSize::Auto,
+        [t] => match t {
+            Token::Ident(s) if s.eq_ignore_ascii_case("cover") => BackgroundSize::Cover,
+            Token::Ident(s) if s.eq_ignore_ascii_case("contain") => BackgroundSize::Contain,
+            // "auto" 及任何长度/百分比 → Length（高度 auto）。
+            Token::Ident(s) if s.eq_ignore_ascii_case("auto") => BackgroundSize::Auto,
+            // 单个长度/百分比 → width 固定、height auto。
+            _ => bg_size_len(t)
+                .map(|width| BackgroundSize::Length {
+                    width,
+                    height: None,
+                })
+                .unwrap_or(BackgroundSize::Auto),
+        },
+        [w, h] => {
+            // 双值：width + height；任一为 auto → 该轴按纵横比推导。
+            match (bg_size_len(w), bg_size_len(h)) {
+                // 两 auto → Auto（自然尺寸）。
+                (None, None) => BackgroundSize::Auto,
+                (Some(width), height) => BackgroundSize::Length { width, height },
+                // width=auto 组合（height 给定了值）不在支持子集内 → 回退 Auto。
+                (None, Some(_)) => BackgroundSize::Auto,
+            }
+        }
+        _ => BackgroundSize::Auto,
+    }
+}
+
+/// 把单个 size 分量解析为 [`LengthOrPercent`]；`auto` 或不可解析返回 `None`。
+fn bg_size_len(tok: &Token) -> Option<LengthOrPercent> {
+    match tok {
+        Token::Dimension(n, u) if u.eq_ignore_ascii_case("px") => {
+            Some(LengthOrPercent::Px(n.value as f32))
+        }
+        Token::Percentage(p) => Some(LengthOrPercent::Percent(p.value as f32)),
+        _ => None,
+    }
 }
 
 /// 从 ComputedStyle 提取 font-size 的 px 值。

@@ -6,6 +6,102 @@
 use crate::color::Color;
 use crate::image::ImageBits;
 
+/// 长度或百分比（background-position / background-size 的组成部分）。
+///
+/// 百分比在绘制时按盒尺寸折算；px 直接使用（1 CSS px 对应 1 逻辑 px）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LengthOrPercent {
+    /// 长度（px，声明即为 px —— cascade 未做单位换算的属性原样透传）。
+    Px(f32),
+    /// 百分比（`0.0` = 0%，`100.0` = 100%）。
+    Percent(f32),
+}
+
+/// CSS `background-repeat` 的平铺样式（Backgrounds L3 §3.2 支持子集）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RepeatStyle {
+    /// `repeat`：双轴平铺（初始值）。
+    #[default]
+    Repeat,
+    /// `repeat-x`：水平平铺，垂直不重复。
+    RepeatX,
+    /// `repeat-y`：垂直平铺，水平不重复。
+    RepeatY,
+    /// `no-repeat`：不重复，仅绘制一块。
+    NoRepeat,
+}
+
+/// CSS `background-position`（Backgrounds L3 §3.6）：起点偏移。
+///
+/// 初始值 `0% 0%`（左上角）。百分比相对盒宽/高，px 直接使用。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackgroundPosition {
+    /// 水平偏移。
+    pub x: LengthOrPercent,
+    /// 垂直偏移。
+    pub y: LengthOrPercent,
+}
+
+impl Default for BackgroundPosition {
+    fn default() -> Self {
+        Self {
+            x: LengthOrPercent::Percent(0.0),
+            y: LengthOrPercent::Percent(0.0),
+        }
+    }
+}
+
+/// CSS `background-size`（Backgrounds L3 §3.9 支持子集）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BackgroundSize {
+    /// `auto`：自然尺寸（1 image px = 1 CSS px；初始值）。
+    #[default]
+    Auto,
+    /// `<length-percentage>{1,2}`：宽度 + 可选高度；`height: None` 表示
+    /// 第二个值为 `auto`（按图像纵横比推导）。`auto 100px` 这类"宽 auto"
+    /// 组合不在支持子集内（解析时回退 [`BackgroundSize::Auto`]）。
+    Length {
+        /// 宽度。
+        width: LengthOrPercent,
+        /// 高度；`None` = `auto`（按纵横比推导）。
+        height: Option<LengthOrPercent>,
+    },
+    /// `contain`：等比缩放至完全放入盒内。
+    Contain,
+    /// `cover`：等比缩放至铺满盒（超出部分裁掉）。
+    Cover,
+}
+
+/// 背景图绘制参数（BG-1 收尾）：承载解码图像位 + `background-repeat` /
+/// `background-position` / `background-size` 三个可配值。
+///
+/// 全默认（repeat 平铺、起点 `0% 0%`、auto 自然尺寸）时绘制语义与 BG-1
+/// 初始值完全一致（逐像素等价）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundImage {
+    /// 解码的图像位。
+    pub bits: ImageBits,
+    /// 平铺样式（`background-repeat`）。
+    pub repeat: RepeatStyle,
+    /// 起点偏移（`background-position`）。
+    pub position: BackgroundPosition,
+    /// 图像尺寸（`background-size`）。
+    pub size: BackgroundSize,
+}
+
+impl BackgroundImage {
+    /// 单块图像 + 全部画法默认（repeat 平铺、起点 `0% 0%`、natural size），
+    /// 等价于 BG-1 硬编码初始值。
+    pub fn new(bits: ImageBits) -> Self {
+        Self {
+            bits,
+            repeat: RepeatStyle::Repeat,
+            position: BackgroundPosition::default(),
+            size: BackgroundSize::Auto,
+        }
+    }
+}
+
 /// CSS `text-align` 的水平对齐（T-3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextAlign {
@@ -40,13 +136,13 @@ pub enum RenderCommand {
         background: Option<Color>,
         /// 四边边框。`None` 表示无边框（四边均为 `None` 亦等价）。
         border: Option<Border>,
-        /// 背景图（RGBA8 + 内在尺寸；BG-1）。`None` = 无背景图。
+        /// 背景图（解码位 + 绘制参数；BG-1 收尾）。`None` = 无背景图。
         ///
-        /// 绘制语义按 `background` 初始值硬编码：起点 0 0（padding box 近似
-        /// 为整个 border box）、`repeat` 平铺、natural size（1 image px =
-        /// 1 CSS px），且**绘制在背景色之上、边框之下**（CSS Backgrounds
-        /// L3 §2 的绘制顺序：color → image → border）。
-        image: Option<ImageBits>,
+        /// 绘制语义按 `background-repeat` / `background-position` /
+        /// `background-size` 解析结果：默认（repeat 平铺、起点 `0% 0%`、
+        /// natural size）与 BG-1 初始值一致。绘制顺序为**背景色之上、边框
+        /// 之下**（CSS Backgrounds L3 §2：color → image → border）。
+        image: Option<BackgroundImage>,
     },
     /// 文本绘制（T-2 / T-3）。
     ///
@@ -308,5 +404,34 @@ mod tests {
         assert!(BorderStyle::Solid.is_painted());
         assert!(BorderStyle::Double.is_painted());
         assert!(BorderStyle::Groove.is_painted());
+    }
+
+    #[test]
+    fn background_image_defaults_match_initial_values() {
+        let bits = ImageBits {
+            data: vec![255, 0, 0, 255],
+            width: 1,
+            height: 1,
+        };
+        let bg = BackgroundImage::new(bits);
+        assert_eq!(bg.repeat, RepeatStyle::Repeat);
+        assert_eq!(
+            bg.position,
+            BackgroundPosition {
+                x: LengthOrPercent::Percent(0.0),
+                y: LengthOrPercent::Percent(0.0),
+            }
+        );
+        assert_eq!(bg.size, BackgroundSize::Auto);
+        // 显式非默认字段亦可构造。
+        let _custom = BackgroundImage {
+            repeat: RepeatStyle::NoRepeat,
+            position: BackgroundPosition {
+                x: LengthOrPercent::Percent(50.0),
+                y: LengthOrPercent::Percent(50.0),
+            },
+            size: BackgroundSize::Cover,
+            ..bg
+        };
     }
 }

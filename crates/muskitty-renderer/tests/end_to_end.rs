@@ -844,6 +844,103 @@ fn end_to_end_missing_background_image_keeps_page() {
     );
 }
 
+// —— BG-1 收尾：background-repeat / position / size 全链路像素验证 ——
+
+#[test]
+fn end_to_end_background_no_repeat_paints_single_tile() {
+    // background-repeat: no-repeat → 1x1 图只在起点画一块，其余盒内为白画布。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/single.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/single.png'); background-repeat: no-repeat"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 0),
+        (0, 0, 255, 255),
+        "single tile top-left"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 10, 10),
+        (255, 255, 255, 255),
+        "not tiled in the middle"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 50, 30),
+        (255, 255, 255, 255),
+        "not tiled at bottom-right"
+    );
+}
+
+#[test]
+fn end_to_end_background_position_center_centers_single_tile() {
+    // background-position: center + no-repeat → 1x1 图居中放在 (30,20)，
+    // 四周是非图区域（证明偏移生效）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/c.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/c.png'); background-repeat: no-repeat; background-position: center"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (0, 0, 255, 255),
+        "centered tile"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 29, 20),
+        (255, 255, 255, 255),
+        "left blank"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 19),
+        (255, 255, 255, 255),
+        "top blank"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 0),
+        (255, 255, 255, 255),
+        "corner blank"
+    );
+}
+
+#[test]
+fn end_to_end_background_size_cover_scales_to_fill_box() {
+    // background-size: cover → 1x1 图等比缩放到铺满盒（超出部分被盒裁剪），
+    // 整盒均被覆盖；而 no-repeat/初始正值只画右上角单块（回归对照见
+    // end_to_end_background_image_repeats_across_the_box）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/cover.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/cover.png'); background-size: cover"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (0, 0, 255, 255),
+        "box center covered"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 59, 39),
+        (0, 0, 255, 255),
+        "bottom-right covered"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 75, 50),
+        (255, 255, 255, 255),
+        "outside the box stays white"
+    );
+}
+
 // —— IS-V: inline style 属性的全链路像素验证（§6.1 准则 3/4）——
 
 #[test]
