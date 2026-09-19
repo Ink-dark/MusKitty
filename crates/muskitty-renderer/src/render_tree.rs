@@ -16,6 +16,38 @@ use muskitty_cascade::{ComputedStyle, ComputedValue};
 use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
 
+/// 从 ComputedStyle 解析 CSS `opacity`（M-3 batch 4，CSS Color L3 §5.1）。
+///
+/// 读取 `opacity` 的 Number token 并 clamp 到 `0..=1`（§5.1 的数值范围）。
+/// 缺失 / 非法值 / 不可解析 → 返回 `1.0`（不透明，等效无操作）。
+pub fn resolve_opacity(style: &ComputedStyle) -> f32 {
+    let Some(cv) = style.get("opacity") else {
+        return 1.0;
+    };
+    for v in cv.tokens() {
+        if let ComponentValue::PreservedToken(Token::Number(n)) = v {
+            // `n.value` 是 f64（CSS number token）；`opacity` 值域
+            // clamp 到 [0,1] 后转 f32。
+            return n.value.clamp(0.0, 1.0) as f32;
+        }
+    }
+    1.0
+}
+
+/// 该元素自身 `visibility` 是否 `hidden`（CSS Visibility L3 §1）。
+///
+/// 缺失 / 非 hidden（`visible`/`collapse` 之外）→ `false`。继承语义由调用方
+/// （paint）用参数传递：读取本元素 style 的关键字，若没有属性键则沿用
+/// 继承值（ISO 上 cascade 已把 `visibility`（inherited）填充进每个元素的
+/// computed style，故常见情形此处直接反映继承结果）。
+pub fn is_visibility_hidden(style: &ComputedStyle) -> bool {
+    style
+        .get("visibility")
+        .and_then(|cv| cv.keyword())
+        .map(|k| k.eq_ignore_ascii_case("hidden"))
+        .unwrap_or(false)
+}
+
 /// 从 ComputedStyle 提取 background-color。
 ///
 /// 未设置或无法解析时返回 `None`（调用方按透明处理）。单态化（P2-20）后
@@ -537,4 +569,72 @@ fn parse_border_width(cv: &ComputedValue) -> Option<f32> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muskitty_css::tokenizer::Numeric;
+
+    /// 构造一个含单个 `opacity` Number token 的 computed value。
+    fn opacity_style(op: f64) -> ComputedStyle {
+        let mut s = ComputedStyle::new();
+        s.set(
+            "opacity",
+            ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Number(
+                Numeric::new(op, false),
+            ))]),
+        );
+        s
+    }
+
+    #[test]
+    fn resolve_opacity_parses_number_and_clamps() {
+        // 0.5 → 0.5（值域内直接透传）。
+        assert_eq!(resolve_opacity(&opacity_style(0.5)), 0.5);
+        // 0 → 0（整棵子树不可见）。
+        assert_eq!(resolve_opacity(&opacity_style(0.0)), 0.0);
+        // 1 → 1（不透明，等效无操作）。
+        assert_eq!(resolve_opacity(&opacity_style(1.0)), 1.0);
+        // 超范围 clamp 到 [0,1]。
+        assert_eq!(resolve_opacity(&opacity_style(1.7)), 1.0);
+        assert_eq!(resolve_opacity(&opacity_style(-0.3)), 0.0);
+    }
+
+    #[test]
+    fn resolve_opacity_missing_or_illegal_falls_back_to_1() {
+        // 缺失 `opacity` 键 → 1.0。
+        assert_eq!(resolve_opacity(&ComputedStyle::new()), 1.0);
+        // 非法值（非 Number token，如关键字）→ 1.0。
+        let mut s = ComputedStyle::new();
+        s.set("opacity", ComputedValue::from_keyword("hidden"));
+        assert_eq!(resolve_opacity(&s), 1.0);
+    }
+
+    #[test]
+    fn is_visibility_hidden_matches_only_hidden_keyword() {
+        let hidden = {
+            let mut s = ComputedStyle::new();
+            s.set("visibility", ComputedValue::from_keyword("hidden"));
+            s
+        };
+        assert!(is_visibility_hidden(&hidden), "hidden → true");
+
+        let visible = {
+            let mut s = ComputedStyle::new();
+            s.set("visibility", ComputedValue::from_keyword("visible"));
+            s
+        };
+        assert!(!is_visibility_hidden(&visible), "visible → false");
+
+        let collapse = {
+            let mut s = ComputedStyle::new();
+            s.set("visibility", ComputedValue::from_keyword("collapse"));
+            s
+        };
+        assert!(!is_visibility_hidden(&collapse), "collapse → false");
+
+        // 缺失键 → false（继承语义由 paint 侧参数传递处理）。
+        assert!(!is_visibility_hidden(&ComputedStyle::new()));
+    }
 }

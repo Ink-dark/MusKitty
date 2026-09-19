@@ -52,4 +52,5 @@ pub use paint::{no_images, paint, PaintInput};
 pub use render_tree::{
     extract_background_color, extract_background_image_url, extract_background_position,
     extract_background_repeat, extract_background_size, extract_border, extract_outline,
+    is_visibility_hidden, resolve_opacity,
 };

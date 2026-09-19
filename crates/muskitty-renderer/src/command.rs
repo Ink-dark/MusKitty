@@ -199,6 +199,29 @@ pub enum RenderCommand {
     },
     /// 结束裁剪（L-2）：恢复到最近 [`RenderCommand::Clip`] 之前的状态。
     EndClip,
+    /// 开始不透明度合成组（M-3 batch 4，CSS Color L3 §5.1）。
+    ///
+    /// 该组内（直到配对的 [`RenderCommand::EndOpacity`]）的所有命令——包括
+    /// Rect / Text / 其间的 Clip 对 / 嵌套 Opacity 组——作为一个**整体**先
+    /// 渲染到离屏画布，再用 `opacity` 作为整组内容的全局 alpha，经
+    /// source-over 一次性合成回主画布（子树像素整体半透明）。
+    ///
+    /// 后端要求：
+    /// - `opacity` ∈ `(0,1)`（paint 只在 `0 < opacity < 1` 时发出本命令；
+    ///   `opacity: 1` 不产生组，`opacity: 0` 跳过整棵子树）；
+    /// - 无任何组命令（即全链路 opacity=1）时输出必须与逐命令直接绘制
+    ///   到主画布**逐字节一致**（回归底线）；
+    /// - 组内 Clip/EndClip 仅影响组内绘制；合成回主画布时要受主画布当前
+    ///   外层 clip 约束。
+    Opacity {
+        /// 整组内容的全局不透明度（0<opacity<1）。
+        opacity: f32,
+    },
+    /// 结束不透明度合成组（与 [`RenderCommand::Opacity`] 配对）。
+    ///
+    /// 返回主画布：把该组命令渲染到的离屏结果以 `Opacity.opacity` 的 alpha
+    /// 合成回主画布。
+    EndOpacity,
     /// 轮廓绘制（M-3 batch 2，CSS UI Level 4 §4）。
     ///
     /// 轮廓绘制在元素 **border box 之外**（本命令的 `x`/`y`/`width`/`height`

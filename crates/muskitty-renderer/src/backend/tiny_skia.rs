@@ -23,8 +23,8 @@ use cosmic_text::{
     Attrs, Buffer, Command, Family, FontSystem, Metrics, Shaping, SwashCache, Weight,
 };
 use tiny_skia::{
-    FillRule, FilterQuality, Mask, Paint, Path, PathBuilder, Pattern, Pixmap, Rect, SpreadMode,
-    Transform,
+    FillRule, FilterQuality, Mask, Paint, Path, PathBuilder, Pattern, Pixmap, PixmapPaint, Rect,
+    SpreadMode, Transform,
 };
 
 use crate::backend::{Backend, RenderOutput};
@@ -131,225 +131,33 @@ impl Backend for TinySkiaBackend {
         // 保留一份懒缓存，仅当裁剪区（逻辑 rect）变化时才重建（O(画布)）。
         // 修复前每层 Clip 克隆整幅画布 Mask（4K ≈ 8 MB）并全画布求交，
         // N 层嵌套 overflow:hidden 即 O(N×画布) 内存/CPU——单页可 OOM/freeze
-        // （审计 S-1）。`clip_saved` 存每层 push 前的裁剪区供 EndClip 恢复。
+        // （审计 S-1）。`clip.max(rect)` 存每层 push 前的裁剪区供 EndClip 恢复。
         //
         // RN-1：Mask 构建**延迟到绘制命令实际消费 clip 时**（Rect/Text
-        // 分支调用 [`clip_mask_for`]）。修复前在命令循环顶同步：paint 层
-        // 对有布局盒的 overflow 元素无条件生成 `[Clip, EndClip]` 空对，
+        // 分支调用 [`ClipState::clip_mask`]）。修复前在命令循环顶同步：paint
+        // 层对有布局盒的 overflow 元素无条件生成 `[Clip, EndClip]` 空对，
         // 每个空对在 EndClip 迭代触发一次整画布 `Mask::new` + `fill_path`
         // ——10 万个兄弟空 `overflow:hidden` div × 1080p ≈ 200 GB 无效
         // memset（CPU 挂起）；空对现在零成本。
-        let mut clip_saved: Vec<Option<Rect>> = Vec::new();
-        let mut clip_rect: Option<Rect> = None;
-        let mut clip_mask: Option<Mask> = None;
-        let mut mask_built_for: Option<Rect> = None;
+        let mut clip = ClipState::new();
 
         // W-2：逻辑坐标 → 物理坐标的向量缩放（清晰非模糊放大）。所有 rect /
         // border / clip path 均走此变换；文本用 scale∘translate（见 draw_text）。
         let scale_xform = Transform::from_scale(scale, scale);
 
-        for cmd in commands {
-            match cmd {
-                RenderCommand::Rect {
-                    x,
-                    y,
-                    width,
-                    height,
-                    background,
-                    border,
-                    image,
-                    border_radius,
-                } => {
-                    // 跳过零尺寸矩形
-                    if *width <= 0.0 || *height <= 0.0 {
-                        continue;
-                    }
-                    // RN-1：无背景且无边框且无背景图的矩形不产生任何绘制，
-                    // 跳过（同时免去 Mask 构建）。
-                    let has_border = border.as_ref().is_some_and(|b| !b.is_empty());
-                    if background.is_none() && !has_border && image.is_none() {
-                        continue;
-                    }
-                    // RN-1：实际消费 clip 时才懒构建 Mask（矩形外层裁剪，缓存）。
-                    let clip = clip_mask_for(
-                        &pixmap,
-                        clip_rect,
-                        &mut clip_mask,
-                        &mut mask_built_for,
-                        scale_xform,
-                    );
-                    // M-3 batch 5：圆角几何。`border_radius` 非零时构建盒路径
-                    // 与圆角裁剪 Mask（背景 / 背景图 / 边框统一按此切角）；全
-                    // 0 → 直角，完全走既有路径零额外开销。
-                    let rounded_path = if border_radius.is_zero() {
-                        None
-                    } else {
-                        build_rounded_rect_path(*x, *y, *width, *height, *border_radius)
-                    };
-                    // 圆角裁剪 = 外层矩形裁剪 ∩ 圆角盒路径（逐像素 AND）。仅
-                    // 圆角元素才构建（O(画布) 一次，低频，不缓存，见批注）。
-                    // 延迟初始化：直角分支（None 臂）返回外层 clip 不动它，圆角分支
-                    // 才赋值并在后续 fill/border/image 全程持有。
-                    let rounded_clip;
-                    let effective_clip: Option<&Mask> = match (rounded_path.as_ref(), clip) {
-                        (Some(path), outer) => {
-                            rounded_clip =
-                                Some(rounded_clip_mask(&pixmap, outer, path, scale_xform));
-                            rounded_clip.as_ref()
-                        }
-                        (None, c) => c,
-                    };
-
-                    // 填充背景色（CSS Backgrounds L3 §2 绘制顺序：color 在最下）
-                    if let Some(bg) = background {
-                        if let Some(rect) = Rect::from_xywh(*x, *y, *width, *height) {
-                            let mut paint = Paint::default();
-                            paint.set_color_rgba8(bg.r, bg.g, bg.b, bg.a);
-                            // 圆角路径带抗锯齿（四角平滑）；直角矩形维持既有
-                            // 无抗锯齿填充（边缘落在像素边界）。
-                            paint.anti_alias = rounded_path.is_some();
-                            if let Some(path) = rounded_path.as_ref() {
-                                pixmap.fill_path(
-                                    path,
-                                    &paint,
-                                    FillRule::Winding,
-                                    scale_xform,
-                                    effective_clip,
-                                );
-                            } else {
-                                pixmap.fill_rect(rect, &paint, scale_xform, effective_clip);
-                            }
-                        }
-                    }
-
-                    // 背景图：color 之上、border 之下（BG-1）。repeat 平铺到
-                    // 盒范围内；盒外由裁剪保证（无 clip 时按盒边界逐块裁剪）。
-                    if let Some(img) = image {
-                        draw_background_image(
-                            &mut pixmap,
-                            *x,
-                            *y,
-                            *width,
-                            *height,
-                            img,
-                            scale,
-                            effective_clip,
-                        );
-                    }
-
-                    // 绘制四边边框（最上层；圆角下四角的条被裁剪成切角）
-                    if let Some(b) = border {
-                        if !b.is_empty() {
-                            draw_borders(
-                                &mut pixmap,
-                                *x,
-                                *y,
-                                *width,
-                                *height,
-                                b,
-                                scale,
-                                effective_clip,
-                            );
-                        }
-                    }
-                }
-                RenderCommand::Outline {
-                    x,
-                    y,
-                    width,
-                    height,
-                    outline_width,
-                    color,
-                    style,
-                } => {
-                    if *width <= 0.0 || *height <= 0.0 || *outline_width <= 0.0 {
-                        continue;
-                    }
-                    // RN-1：实际消费 clip 时才懒构建 Mask。
-                    let clip = clip_mask_for(
-                        &pixmap,
-                        clip_rect,
-                        &mut clip_mask,
-                        &mut mask_built_for,
-                        scale_xform,
-                    );
-                    draw_outline(
-                        &mut pixmap,
-                        *x,
-                        *y,
-                        *width,
-                        *height,
-                        *outline_width,
-                        *color,
-                        *style,
-                        scale,
-                        clip,
-                    );
-                }
-                RenderCommand::Text {
-                    x,
-                    y,
-                    width,
-                    text,
-                    font_size,
-                    line_height,
-                    font_family,
-                    font_weight,
-                    text_align,
-                    color,
-                    wrap,
-                } => {
-                    let font_system = self.font_system.get_or_insert_with(FontSystem::new);
-                    let swash_cache = self.swash_cache.get_or_insert_with(SwashCache::new);
-                    // RN-1：实际消费 clip 时才懒构建 Mask。
-                    let clip = clip_mask_for(
-                        &pixmap,
-                        clip_rect,
-                        &mut clip_mask,
-                        &mut mask_built_for,
-                        scale_xform,
-                    );
-                    draw_text(
-                        &mut pixmap,
-                        *x,
-                        *y,
-                        *width,
-                        text,
-                        *font_size,
-                        *line_height,
-                        font_family,
-                        *font_weight,
-                        *text_align,
-                        *color,
-                        *wrap,
-                        scale,
-                        font_system,
-                        swash_cache,
-                        clip,
-                    );
-                }
-                RenderCommand::Clip {
-                    x,
-                    y,
-                    width,
-                    height,
-                } => {
-                    // 用矩形 rect 表示裁剪：有当前裁剪区则求交（纯数学），
-                    // 否则直接作为新裁剪区。mask 由懒同步统一重建。
-                    let Some(rect) = Rect::from_xywh(*x, *y, *width, *height) else {
-                        continue;
-                    };
-                    clip_saved.push(clip_rect);
-                    clip_rect = Some(match clip_rect {
-                        Some(cur) => intersect_rect(cur, rect),
-                        None => rect,
-                    });
-                }
-                RenderCommand::EndClip => {
-                    clip_rect = clip_saved.pop().flatten();
-                }
-            }
-        }
+        // 顺序消费命令绘制到 `pixmap`。无 `Opacity` 命令时 `apply_commands`
+        // 就是原有的逐命令循环（Rect/Outline/Text/Clip 逻辑一字未改），故
+        // opacity=1（无组）时输出与改动前逐字节一致——回归底线。
+        apply_commands(
+            commands,
+            0,
+            &mut pixmap,
+            &mut self.font_system,
+            &mut self.swash_cache,
+            scale,
+            scale_xform,
+            &mut clip,
+        );
 
         self.pixmap = Some(pixmap);
 
@@ -362,6 +170,381 @@ impl Backend for TinySkiaBackend {
             data: p.data().to_vec(),
         }
     }
+}
+
+/// 裁剪状态（L-2 / F-10）：嵌套矩形裁剪的交集用单个逻辑 rect + 懒缓存 Mask。
+///
+/// 携带用 [`clip_mask`](Self::clip_mask) 按需（绘制命令实际消费 clip 时）
+/// 重建并复用的裁剪掩码（RN-1）。每个独立画布（主画布 / opacity 组内临时
+/// 画布）各持一份 [`ClipState`]——组内 Clip/EndClip 只改各自的状态，互不干扰。
+struct ClipState {
+    /// 每层 push 前的裁剪区，供 [`pop`](Self::pop) 恢复。
+    saved: Vec<Option<Rect>>,
+    /// 当前裁剪区（嵌套矩形的交集）。
+    rect: Option<Rect>,
+    /// 懒缓存的裁剪掩码（O(画布) 一次）。
+    mask: Option<Mask>,
+    /// `mask` 对应的裁剪区；与 `rect` 一致则复用，变化才重建（RN-1）。
+    mask_built_for: Option<Rect>,
+}
+
+impl ClipState {
+    /// 空状态（无裁剪）。
+    fn new() -> Self {
+        Self {
+            saved: Vec::new(),
+            rect: None,
+            mask: None,
+            mask_built_for: None,
+        }
+    }
+
+    /// 压入一层裁剪：与当前裁剪区求交（纯数学，O(1)）。
+    fn push(&mut self, rect: Rect) {
+        self.saved.push(self.rect);
+        self.rect = Some(match self.rect {
+            Some(cur) => intersect_rect(cur, rect),
+            None => rect,
+        });
+    }
+
+    /// 恢复最近一层 `push` 前的裁剪区。
+    fn pop(&mut self) {
+        self.rect = self.saved.pop().flatten();
+    }
+
+    /// 按需构建（或复用）当前裁剪区的掩码（RN-1，O(画布) 仅当 `rect` 变化）。
+    fn clip_mask<'a>(&'a mut self, pixmap: &Pixmap, scale_xform: Transform) -> Option<&'a Mask> {
+        clip_mask_for(
+            pixmap,
+            self.rect,
+            &mut self.mask,
+            &mut self.mask_built_for,
+            scale_xform,
+        )
+    }
+}
+
+/// 顺序渲染命令到目标画布（M-3 batch 4 opacity 离屏合成）。
+///
+/// 从 `start` 下标开始消费 `cmds` 并绘制到 `pixmap`。这是 `render` 主循环与
+/// 递归合成组**共用**的单一实现：
+///
+/// - 普通命令（Rect / Outline / Text / Clip / EndClip）就地绘制到 `pixmap`，
+///   逻辑与改动前的 `render` 循环**完全一致**（当全链路过没有 Opacity 命令
+///   时，本函数就退化为原有逐命令循环 → output 逐字节回归底线）；
+/// - [`RenderCommand::Opacity`] 组交由 [`apply_opacity`] **递归**离屏渲染后
+///   合成回 `pixmap`；
+/// - 遇到 [`RenderCommand::EndOpacity`] 返回其后的下标（结束当前合成组，
+///   供 `apply_opacity` 定位配对边界）；
+/// - `clip`（当前画布的裁剪栈）随渲染推进按 Clip/EndClip 更新，绘制命令
+///   经 `clip.clip_mask` 取掩码约束（RZ内嵌套裁剪依附当前画布）。
+///
+/// 返回 `start` 之后最后处理命令的下标（组结束时指向配对 `EndOpacity` 之后）。
+#[allow(clippy::too_many_arguments)]
+fn apply_commands(
+    cmds: &[RenderCommand],
+    start: usize,
+    pixmap: &mut Pixmap,
+    font_system: &mut Option<FontSystem>,
+    swash_cache: &mut Option<SwashCache>,
+    scale: f32,
+    scale_xform: Transform,
+    clip: &mut ClipState,
+) -> usize {
+    let mut i = start;
+    while i < cmds.len() {
+        match &cmds[i] {
+            RenderCommand::Rect {
+                x,
+                y,
+                width,
+                height,
+                background,
+                border,
+                image,
+                border_radius,
+            } => {
+                // 跳过零尺寸矩形。
+                if *width > 0.0 && *height > 0.0 {
+                    // RN-1：无背景且无边框且无背景图的矩形不产生任何绘制，
+                    // 跳过（同时免去 Mask 构建）。
+                    let has_border = border.as_ref().is_some_and(|b| !b.is_empty());
+                    if background.is_some() || has_border || image.is_some() {
+                        draw_rect(
+                            *x,
+                            *y,
+                            *width,
+                            *height,
+                            background.as_ref(),
+                            image.as_ref(),
+                            border.as_ref(),
+                            *border_radius,
+                            pixmap,
+                            clip,
+                            scale,
+                            scale_xform,
+                        );
+                    }
+                }
+                i += 1;
+            }
+            RenderCommand::Outline {
+                x,
+                y,
+                width,
+                height,
+                outline_width,
+                color,
+                style,
+            } => {
+                if *width > 0.0 && *height > 0.0 && *outline_width > 0.0 {
+                    // RN-1：实际消费 clip 时才懒构建 Mask。
+                    let clip = clip.clip_mask(pixmap, scale_xform);
+                    draw_outline(
+                        pixmap,
+                        *x,
+                        *y,
+                        *width,
+                        *height,
+                        *outline_width,
+                        *color,
+                        *style,
+                        scale,
+                        clip,
+                    );
+                }
+                i += 1;
+            }
+            RenderCommand::Text {
+                x,
+                y,
+                width,
+                text,
+                font_size,
+                line_height,
+                font_family,
+                font_weight,
+                text_align,
+                color,
+                wrap,
+            } => {
+                let fs = font_system.get_or_insert_with(FontSystem::new);
+                let sc = swash_cache.get_or_insert_with(SwashCache::new);
+                // RN-1：实际消费 clip 时才懒构建 Mask。
+                let clip = clip.clip_mask(pixmap, scale_xform);
+                draw_text(
+                    pixmap,
+                    *x,
+                    *y,
+                    *width,
+                    text,
+                    *font_size,
+                    *line_height,
+                    font_family,
+                    *font_weight,
+                    *text_align,
+                    *color,
+                    *wrap,
+                    scale,
+                    fs,
+                    sc,
+                    clip,
+                );
+                i += 1;
+            }
+            RenderCommand::Clip {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                // 用矩形 rect 表示裁剪：有当前裁剪区则求交（纯数学），
+                // 否则直接作为新裁剪区。mask 由懒同步统一重建。
+                if let Some(rect) = Rect::from_xywh(*x, *y, *width, *height) {
+                    clip.push(rect);
+                }
+                i += 1;
+            }
+            RenderCommand::EndClip => {
+                clip.pop();
+                i += 1;
+            }
+            RenderCommand::Opacity { .. } => {
+                // opacity 组：递归离屏合成后返回组结束后的下标。
+                i = apply_opacity(
+                    cmds,
+                    i,
+                    pixmap,
+                    font_system,
+                    swash_cache,
+                    scale,
+                    scale_xform,
+                    clip,
+                );
+            }
+            RenderCommand::EndOpacity => {
+                // 当前合成组结束：返回组后下标（`apply_opacity` 用其恢复主画布）。
+                return i + 1;
+            }
+        }
+    }
+    i
+}
+
+/// 渲染单个 Rect 命令到 `pixmap`（`apply_commands` 的 Rect 分支实现）。
+///
+/// 逻辑与改动前的 `render` 循环 Rect 分支**逐行一致**——背景色 / 背景图 /
+/// 边框 / 四角圆角。提取为独立函数只为把 [`apply_commands`] 的 `match` 分叉
+/// 与递归分支（`Opacity`）保持平铺可读。
+#[allow(clippy::too_many_arguments)]
+fn draw_rect(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    background: Option<&Color>,
+    image: Option<&BackgroundImage>,
+    border: Option<&Border>,
+    border_radius: BorderRadius,
+    pixmap: &mut Pixmap,
+    clip: &mut ClipState,
+    scale: f32,
+    scale_xform: Transform,
+) {
+    // RN-1：实际消费 clip 时才懒构建 Mask（矩形外层裁剪，缓存）。
+    let clip_mask = clip.clip_mask(pixmap, scale_xform);
+    // M-3 batch 5：圆角几何。`border_radius` 非零时构建盒路径与圆角裁剪
+    // Mask（背景 / 背景图 / 边框统一按此切角）；全 0 → 直角，完全走既有
+    // 路径零额外开销。
+    let rounded_path = if border_radius.is_zero() {
+        None
+    } else {
+        build_rounded_rect_path(x, y, width, height, border_radius)
+    };
+    // 圆角裁剪 = 外层矩形裁剪 ∩ 圆角盒路径（逐像素 AND）。仅圆角元素才
+    // 构建（O(画布) 一次，低频，不缓存，见批注）。延迟初始化：直角分支
+    // （None 臂）返回外层 clip 不动它，圆角分支才赋值并在后续 fill/border/
+    // image 全程持有。
+    let rounded_clip;
+    let effective_clip: Option<&Mask> = match (rounded_path.as_ref(), clip_mask) {
+        (Some(path), outer) => {
+            rounded_clip = Some(rounded_clip_mask(pixmap, outer, path, scale_xform));
+            rounded_clip.as_ref()
+        }
+        (None, c) => c,
+    };
+
+    // 填充背景色（CSS Backgrounds L3 §2 绘制顺序：color 在最下）
+    if let Some(bg) = background {
+        if let Some(rect) = Rect::from_xywh(x, y, width, height) {
+            let mut paint = Paint::default();
+            paint.set_color_rgba8(bg.r, bg.g, bg.b, bg.a);
+            // 圆角路径带抗锯齿（四角平滑）；直角矩形维持既有无抗锯齿填充
+            // （边缘落在像素边界）。
+            paint.anti_alias = rounded_path.is_some();
+            if let Some(path) = rounded_path.as_ref() {
+                pixmap.fill_path(path, &paint, FillRule::Winding, scale_xform, effective_clip);
+            } else {
+                pixmap.fill_rect(rect, &paint, scale_xform, effective_clip);
+            }
+        }
+    }
+
+    // 背景图：color 之上、border 之下（BG-1）。repeat 平铺到盒范围内；盒外
+    // 由裁剪保证（无 clip 时按盒边界逐块裁剪）。
+    if let Some(img) = image {
+        draw_background_image(pixmap, x, y, width, height, img, scale, effective_clip);
+    }
+
+    // 绘制四边边框（最上层；圆角下四角的条被裁剪成切角）
+    if let Some(b) = border {
+        if !b.is_empty() {
+            draw_borders(pixmap, x, y, width, height, b, scale, effective_clip);
+        }
+    }
+}
+
+/// 渲染一个 opacity 合成组到离屏画布并按 alpha 合成回主画布（M-3 batch 4）。
+///
+/// `start` 指向 `Opacity { opacity }` 命令。组内容（直到配对的 `EndOpacity`
+/// 之间）由 [`apply_commands`] 渲染到与主画布同尺寸的**临时透明 Pixmap**
+/// （`Pixmap::new` 即初始透明）；组内可嵌套 Opacity（`apply_opacity` 于组内
+/// 递归，各自新建临时画布）与 Clip/EndClip（在 `inner_clip` 状态内生效，只
+/// 影响组内绘制）。组结束时用 `opacity` 作为整组内容的**全局 alpha**，经
+/// source-over 一次合成回主画布（`draw_pixmap` + [`PixmapPaint`]）——子树
+/// 像素整体半透明（CSS Color L3 §5.1 / compositing）。
+///
+/// 合成回主画布时受主画布当前外层裁剪约束：临时画布以物理坐标铺满主画布，
+/// 调用前用复用 `clip.clip_mask` 构建主画布当前裁剪掩码作为 `draw_pixmap`
+/// 的 `mask`，组内容被外层 clip 裁掉的部分不会露出。
+///
+/// 临时画布直接物理坐标（与主画布一致），合成用 identity 变换即可，无需缩放。
+/// 返回 `Opacity` 组结束后（即配对 `EndOpacity` 之后）的下标。
+#[allow(clippy::too_many_arguments)]
+fn apply_opacity(
+    cmds: &[RenderCommand],
+    start: usize,
+    pixmap: &mut Pixmap,
+    font_system: &mut Option<FontSystem>,
+    swash_cache: &mut Option<SwashCache>,
+    scale: f32,
+    scale_xform: Transform,
+    clip: &mut ClipState,
+) -> usize {
+    let RenderCommand::Opacity { opacity } = &cmds[start] else {
+        return start + 1;
+    };
+    // opacity=1（或 >1，越界防御）组的**语义为无操作**：不产生视觉隔离，也无
+    // 需整体半透明。此时把组内容**就地渲染到主画布**（沿用当前裁剪状态），
+    // 与"没有这层 group 的命令流"逐字节一致——M-3 batch 4 回归底线。若仍走
+    // 离屏两段合成，透明底上抗锯齿边缘会因量化舍入与直接绘白底略有出入
+    // （非 1×1 字节一致），故必须就地。
+    if *opacity >= 1.0 {
+        return apply_commands(
+            cmds,
+            start + 1,
+            pixmap,
+            font_system,
+            swash_cache,
+            scale,
+            scale_xform,
+            clip,
+        );
+    }
+    // 临时画布尺寸与主画布一致（物理坐标）。分配失败（如超大画布）则跳过
+    // 整个组（记录为近似，组内容不绘制）。
+    let Some(mut temp) = Pixmap::new(pixmap.width(), pixmap.height()) else {
+        return start + 1;
+    };
+
+    // 组内容渲染到临时画布。`inner_clip` 独立于主画布裁剪状态——组内
+    // Clip/EndClip 只裁剪组内绘制，不污染外层（反之，外层 clip 由下方
+    // `outer_mask` 在合成时约束）。
+    let mut inner_clip = ClipState::new();
+    let end = apply_commands(
+        cmds,
+        start + 1,
+        &mut temp,
+        font_system,
+        swash_cache,
+        scale,
+        scale_xform,
+        &mut inner_clip,
+    );
+    // `end` 指向配对 `EndOpacity` 之后。
+
+    // opacity 作为整组 alpha，source-over 合成回主画布；主画布当前外层裁剪
+    // 经懒掩码约束合成区域。
+    let pp = PixmapPaint {
+        opacity: *opacity,
+        ..PixmapPaint::default()
+    };
+    let outer_mask = clip.clip_mask(pixmap, scale_xform);
+    pixmap
+        .as_mut()
+        .draw_pixmap(0, 0, temp.as_ref(), &pp, Transform::identity(), outer_mask);
+    end
 }
 
 /// 两个逻辑 rect 的交集（F-10）。
@@ -1626,5 +1809,135 @@ mod tests {
         let (w, h, data) = render_pixels(&mut backend, &cmds, 100, 50, 0.0);
         assert_eq!((w, h), (100, 50));
         assert_eq!(pixel(&data, w, 5, 5), (255, 0, 0, 255));
+    }
+
+    // —— M-3 batch 4: opacity 离屏合成组 ——
+
+    #[test]
+    fn opacity_group_blends_whole_subtree_on_white() {
+        // opacity:0.5 的红块在白底上 → 整块按 alpha=0.5 source-over 混合，
+        // 结果比纯红淡、比白红：粉 ~(255,127,127)（同 render_partial_
+        // transparency_alpha 的取值口径）。
+        let mut backend = TinySkiaBackend::new();
+        let cmds = vec![
+            RenderCommand::Opacity { opacity: 0.5 },
+            RenderCommand::rect(0.0, 0.0, 10.0, 10.0, Color::rgb(255, 0, 0)),
+            RenderCommand::EndOpacity,
+        ];
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10, 1.0);
+        let (r, g, b, a) = pixel(&data, width, 5, 5);
+        assert_eq!(a, 255, "white canvas behind is opaque");
+        assert!(r > 200, "red should dominate, got {}", r);
+        assert!(
+            g > 100 && g < 160,
+            "green ~127 from white canvas, got {}",
+            g
+        );
+        assert!(b > 100 && b < 160, "blue ~127 from white canvas, got {}", b);
+    }
+
+    #[test]
+    fn opacity_zero_composites_nothing() {
+        // opacity:0 的整组内容不可见 → 画布保持白底。
+        let mut backend = TinySkiaBackend::new();
+        let cmds = vec![
+            RenderCommand::Opacity { opacity: 0.0 },
+            RenderCommand::rect(0.0, 0.0, 10.0, 10.0, Color::rgb(255, 0, 0)),
+            RenderCommand::EndOpacity,
+        ];
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10, 1.0);
+        assert_eq!(
+            pixel(&data, width, 5, 5),
+            (255, 255, 255, 255),
+            "opacity 0 subtree must not produce ink"
+        );
+    }
+
+    #[test]
+    fn opacity_one_is_byte_identical_to_no_group() {
+        // 回归底线：opacity=1（组命令存在但 alpha=1）须与无组（当前逐命令
+        // 直接绘制）逐字节一致。用整块红 + 圆角 + 边框的命令集对比。
+        let mk = |opacity_group: bool| {
+            let mut cmds = Vec::new();
+            if opacity_group {
+                cmds.push(RenderCommand::Opacity { opacity: 1.0 });
+            }
+            cmds.push(RenderCommand::Rect {
+                x: 5.0,
+                y: 5.0,
+                width: 20.0,
+                height: 20.0,
+                background: Some(Color::rgb(255, 0, 0)),
+                border: Some(Border::uniform(
+                    2.0,
+                    Color::rgb(0, 0, 255),
+                    BorderStyle::Solid,
+                )),
+                image: None,
+                border_radius: BorderRadius::uniform(3.0, 3.0),
+            });
+            if opacity_group {
+                cmds.push(RenderCommand::EndOpacity);
+            }
+            cmds
+        };
+        let mut backend = TinySkiaBackend::new();
+        let (w, h, plain) = render_pixels(&mut backend, &mk(false), 30, 30, 1.0);
+        let mut backend = TinySkiaBackend::new();
+        let (_, _, grouped) = render_pixels(&mut backend, &mk(true), 30, 30, 1.0);
+        assert_eq!((w, h), (30, 30));
+        assert_eq!(
+            plain, grouped,
+            "opacity=1 group must reproduce the no-group output byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn opacity_group_respects_inner_and_outer_clip() {
+        // 组内 Clip/EndClip 只裁剪组内绘制：红块整体在 (0,0)-clip(5,5) 外
+        // 的 (10,10)-(20,20) 区域被裁剪掉 → 组内无墨迹合成回，画布白底；
+        // 外层主画布裁剪也约束合成回区域。
+        // 命令：(外层 Clip(2,2,8,8) → Clip(0,0,5,5) [组内] + Opacity + rect
+        let cmds = vec![
+            RenderCommand::Clip {
+                x: 2.0,
+                y: 2.0,
+                width: 8.0,
+                height: 8.0,
+            },
+            RenderCommand::Opacity { opacity: 0.5 },
+            RenderCommand::Clip {
+                x: 0.0,
+                y: 0.0,
+                width: 5.0,
+                height: 5.0,
+            },
+            RenderCommand::rect(0.0, 0.0, 100.0, 100.0, Color::rgb(255, 0, 0)),
+            RenderCommand::EndClip,
+            RenderCommand::EndOpacity,
+            RenderCommand::EndClip,
+        ];
+        let mut backend = TinySkiaBackend::new();
+        let (width, _, data) = render_pixels(&mut backend, &cmds, 20, 20, 1.0);
+        // (3,3) 落在外层 clip 内但 (3,3) x<5 也落在组内 rect 被组内 clip(0..5)
+        // 保留 → 红块可见，按 0.5 与白混合成粉。
+        let (r, g, b, _) = pixel(&data, width, 3, 3);
+        assert!(
+            r > 200 && g > 100 && g < 160,
+            "red blended inside (got {r},{g},{b})"
+        );
+        // (7,7) 在组内 clip(0..5) 之外 → 组内被裁，合成回无可画内容 → 白底
+        //（同时落在外层 clip 内，但组内无墨迹可合成）。
+        assert_eq!(
+            pixel(&data, width, 7, 7),
+            (255, 255, 255, 255),
+            "outside group-inner clip but inside outer clip stays white"
+        );
+        // (12,12) 在外层 clip(2..10) 之外 → 组内容由此处被外层裁剪 → 白底。
+        assert_eq!(
+            pixel(&data, width, 12, 12),
+            (255, 255, 255, 255),
+            "outside outer clip stays white"
+        );
     }
 }

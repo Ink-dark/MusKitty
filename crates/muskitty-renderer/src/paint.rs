@@ -18,7 +18,7 @@ use crate::render_tree::{
     extract_background_position, extract_background_repeat, extract_background_size,
     extract_border, extract_border_radius, extract_outline, extract_text_color,
     resolve_font_family, resolve_font_size, resolve_font_weight, resolve_line_height,
-    resolve_text_align,
+    resolve_opacity, resolve_text_align,
 };
 use muskitty_cascade::ComputedStyle;
 use muskitty_dom::{Node, NodeKind};
@@ -87,6 +87,7 @@ pub fn paint(input: &PaintInput) -> Vec<RenderCommand> {
         muskitty_cascade::WhiteSpace::from_keyword(None), // 默认 white-space（normal）
         TextAlign::Left,
         Color::BLACK,
+        false, // 根元素无继承祖先：visibility 初始 visible（非 hidden）
     );
     commands
 }
@@ -112,6 +113,10 @@ fn paint_recursive(
     inherited_white_space: muskitty_cascade::WhiteSpace,
     inherited_text_align: TextAlign,
     inherited_color: Color,
+    // 继承的 `visibility` 是否 hidden（M-3 batch 4）。`visibility` 是继承
+    // 属性；hidden 本身盒不绘制但仍占布局，其后代若显式 `visible` 可再
+    // 叠出来。
+    inherited_visibility_hidden: bool,
 ) {
     let addr = Rc::as_ptr(node) as usize;
 
@@ -189,6 +194,59 @@ fn paint_recursive(
         }
     };
 
+    // visibility（M-3 batch 4）：继承属性。Element 从自身 style 解析
+    // （cascade 已把 inherited 值填充进每个元素的 computed style，故通常
+    // 直接反映继承结果；无属性键时耐心沿用继承值）；Text 节点沿用继承值。
+    // hidden 元素跳过**自身**盒的绘制（背景/边框/图），但仍递归子节点——
+    // 子节点各自判断自己的 visibility，若显式 visible 照常绘制（叠在隐藏
+    // 底上）。布局占位不受影响（layout 层不读 visibility）。
+    let visibility_hidden = {
+        let node_ref = node.borrow();
+        match &node_ref.kind {
+            NodeKind::Element(_) => match styles.get(&addr).and_then(|cs| cs.get("visibility")) {
+                Some(cv) => cv
+                    .keyword()
+                    .map(|k| k.eq_ignore_ascii_case("hidden"))
+                    .unwrap_or(inherited_visibility_hidden),
+                None => inherited_visibility_hidden,
+            },
+            _ => inherited_visibility_hidden,
+        }
+    };
+
+    // opacity（M-3 batch 4，CSS Color L3 §5.1）合成组。仅对有布局盒的
+    // element 施加（与 Rect 生成同条件）——display:contents/无盒元素不产生
+    // 组，后代各自决定（已记录为近似）。opacity<1 时本元素**及其整棵子树**
+    // 作为一个整体离屏合成后再按 alpha 混合到背景；opacity=0 整棵子树不可见
+    // （跳过全部指令）。值域 [0,1]，缺失/非法 → 1（无组，与现状逐字节一致）。
+    let opacity_value = {
+        let node_ref = node.borrow();
+        match &node_ref.kind {
+            NodeKind::Element(_) if layout.get(addr).is_some() => {
+                styles.get(&addr).map(resolve_opacity).unwrap_or(1.0)
+            }
+            _ => 1.0,
+        }
+    };
+    // opacity 组命令只在 (0,1) 发出；否则不出（1 无操作 / 0 走下方早退）。
+    let opacity_group = opacity_value > 0.0 && opacity_value < 1.0;
+
+    // opacity: 0 → 整棵子树不可见，跳过本元素与全部后代（不含任何指令，
+    // 含 Clip/outline/递归）。
+    if opacity_value == 0.0 {
+        return;
+    }
+
+    // opacity 组开始：在本元素**任何指令之前**压入 Opacity，使其包裹
+    // 本元素的 Rect、overflow Clip 对、全部子节点与 outline——整棵子树最
+    // 终作为一个整体离屏合成。EndOpacity 在子树全部结束后（EndClip 与
+    // outline 之后）发出，见函数末尾。
+    if opacity_group {
+        commands.push(RenderCommand::Opacity {
+            opacity: opacity_value,
+        });
+    }
+
     // 按节点类型生成绘制指令。
     {
         let node_ref = node.borrow();
@@ -206,29 +264,36 @@ fn paint_recursive(
                     .trim_matches(|c: char| c != '\n' && c.is_ascii_whitespace())
                     .is_empty()
                 {
-                    if let Some(node_layout) = layout.get(addr).filter(|l| in_viewport(l, viewport))
-                    {
-                        commands.push(RenderCommand::Text {
-                            x: node_layout.abs_x,
-                            y: node_layout.abs_y,
-                            width: node_layout.width,
-                            text: content.into_owned(),
-                            font_size,
-                            line_height,
-                            font_family: font_family.clone(),
-                            font_weight,
-                            text_align,
-                            color,
-                            wrap: white_space.wrap,
-                        });
+                    // M-3 batch 4：Text 沿用当前继承的 visibility——祖先 hidden
+                    // 且无显式 visible 覆盖 → 跳过文本绘制（自身不可见）。
+                    if !visibility_hidden {
+                        if let Some(node_layout) =
+                            layout.get(addr).filter(|l| in_viewport(l, viewport))
+                        {
+                            commands.push(RenderCommand::Text {
+                                x: node_layout.abs_x,
+                                y: node_layout.abs_y,
+                                width: node_layout.width,
+                                text: content.into_owned(),
+                                font_size,
+                                line_height,
+                                font_family: font_family.clone(),
+                                font_weight,
+                                text_align,
+                                color,
+                                wrap: white_space.wrap,
+                            });
+                        }
                     }
                 }
             }
             // Element 节点 → Rect 命令（背景色 + 背景图 + 四边边框）。
             NodeKind::Element(_) => {
-                // 查询布局结果；display:none / contents / 非渲染标签不在布局
-                // 树中（或无盒），自然跳过。
-                if let Some(node_layout) = layout.get(addr) {
+                // M-3 batch 4：`visibility: hidden` 的盒不绘制自身（背景/边框/图），
+                // 但仍占布局，且后代若显式 visible 会在其后叠出。
+                if visibility_hidden {
+                    // 见开头的块注释：跳过自身盒指令，但子节点递归不受影响。
+                } else if let Some(node_layout) = layout.get(addr) {
                     if in_viewport(node_layout, viewport) {
                         if let Some(style) = styles.get(&addr) {
                             let bg =
@@ -310,6 +375,9 @@ fn paint_recursive(
             white_space,
             text_align,
             color,
+            // 子节点继承本元素的 visibility（hidden 继续往下传，直至某元素
+            // 显式 visible 覆盖）。
+            visibility_hidden,
         );
     }
     *children_scratch = children;
@@ -336,6 +404,13 @@ fn paint_recursive(
                 }
             }
         }
+    }
+
+    // opacity 组结束：在本元素子树全部结束后（EndClip 与 outline 之后）压入
+    // EndOpacity，把 Rect + 子节点 + outline + overflow clip 对整体作为一个
+    // 离屏合成单元交还后端。此处与函数开头压入的 Opacity 严格配对。
+    if opacity_group {
+        commands.push(RenderCommand::EndOpacity);
     }
 }
 
