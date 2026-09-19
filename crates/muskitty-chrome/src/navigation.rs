@@ -23,7 +23,10 @@
 
 use muskitty_cssom::CssStyleSheet;
 use muskitty_network::NetworkResponse;
+use muskitty_renderer::ImageBits;
+use std::collections::HashMap;
 
+use crate::images::{load_images, ImageLoadOptions, ImageLoadStats};
 use crate::stylesheets::{load_stylesheets, DocumentFetcher, LoadOptions, LoadStats};
 
 /// 一次导航的最终结果（channel 回传给 app 层）。
@@ -49,12 +52,18 @@ pub struct NavigationDoc {
     /// 页面 HTML。
     pub html: String,
     /// 文档序样式表（内嵌 + 外链 + `@import` 展开；CS-1）。
+    /// 背景图 `url()` 已在加载期绝对化（BG-1）。
     pub sheets: Vec<CssStyleSheet>,
+    /// 已解码背景图资源（**绝对 URL** → RGBA 像素；BG-1）。样式表无可绘制
+    /// `url()` 时为空表。
+    pub images: HashMap<String, ImageBits>,
     /// 是否作者 HTML（`text/html` 分支为 true；`text/plain`/提示页是
     /// MusKitty 生成的页面，其样式表已内嵌在标记里，`sheets` 留空）。
     pub is_html: bool,
     /// 样式表加载统计（失败/跳过只观测）。
     pub stats: LoadStats,
+    /// 背景图加载统计（失败/跳过只观测；BG-1）。
+    pub image_stats: ImageLoadStats,
 }
 
 /// 地址栏输入的导航分类（[`classify_url`] 的结果）。
@@ -176,24 +185,30 @@ pub fn document_from_response(resp: &NetworkResponse) -> NavigationDoc {
             final_url,
             html: resp.text(),
             sheets: Vec::new(),
+            images: HashMap::new(),
             is_html: true,
             stats: LoadStats::default(),
+            image_stats: ImageLoadStats::default(),
         }
     } else if ct.contains("text/plain") {
         NavigationDoc {
             final_url,
             html: plain_text_page(&resp.text()),
             sheets: Vec::new(),
+            images: HashMap::new(),
             is_html: false,
             stats: LoadStats::default(),
+            image_stats: ImageLoadStats::default(),
         }
     } else {
         NavigationDoc {
             final_url,
             html: unsupported_type_page(&ct, resp.body_bytes().len()),
             sheets: Vec::new(),
+            images: HashMap::new(),
             is_html: false,
             stats: LoadStats::default(),
+            image_stats: ImageLoadStats::default(),
         }
     }
 }
@@ -209,6 +224,18 @@ pub fn load_document_stylesheets(
 ) -> (Vec<CssStyleSheet>, LoadStats) {
     let dom = muskitty_html5_parser::parse(html);
     load_stylesheets(&dom, document_url, fetch, &LoadOptions::default())
+}
+
+/// 加载文档背景图资源（BG-1）：采集样式表 `url()` → 抓取 → PNG 解码。
+///
+/// 与 [`load_document_stylesheets`] 同调用时机（抓取线程内 / file 加载点），
+/// 且必须在样式表加载**之后**调用——它消费的是已绝对化 `url()` 的样式表。
+pub fn load_document_images(
+    sheets: &[CssStyleSheet],
+    document_url: &str,
+    fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> (HashMap<String, ImageBits>, ImageLoadStats) {
+    load_images(sheets, document_url, fetch, &ImageLoadOptions::default())
 }
 
 /// 网络错误页（DNS / 连接 / TLS / 超时 / 体积上限——HTML 文档加载失败，
@@ -281,6 +308,14 @@ pub fn spawn_http_navigation(
                         doc.sheets = sheets;
                         doc.stats = stats;
                         crate::page::report_load_failures(&stats);
+                        // BG-1：样式表就绪后抓背景图（同线程，UI 线程零 IO）。
+                        let (images, image_stats) =
+                            load_document_images(&doc.sheets, &doc.final_url, &mut |target| {
+                                fetcher.fetch_bytes(target)
+                            });
+                        doc.images = images;
+                        doc.image_stats = image_stats;
+                        crate::page::report_image_failures(&image_stats);
                     }
                     Ok(doc)
                 }

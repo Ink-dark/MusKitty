@@ -8,8 +8,12 @@
 use muskitty_cascade::{compute_styles, StyleTreeOptions};
 use muskitty_cssom::CssStyleSheet;
 use muskitty_layout::{build_layout_tree_with_fonts, compute_layout, SharedFontSystem};
-use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
+use muskitty_renderer::{
+    no_images, paint, Backend, ImageBits, PaintInput, RenderOutput, TinySkiaBackend,
+};
+use std::collections::HashMap;
 
+use crate::images::{load_images, ImageLoadOptions};
 use crate::stylesheets::{load_stylesheets, DocumentFetcher, LoadOptions};
 
 pub use crate::stylesheets::author_sheet;
@@ -69,6 +73,22 @@ pub fn render_page_with_sheets(
     height: u32,
     scale: f32,
 ) -> Result<RenderOutput, Box<dyn std::error::Error>> {
+    render_page_with_images(html, sheets, no_images(), width, height, scale)
+}
+
+/// 渲染 HTML + 样式表 + 已解码背景图资源（BG-1 主入口）。
+///
+/// 与 [`render_page_with_sheets`] 同管线，差别只在 `images`：
+/// **绝对 URL → 已解码像素**（由 [`crate::images::load_images`] 产出）。
+/// 资源缺失的 URL 只是不画背景图，页面其余照常渲染。
+pub fn render_page_with_images(
+    html: &str,
+    sheets: &[CssStyleSheet],
+    images: &HashMap<String, ImageBits>,
+    width: u32,
+    height: u32,
+    scale: f32,
+) -> Result<RenderOutput, Box<dyn std::error::Error>> {
     let dom = muskitty_html5_parser::parse(html);
     // media 视口 = 布局视口（逻辑 CSS px）；与 layout 用同一 width/height。
     let opts = StyleTreeOptions {
@@ -88,18 +108,19 @@ pub fn render_page_with_sheets(
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images,
     };
     let commands = paint(&input);
     let mut backend = TinySkiaBackend::new();
     Ok(backend.render(&commands, width, height, scale))
 }
 
-/// 渲染自包含 HTML 文件（内嵌 + 同目录外链 CSS）到 RGBA 像素。
+/// 渲染自包含 HTML 文件（内嵌 + 同目录外链 CSS + 同目录背景图）到 RGBA 像素。
 ///
 /// 读取 `path` 指向的 HTML 文件，以 `file://` URL 为 base 采集/抓取样式表
-///（`<style>` + `<link rel=stylesheet href>`，含 `@import`），再走
-/// [`render_page_with_sheets`] 全管线。用于渲染检测页（纯 HTML+CSS fixture）
-/// → 与浏览器对照。
+///（`<style>` + `<link rel=stylesheet href>`，含 `@import`）与样式表引用的
+/// `url()` 背景图（BG-1），再走 [`render_page_with_images`] 全管线。
+/// 用于渲染检测页（纯 HTML+CSS/图像 fixture）→ 与浏览器对照。
 pub fn render_html_file(
     path: &str,
     width: u32,
@@ -110,7 +131,7 @@ pub fn render_html_file(
     let document_url =
         muskitty_network::url::file_url_from_path(path).ok_or("unmappable file path")?;
     let dom = muskitty_html5_parser::parse(&html);
-    let sheets = {
+    let (sheets, images) = {
         let mut fetcher = DocumentFetcher::new(&document_url);
         let (sheets, stats) = load_stylesheets(
             &dom,
@@ -119,9 +140,17 @@ pub fn render_html_file(
             &LoadOptions::default(),
         );
         report_load_failures(&stats);
-        sheets
+        // BG-1：以各表自身 location 为基准解析 url() 并抓取解码。
+        let (images, image_stats) = load_images(
+            &sheets,
+            &document_url,
+            &mut |url| fetcher.fetch_bytes(url),
+            &ImageLoadOptions::default(),
+        );
+        report_image_failures(&image_stats);
+        (sheets, images)
     };
-    render_page_with_sheets(&html, &sheets, width, height, scale)
+    render_page_with_images(&html, &sheets, &images, width, height, scale)
 }
 
 /// 抓取失败的可观测出口（失败不致命：页面照常渲染，只报一行汇总）。
@@ -136,6 +165,17 @@ pub(crate) fn report_load_failures(stats: &crate::stylesheets::LoadStats) {
             stats.sources,
             stats.imports,
             stats.cache_hits
+        );
+    }
+}
+
+/// 图像抓取/解码失败的可观测出口（失败不致命：该元素不画背景图，页面照常）。
+pub(crate) fn report_image_failures(stats: &crate::images::ImageLoadStats) {
+    if stats.failed > 0 || stats.skipped > 0 {
+        eprintln!(
+            "muskitty-chrome: images: {} fetched, {} failed, {} skipped \
+             ({} references, {} decoded)",
+            stats.fetched, stats.failed, stats.skipped, stats.references, stats.decoded
         );
     }
 }

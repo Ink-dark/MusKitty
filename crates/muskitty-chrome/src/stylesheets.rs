@@ -419,7 +419,11 @@ pub fn load_stylesheets(
             .unwrap_or_else(|| collected.base_url.clone());
         let mut stack = vec![base.clone()];
         let expanded = loader.expand_imports(parse_rules(&css), &base, 1, &mut stack);
-        sheets.push(build_sheet(&source, expanded));
+        let mut sheet = build_sheet(&source, expanded);
+        // BG-1：就地绝对化背景图 url()（每张表用自身 location 作基准），
+        // 使声明字符串与 load_images 产出的资源表 key 一致。
+        crate::images::absolutize_rules_for_sheet(&mut sheet, &collected.base_url);
+        sheets.push(sheet);
     }
     (sheets, loader.stats)
 }
@@ -477,6 +481,35 @@ impl DocumentFetcher {
                     return Err(format!("not text/css: {ct}"));
                 }
                 Ok(decode_css_bytes(resp.body_bytes()))
+            }
+            other => Err(format!("unsupported scheme: {other:?}")),
+        }
+    }
+
+    /// 抓取一个已解析的绝对 URL 的**原始字节**（BG-1：背景图等非文本子资源）。
+    ///
+    /// 与 [`Self::fetch_text`] 的 scheme 策略一致（http(s) 文档不得读
+    /// `file://`），但不做 CSS MIME 校验——图像按字节嗅探（PNG 魔数）；
+    /// `data:` 不要求 `text/css`。
+    pub fn fetch_bytes(&mut self, target: &str) -> Result<Vec<u8>, String> {
+        if !url::is_fetchable_subresource(&self.base, target) {
+            return Err(format!("blocked by subresource policy: {target}"));
+        }
+        match url::scheme(target).as_deref() {
+            Some("data") => url::decode_data_url(target)
+                .map(|d| d.bytes)
+                .ok_or_else(|| format!("invalid data URL: {target}")),
+            Some("file") => {
+                let path = url::path_from_file_url(target)
+                    .ok_or_else(|| format!("unmappable file URL: {target}"))?;
+                std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))
+            }
+            Some("http") | Some("https") => {
+                let resp = muskitty_network::fetch_blocking(target).map_err(|e| e.to_string())?;
+                if !resp.is_success() {
+                    return Err(format!("HTTP status {}", resp.status));
+                }
+                Ok(resp.body_bytes().to_vec())
             }
             other => Err(format!("unsupported scheme: {other:?}")),
         }
