@@ -43,6 +43,7 @@
 pub mod chrome;
 pub mod compositor;
 pub mod headless;
+pub mod images;
 pub mod navigation;
 pub mod page;
 pub mod shortcut;

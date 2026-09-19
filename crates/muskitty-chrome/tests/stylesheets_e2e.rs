@@ -352,3 +352,59 @@ fn import_inside_style_element_resolves_against_document() {
     assert_eq!(doc.sheets.len(), 1);
     assert_eq!(pixel_at(&doc, 10, 10), (255, 0, 0, 255));
 }
+
+#[test]
+fn media_attribute_feature_query_gates_the_sheet() {
+    // MQ-V：`media` 属性不只是 ident——特性查询同样驱动整表门控。
+    // 渲染视口 200×100 → `(min-width: 300px)` 不命中、`(max-width: 300px)` 命中。
+    let server = start_server(vec![
+        (
+            "/page.html",
+            html_route(
+                r#"<!doctype html><html><head>
+<link rel="stylesheet" href="/wide.css" media="(min-width: 300px)">
+<link rel="stylesheet" href="/narrow.css" media="(max-width: 300px)">
+</head><body><div></div></body></html>"#,
+            ),
+        ),
+        (
+            "/wide.css",
+            css_route("body{margin:0} div{display:block;width:100px;height:50px;background-color:#00ff00}"),
+        ),
+        ("/narrow.css", css_route(RED_DIV_CSS)),
+    ]);
+    let doc = navigate(&server.base, "/page.html");
+    assert_eq!(
+        doc.sheets.len(),
+        2,
+        "both sheets load; media is evaluated in cascade"
+    );
+    assert_eq!(
+        pixel_at(&doc, 10, 10),
+        (255, 0, 0, 255),
+        "the max-width sheet matches the 200px render viewport, the min-width one does not"
+    );
+}
+
+#[test]
+fn media_attribute_orientation_query_gates_the_sheet() {
+    // `(orientation: landscape)` 在 200×100 视口成立、(portrait) 不成立。
+    let server = start_server(vec![
+        (
+            "/page.html",
+            html_route(
+                r#"<!doctype html><html><head>
+<link rel="stylesheet" href="/portrait.css" media="(orientation: portrait)">
+<link rel="stylesheet" href="/landscape.css" media="(orientation: landscape)">
+</head><body><div></div></body></html>"#,
+            ),
+        ),
+        (
+            "/portrait.css",
+            css_route("body{margin:0} div{display:block;width:100px;height:50px;background-color:#00ff00}"),
+        ),
+        ("/landscape.css", css_route(RED_DIV_CSS)),
+    ]);
+    let doc = navigate(&server.base, "/page.html");
+    assert_eq!(pixel_at(&doc, 10, 10), (255, 0, 0, 255));
+}

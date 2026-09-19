@@ -11,7 +11,7 @@ use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::Node;
 use muskitty_layout::{build_layout_tree, compute_layout, LayoutResult};
 use muskitty_renderer::{
-    paint, Backend, Border, BorderStyle, Color, MockBackend, PaintInput, RenderCommand,
+    no_images, paint, Backend, Border, BorderStyle, Color, MockBackend, PaintInput, RenderCommand,
     RenderOutput, TinySkiaBackend,
 };
 use std::cell::RefCell;
@@ -72,6 +72,7 @@ fn paint_pipeline_with_viewport(
         styles: &styles,
         layout: &layout,
         viewport,
+        images: no_images(),
     };
     paint(&input)
 }
@@ -870,6 +871,7 @@ fn clip_semantics_unchanged_after_lazy_mask() {
             height: 600.0,
             background: Some(Color::rgb(255, 0, 0)),
             border: None,
+            image: None,
         },
         RenderCommand::EndClip,
         // clip 结束后的蓝色小矩形：完整绘制。
@@ -880,6 +882,7 @@ fn clip_semantics_unchanged_after_lazy_mask() {
             height: 5.0,
             background: Some(Color::rgb(0, 0, 255)),
             border: None,
+            image: None,
         },
     ];
     let mut backend = TinySkiaBackend::new();
@@ -1002,4 +1005,113 @@ fn paint_text_transform_inherits_to_children() {
         300.0,
     );
     assert_eq!(text_command(&cmds).0, "DEEP TEXT");
+}
+
+// —— BG-1: background-image 命令生成（renderer 侧按绝对 URL 查资源表）——
+
+/// 1x1 纯色 PNG（测试内编码，避免外部 fixture）。
+fn one_pixel_png(r: u8, g: u8, b: u8) -> Vec<u8> {
+    let mut pixmap = tiny_skia::Pixmap::new(1, 1).unwrap();
+    let c = tiny_skia::Color::from_rgba8(r, g, b, 255);
+    let u8c = c.premultiply().to_color_u8();
+    pixmap.pixels_mut()[0] =
+        tiny_skia::PremultipliedColorU8::from_rgba(u8c.red(), u8c.green(), u8c.blue(), u8c.alpha())
+            .unwrap();
+    pixmap.encode_png().unwrap()
+}
+
+/// 用给定的图像资源表跑 paint 管线（key 为绝对 URL）。
+fn paint_with_images(
+    html: &str,
+    css: &str,
+    images: &HashMap<String, muskitty_renderer::ImageBits>,
+) -> Vec<RenderCommand> {
+    let PipelineResult {
+        dom,
+        styles,
+        layout,
+    } = full_pipeline(html, css, 400.0, 300.0);
+    let input = PaintInput {
+        dom: &dom,
+        styles: &styles,
+        layout: &layout,
+        viewport: None,
+        images,
+    };
+    paint(&input)
+}
+
+#[test]
+fn background_image_url_produces_rect_with_image() {
+    // 解码一张 1x1 蓝图 → 元素声明 background-image: url(bg.png) →
+    // Rect 命令携带该图像（key 是绝对 URL，renderer 不做解析）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/bg.png".to_string(), img);
+    let cmds = paint_with_images(
+        r#"<div style="width: 20px; height: 20px; background-image: url('https://example.com/bg.png')"></div>"#,
+        "div { display: block }",
+        &images,
+    );
+    let rect = cmds
+        .iter()
+        .find_map(|c| match c {
+            RenderCommand::Rect { image, .. } => Some(image),
+            _ => None,
+        })
+        .expect("element with background-image must emit a Rect");
+    assert!(rect.is_some(), "Rect must carry the decoded image");
+}
+
+#[test]
+fn missing_image_resource_emits_no_rect() {
+    // 资源表没有该 URL（抓取/解码失败的等价情形）→ 不生成任何绘制指令，
+    // 页面其余照常（此处元素只有 background-image，无背景色/边框）。
+    let cmds = paint_with_images(
+        r#"<div style="width: 20px; height: 20px; background-image: url('https://example.com/missing.png')"></div>"#,
+        "div { display: block }",
+        no_images(),
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, RenderCommand::Rect { .. })),
+        "unresolved background-image must not emit a Rect, got {cmds:?}"
+    );
+}
+
+#[test]
+fn background_image_none_emits_no_rect() {
+    let cmds = paint_with_images(
+        r#"<div style="width: 20px; height: 20px; background-image: none"></div>"#,
+        "div { display: block }",
+        no_images(),
+    );
+    assert!(!cmds.iter().any(|c| matches!(c, RenderCommand::Rect { .. })));
+}
+
+#[test]
+fn background_image_composes_with_background_color() {
+    // 同一元素同时有背景色与背景图 → 单条 Rect 携带两者（绘制顺序由后端
+    // 保证：color 在下、image 在上、border 最上）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 255, 0)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/g.png".to_string(), img);
+    let cmds = paint_with_images(
+        r#"<div style="width: 20px; height: 20px; background-color: #ff0000; background-image: url('https://example.com/g.png')"></div>"#,
+        "div { display: block }",
+        &images,
+    );
+    let (bg, image) = cmds
+        .iter()
+        .find_map(|c| match c {
+            RenderCommand::Rect {
+                background, image, ..
+            } => Some((background, image)),
+            _ => None,
+        })
+        .expect("Rect expected");
+    assert!(
+        bg.is_some(),
+        "background-color must survive alongside the image"
+    );
+    assert!(image.is_some(), "image must be carried in the same Rect");
 }

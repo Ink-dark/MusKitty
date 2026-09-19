@@ -14,7 +14,7 @@ use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::{Node, NodeKind};
 use muskitty_layout::{build_layout_tree, compute_layout};
-use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
+use muskitty_renderer::{no_images, paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
 use muskitty_selectors::matching::{DomElement, Element as _};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -39,6 +39,7 @@ fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
 
@@ -222,6 +223,7 @@ fn end_to_end_text_produces_ink_pixels() {
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
     assert!(
@@ -263,6 +265,7 @@ fn end_to_end_overflow_hidden_emits_clip() {
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
     assert!(
@@ -298,6 +301,7 @@ fn end_to_end_text_align_center() {
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
     let align = commands
@@ -338,6 +342,7 @@ fn render_text_case(
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     });
 
     let mut backend = TinySkiaBackend::new();
@@ -441,6 +446,7 @@ fn render_raw_pixels(html: &str, css: &str, vw: u32, vh: u32) -> (u32, Vec<u8>) 
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
     let mut backend = TinySkiaBackend::new();
@@ -648,5 +654,279 @@ fn end_to_end_text_transform_changes_rendered_glyphs() {
     assert_ne!(
         ink_none, ink_upper,
         "uppercase glyphs must not produce pixel-identical ink (none={ink_none}, upper={ink_upper})"
+    );
+}
+
+// —— M-3 batch 3c: white-space 全链路像素验证 ——
+
+#[test]
+fn end_to_end_collapsed_source_inks_like_the_literal_line() {
+    // normal 折叠是布局前语义：含源码换行缩进的文本与手写单行文本在同一
+    // 容器下测出同样的排版 → 墨迹行号逐行一致（等值断言，非字体量值比较）。
+    let source = "the quick   brown fox
+        jumps over
+        the lazy dog";
+    let (_, rows_source, ink_source) = render_text_ink(
+        &format!(r#"<div style="width: 80px">{source}</div>"#),
+        80,
+        400,
+    );
+    let (_, rows_literal, ink_literal) = render_text_ink(
+        r#"<div style="width: 80px">the quick brown fox jumps over the lazy dog</div>"#,
+        80,
+        400,
+    );
+    assert_eq!(
+        rows_source, rows_literal,
+        "collapsed source text must render the exact same ink rows as the literal text"
+    );
+    assert_eq!(
+        ink_source, ink_literal,
+        "collapsed folding must not change glyph output"
+    );
+}
+
+#[test]
+fn end_to_end_pre_keeps_line_breaks() {
+    // pre：三个源行保留为 3 行墨迹块（行块之间有空白间隔），且总墨迹范围
+    // 明显高于折叠成单行的对照组。
+    let source = "line one
+line two
+line three";
+    let (_, rows_pre, _) = render_text_ink(
+        &format!(r#"<div style="white-space: pre">{source}</div>"#),
+        300,
+        200,
+    );
+    let (_, rows_normal, _) = render_text_ink(&format!(r#"<div>{source}</div>"#), 300, 200);
+    // normal 折叠 → 一行（墨迹行少且连续）；pre → 三行块。
+    assert!(
+        rows_normal.len() < 24,
+        "collapsed text should be a single line block, got {} ink rows",
+        rows_normal.len()
+    );
+    let gaps = rows_pre.windows(2).filter(|w| w[1] - w[0] > 3).count();
+    assert!(
+        gaps >= 2,
+        "pre must keep the two forced line breaks (3 ink blocks), got {gaps} gaps: rows={rows_pre:?}"
+    );
+}
+
+#[test]
+fn end_to_end_nowrap_overflows_without_wrapping() {
+    // nowrap：同一段文本在窄容器里，normal 折多行（最底墨迹行远低于首行），
+    // nowrap 单行溢出（墨迹只出现在首行高度附近）。
+    let text = "The quick brown fox jumps over the lazy dog";
+    let (_, rows_normal, _) = render_text_ink(
+        &format!(r#"<div style="width: 100px">{text}</div>"#),
+        100,
+        300,
+    );
+    let (_, rows_nowrap, _) = render_text_ink(
+        &format!(r#"<div style="width: 100px; white-space: nowrap">{text}</div>"#),
+        100,
+        300,
+    );
+    let last_normal = *rows_normal.last().expect("normal must ink");
+    let last_nowrap = *rows_nowrap.last().expect("nowrap must ink");
+    assert!(last_normal > last_nowrap + 10,
+        "normal wraps (last ink row {last_normal}); nowrap must stay on one line (last ink row {last_nowrap})"
+    );
+    // nowrap 的墨迹垂直范围不超过两倍行高（单行，1.2em ≈ 19.2px → <40px）。
+    let span_nowrap = last_nowrap - rows_nowrap[0];
+    assert!(
+        span_nowrap < 40,
+        "nowrap ink must stay within one line height, got span={span_nowrap}"
+    );
+}
+
+// —— BG-1: background-image 全链路像素验证 ——
+
+/// 1x1 纯色 PNG（测试内编码）。
+fn one_pixel_png(r: u8, g: u8, b: u8) -> Vec<u8> {
+    let mut pixmap = tiny_skia::Pixmap::new(1, 1).unwrap();
+    let c = tiny_skia::Color::from_rgba8(r, g, b, 255);
+    let u8c = c.premultiply().to_color_u8();
+    pixmap.pixels_mut()[0] =
+        tiny_skia::PremultipliedColorU8::from_rgba(u8c.red(), u8c.green(), u8c.blue(), u8c.alpha())
+            .unwrap();
+    pixmap.encode_png().unwrap()
+}
+
+/// 全链路渲染（含图像资源表）并返回 RGBA。
+fn render_with_images(
+    html: &str,
+    images: &HashMap<String, muskitty_renderer::ImageBits>,
+    vw: u32,
+    vh: u32,
+) -> (u32, Vec<u8>) {
+    let dom = muskitty_html5_parser::parse(html);
+    let styles = compute_styles_tree(&dom, &[], &StyleTreeOptions::default());
+    let mut tree = build_layout_tree(&dom, &styles);
+    let layout = compute_layout(&mut tree, vw as f32, vh as f32).expect("layout ok");
+    let input = PaintInput {
+        dom: &dom,
+        styles: &styles,
+        layout: &layout,
+        viewport: None,
+        images,
+    };
+    let commands = paint(&input);
+    let mut backend = TinySkiaBackend::new();
+    match backend.render(&commands, vw, vh, 1.0) {
+        RenderOutput::Pixels { width, data, .. } => (width, data),
+        other => panic!("expected Pixels, got {other:?}"),
+    }
+}
+
+#[test]
+fn end_to_end_background_image_repeats_across_the_box() {
+    // 1x1 蓝图 + repeat（初始值）→ 整个盒被平铺成蓝色（含右下角，远超
+    // 一个图像像素的范围，证明平铺而非单次贴图）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/tile.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/tile.png')"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(pixel_at(&data, width, 2, 2), (0, 0, 255, 255), "top-left");
+    assert_eq!(
+        pixel_at(&data, width, 50, 30),
+        (0, 0, 255, 255),
+        "bottom-right must be tiled too"
+    );
+    // 盒外仍是白画布。
+    assert_eq!(pixel_at(&data, width, 75, 50), (255, 255, 255, 255));
+}
+
+#[test]
+fn end_to_end_background_image_draws_over_color_and_under_border() {
+    // 绘制顺序（CSS Backgrounds L3 §2）：color 在下、image 在上、border 最上。
+    // 1x1 绿图 + 红底色 + 6px 黑左边框 → 盒内非边框处为绿（图盖住红），
+    // 左边框区为黑（边框盖住图）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 255, 0)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/g.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 40px; height: 20px; background-color: #ff0000; background-image: url('https://example.com/g.png'); border-left: 6px solid black"></div>"#,
+        &images,
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 2, 10),
+        (0, 0, 0, 255),
+        "border paints on top"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (0, 255, 0, 255),
+        "image paints over the background color"
+    );
+}
+
+#[test]
+fn end_to_end_missing_background_image_keeps_page() {
+    // 资源缺失（抓取失败等价）→ 该元素不画背景图，其余声明（背景色）照常。
+    let (width, data) = render_with_images(
+        r#"<div style="width: 40px; height: 20px; background-color: #ff0000; background-image: url('https://example.com/missing.png')"></div>"#,
+        no_images(),
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (255, 0, 0, 255),
+        "background-color must still paint when the image cannot be resolved"
+    );
+}
+
+// —— IS-V: inline style 属性的全链路像素验证（§6.1 准则 3/4）——
+
+#[test]
+fn end_to_end_inline_style_beats_same_specificity_stylesheet() {
+    // 内联声明胜过等特异性（乃至更高特异性）的作者规则——层叠准则 4 在
+    // 整条链路上生效：cascade 收集 → 排序 → computed → paint → 像素。
+    // CSS 里用 #id 提高特异性，内联仍应胜出。
+    let (width, data) = render_raw_pixels(
+        r#"<div id="box" style="background-color: blue; width: 40px; height: 20px"></div>"#,
+        "#box { background-color: red; }",
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (0, 0, 255, 255),
+        "inline declaration must beat a higher-specificity author rule"
+    );
+}
+
+#[test]
+fn end_to_end_important_stylesheet_beats_inline_normal() {
+    // §6.1 准则 1 先于准则 4：作者的 `!important` 声明胜过内联普通声明
+    // （内联只在**同等重要性**下凭准则 4 胜出）。
+    let (width, data) = render_raw_pixels(
+        r#"<div id="box" style="background-color: blue; width: 40px; height: 20px"></div>"#,
+        "div { background-color: red !important; }",
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (255, 0, 0, 255),
+        "author !important must beat the inline normal declaration"
+    );
+}
+
+#[test]
+fn end_to_end_inline_shorthand_expands_like_a_stylesheet() {
+    // 内联走同一个 §5.4.5 解析入口：简写展开（这里用 border 简写）与样式表
+    // 声明块行为一致 → 四边都画出来。
+    let (width, data) = render_raw_pixels(
+        r#"<div style="border: 4px solid red; width: 20px; height: 20px"></div>"#,
+        "",
+        40,
+        40,
+    );
+    // 盒 = 内容 20 + 边框 4×2 = 28px；四条边分别在 0..4 与 24..28 区间。
+    assert_eq!(
+        pixel_at(&data, width, 10, 1),
+        (255, 0, 0, 255),
+        "top border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 1, 10),
+        (255, 0, 0, 255),
+        "left border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 10, 26),
+        (255, 0, 0, 255),
+        "bottom border"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 26, 10),
+        (255, 0, 0, 255),
+        "right border"
+    );
+}
+
+#[test]
+fn end_to_end_inline_important_beats_stylesheet_important_of_lower_specificity() {
+    // 同等重要性下的第二种对照：内联 `!important` 对作者 `!important`
+    // 仍按准则 4 胜出（此处作者规则特异性更高，仍应落败）。
+    let (width, data) = render_raw_pixels(
+        r#"<div id="box" style="background-color: blue !important; width: 40px; height: 20px"></div>"#,
+        "#box { background-color: red !important; }",
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (0, 0, 255, 255),
+        "inline !important must beat author !important (criterion 4)"
     );
 }

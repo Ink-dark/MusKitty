@@ -11,7 +11,7 @@ use muskitty_cascade::{compute_styles, StyleTreeOptions};
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_layout::{build_layout_tree, compute_layout};
-use muskitty_renderer::{paint, Backend, PaintInput, TinySkiaBackend};
+use muskitty_renderer::{no_images, paint, Backend, PaintInput, TinySkiaBackend};
 
 const VIEWPORT_W: f32 = 800.0;
 const VIEWPORT_H: f32 = 600.0;
@@ -59,6 +59,7 @@ fn main() {
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
 

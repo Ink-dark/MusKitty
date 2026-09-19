@@ -15,6 +15,8 @@
 //! 规划见 `docs/plans/2026-08-23-windowing.md` §W-5。
 
 use muskitty_cssom::CssStyleSheet;
+use muskitty_renderer::ImageBits;
+use std::collections::HashMap;
 
 /// 一份页面（一个标签）的全部状态。
 ///
@@ -28,7 +30,11 @@ pub struct WebView {
     /// 页面 HTML。
     pub html: String,
     /// 文档序样式表（Author origin；cascade 等特异性时后者胜）。
+    /// 背景图 `url()` 已在加载期绝对化（BG-1）。
     pub sheets: Vec<CssStyleSheet>,
+    /// 已解码背景图资源（**绝对 URL** → RGBA 像素；BG-1）。空表 = 无背景图
+    /// （无 `url()` 引用，或全部抓取/解码失败）。
+    pub images: HashMap<String, ImageBits>,
     /// 标签标题（chrome 标签栏显示；导航提交后先更新为 URL，到站后为
     /// 最终 URL / 文件名）。
     pub title: String,
@@ -61,6 +67,7 @@ impl WebView {
             } else {
                 vec![crate::stylesheets::author_sheet(&css)]
             },
+            images: HashMap::new(),
             title: String::from("新标签页"),
             navigation_epoch: 0,
             needs_repaint: true,
@@ -77,6 +84,11 @@ impl WebView {
     /// 替换样式表集合（文档序；导航到站 / 文件加载用）。
     pub fn set_sheets(&mut self, sheets: Vec<CssStyleSheet>) {
         self.sheets = sheets;
+    }
+
+    /// 替换背景图资源表（BG-1；与 [`Self::set_sheets`] 同批更新）。
+    pub fn set_images(&mut self, images: HashMap<String, ImageBits>) {
+        self.images = images;
     }
 
     /// 更新标签标题。

@@ -6,6 +6,9 @@
 > **上一批**：batch 1（border 简写统一展开 + media 视口接线，2026-08-29，PROGRESS 第 15 条）。
 > **本批（已完成）**：batch 2（方向性边框 + outline 端到端，2026-09-12，见"批次 2"）
 > 与 batch 3（`line-height` 精确解析 + `text-transform`，2026-09-13，见"批次 3"）。
+> **2026-09-18 追加批**（见"批次 3c"）：`white-space` + 空白折叠（batch 3c）、
+> `background-image` 图像管线（batch 5 前置，BG-1）、`@media` 求值重写（MQ-V）、
+> inline `style` 收口（IS-V）。
 
 ## 一、判定方法
 
@@ -63,9 +66,25 @@ fmt/clippy（`-D warnings`）干净。
 字体相关量值比较——首版这么写就因 `l` 的 ascender 高于大写而误报。同理行高的像素
 断言要求画布足够高，否则高行高的末行被裁掉会让墨迹计数失真。
 
+## 二之三、本批（2026-09-18）已补：batch 3c + 图像管线 + @media 重写 + inline 收口
+
+| # | 缺口（修复前实测） | 修复 | commit |
+|---|------------------|------|--------|
+| 1 | `white-space` 注册但零消费方：测量与绘制都直接吃**原始文本**（源码缩进/换行原样进 cosmic-text，每处源码换行被当作真实换行）——真实页面文字排版的系统性偏差 | cascade `WhiteSpace`（`collapse`/`preserve_newlines`/`wrap`，§4 表格逐值派生）+ `apply_white_space`（§4.1.2 Phase I 折叠 + §4.1.3 segment break 的 CJK 删除/拉丁转空格）；layout 与 renderer 两侧调同一函数 | cascade `031c7cd` |
+| 2 | 纯空白文本节点被一刀切丢弃（`pre` 语义下错误）；`nowrap`/`pre` 无单行语义 | layout `InheritedText.white_space` + `NodeContext::Text.wrap`（measure 时 `wrap=false` → 不换行，缓存键归一化）；`RenderCommand::Text.wrap` + `draw_text` 同语义 | layout `bc78ec5` / 主仓库 `f248f36` |
+| 3 | UA 表缺 §15.3.3 的 `listing/plaintext/pre/xmp { white-space: pre }`（当时无消费方，注释里挂着 batch 3c） | 补规则 + `<pre>` 像素断言 | 主仓库 `f248f36` |
+| 4 | `background-image` **未注册**（声明在 filter 阶段即被丢弃）、`background` 简写显式丢弃 image 分量、renderer 无任何图像命令 | cascade 注册 + 简写展开 image（`Token::Url` 与 `url()` 函数两种形态、渐变函数透传）；renderer `ImageBits` + PNG 解码 + `Rect.image` + Repeat pattern 平铺；chrome 采集/绝对化/抓取/解码全链路 | cascade `ea3e4c6` / 主仓库 `3cb8d00` / `60d19f4` |
+| 5 | `@media` 求值把 unknown 直接当 false（`not <未知>` 会错判为真）、`not` 只取反紧随项、`only` 未实现、缺运算符被静默接受、feature 只认 px | MQ L4 §3 的 Kleene 三值重写（`Tristate` + 规范的 negate/and/or）、`not` 修饰整条 query、`only` 透明、malformed → `not all` 且在逗号处恢复、em/rem（基准 16px）与 `orientation` | cascade `5882097` |
+| 6 | inline `style` 的**实现已在**（`from_style_attr` = §6.1 准则 4、specificity `(0,0,0)`、简写/`--*`/`!important` 全通），但注释仍写 "(1,0,0,0)" 与"条件评估推迟"，且缺端到端像素证据 | 修注释 + 文档化 §5.4.5 解析入口与完整排序语义；补 4 条 e2e 像素（内联胜高特异性作者规则 / 作者 `!important` 胜内联普通 / 内联 `!important` 胜作者 `!important` / 内联简写四边框） | cascade `5882097` / 主仓库 `a5a929f` |
+
+验证：cascade **262**（111 lib + 52 filter + 79 integration + 19 style_tree + 1 doc）；
+layout **132**；workspace **300**（chrome 148 = 117 lib + 3 headless + 3 images e2e + 6 probe
++ 11 stylesheets e2e + 8 UA、renderer 126 = 53 + 27 + 46、network 22 + 4 doc）；
+fmt/clippy（`-D warnings`）三个仓库全干净。
+
 ## 三、仍开放的 CSS 缺口（按建议批次排序）
 
-### 批次 3（2026-09-13 部分完成：line-height + text-transform ✅）
+### 批次 3（2026-09-13 部分完成：line-height + text-transform ✅；2026-09-18：white-space ✅）
 
 | 缺口 | 现状 | 规范 |
 |------|------|------|
@@ -73,7 +92,7 @@ fmt/clippy（`-D warnings`）干净。
 | ~~`text-transform`~~ ✅ **已完成**（batch 3）：`none`/`uppercase`/`lowercase`/`capitalize`；`cascade::apply_text_transform` 在 layout 测量与 paint 内容两侧共用（布局前生效），Unicode 全尺寸映射（`ß`→`SS`） | 旧为零消费方 | CSS Text L3 §2.1 |
 | `letter-spacing` / `word-spacing` | 注册但无消费方；**cosmic-text 0.13.2 无此 API**（`Attrs` 仅 family/stretch/style/weight，Buffer 仅 `set_monospace_width`/`set_tab_width`）→ 需在测量与字形定位两处自建 advance 契约（batch 3b） | CSS Text L3 §7 |
 | `font-style: italic` | 注册但无消费方；管线侧只是 `Attrs::style` 一个字段，但**系统字体是否有 italic 面**决定像素结果（cosmic-text 不合成斜体）→ 需先定验证口径（batch 3b） | CSS Fonts L4 §2.3 |
-| `white-space`（nowrap/pre/…） | 注册但无消费方；含空白折叠语义（当前测量直接吃原始文本，折叠整体缺失）→ batch 3c | CSS Text L3 §4 |
+| `white-space`（nowrap/pre/…） | ~~注册但无消费方；含空白折叠语义~~ ✅ **已完成**（batch 3c，2026-09-18）：cascade `WhiteSpace` 模型 + `apply_white_space`（Phase I 折叠 + segment break 的 CJK 规则）作为单一来源，layout 测量与 renderer 绘制共用；六值全通（详见 [goal.md](../../goal.md) 完成记录） | CSS Text L3 §4 |
 | `text-indent` | 注册但无消费方（首行缩进需按行测量，非当前单次测量结构） | CSS Text L3 §3 |
 | `direction` | 注册但无消费方（RTL 基方向） | CSS Writing Modes L4 §2.3 |
 | `tab-size` / `orphans` / `widows` | 注册但无消费方（低频，排 batch 3c 之后） | CSS Text L3 §3.3 / §5 |
@@ -86,7 +105,7 @@ fmt/clippy（`-D warnings`）干净。
 | `z-index` + 层叠上下文 | paint 现为 DOM 先序；z-index 需建立层叠上下文与排序（`RenderTree` 中间结构曾因无消费者移除，届时重生） |
 | `visibility: hidden` | 需在 paint 跳过自身绘制但保留布局空间，且允许后代 `visibility: visible` 覆盖（继承语义） |
 
-### 批次 5（盒装饰余项）
+### 批次 5（盒装饰余项；2026-09-18 部分完成：background-image ✅）
 
 | 缺口 | 说明 |
 |------|------|
@@ -94,7 +113,8 @@ fmt/clippy（`-D warnings`）干净。
 | `outline-offset` | 未注册；本轮 outline 固定 offset 0 |
 | corner miter 斜接 | 相邻边不同宽时浏览器用梯形斜接，当前方块拼接（已文档化近似） |
 | dashed / dotted / double / 明暗类真实绘制 | 当前全部按 solid 近似；需 dash 模式与多线/明暗合成 |
-| `background-image`（含 gradient） | renderer 无图像解码/绘制管线；`linear-gradient` 探针已确认为退化白底（chrome 回归测试留有开关式断言） |
+| ~~`background-image`~~ ✅ **已完成**（BG-1）：`url()` 两种 token 形态 + 图像解码绘制管线（PNG，走 tiny-skia 内置读取器）；**渐变仍未画**（函数透传待实现）；JPEG/GIF/WebP 不解码 | 见"二之三"#4 |
+| `background-repeat` / `background-position` / `background-size` | 未注册；当前绘制按三属性**初始值**硬编码（repeat 平铺、起点 0 0、natural size） |
 | `box-shadow` / `text-shadow` | 未注册；需模糊核 |
 
 ### 批次 6（布局消费方缺口）

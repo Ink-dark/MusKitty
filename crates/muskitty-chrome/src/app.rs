@@ -8,11 +8,13 @@
 //! 本模块仅在 `winit-backend` feature 下编译；纯函数部分
 //! （chrome::model/paint/input、compositor）无窗口可测。
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use muskitty_cssom::CssStyleSheet;
+use muskitty_renderer::ImageBits;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -20,6 +22,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{Window, WindowId};
 
+use crate::images::{load_images, ImageLoadOptions};
 use crate::navigation::{self, NavigationKind, NavigationOutcome};
 use crate::shortcut::{self, InputEvent, Key, ShortcutAction};
 use crate::stylesheets::{load_stylesheets, DocumentFetcher, LoadOptions};
@@ -54,11 +57,14 @@ fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
 struct FileDocument {
     html: String,
     sheets: Vec<CssStyleSheet>,
+    /// 已解码背景图资源（绝对 URL，BG-1）。
+    images: HashMap<String, ImageBits>,
     /// HTML 引用到的本地样式表路径（file:// 表；热重载监视用）。
     css_files: Vec<(PathBuf, Option<std::time::SystemTime>)>,
 }
 
-/// 读取本地 HTML 并加载其样式表（内嵌 + `file://`/http(s) 外链 + `@import`）。
+/// 读取本地 HTML 并加载其样式表（内嵌 + `file://`/http(s) 外链 + `@import`）
+/// 与背景图（BG-1）。
 ///
 /// file 模式同步读（文件小、调用点本就在 UI 线程/加载点）；http(s) 外链
 /// 在 file 页面里也被允许（浏览器同）——此处同步抓取，与本进程既有 file
@@ -68,7 +74,7 @@ fn load_file_document(path: &str) -> Result<FileDocument, Box<dyn std::error::Er
     let document_url = muskitty_network::url::file_url_from_path(path)
         .ok_or_else(|| format!("unmappable file path: {path}"))?;
     let dom = muskitty_html5_parser::parse(&html);
-    let sheets = {
+    let (sheets, images) = {
         let mut fetcher = DocumentFetcher::new(&document_url);
         let (sheets, stats) = load_stylesheets(
             &dom,
@@ -77,7 +83,15 @@ fn load_file_document(path: &str) -> Result<FileDocument, Box<dyn std::error::Er
             &LoadOptions::default(),
         );
         crate::page::report_load_failures(&stats);
-        sheets
+        // BG-1：样式表就绪后抓背景图（与 render_html_file 同一路径）。
+        let (images, image_stats) = load_images(
+            &sheets,
+            &document_url,
+            &mut |url| fetcher.fetch_bytes(url),
+            &ImageLoadOptions::default(),
+        );
+        crate::page::report_image_failures(&image_stats);
+        (sheets, images)
     };
     // 监视集合：只含 file:// 表（http(s) 表无 mtime 可轮询）。
     let mut css_files = Vec::new();
@@ -95,6 +109,7 @@ fn load_file_document(path: &str) -> Result<FileDocument, Box<dyn std::error::Er
     Ok(FileDocument {
         html,
         sheets,
+        images,
         css_files,
     })
 }
@@ -213,6 +228,7 @@ impl App {
         {
             let view = app.views.active_mut();
             view.html = doc.html;
+            view.set_images(doc.images);
             view.set_sheets(doc.sheets);
             let name = std::path::Path::new(path)
                 .file_name()
@@ -322,7 +338,7 @@ impl App {
         if dirty {
             let out = {
                 let a = self.views.active();
-                crate::page::render_page_with_sheets(&a.html, &a.sheets, vw, vh, scale)
+                crate::page::render_page_with_images(&a.html, &a.sheets, &a.images, vw, vh, scale)
             };
             match out {
                 Ok(muskitty_renderer::RenderOutput::Pixels {
@@ -439,6 +455,7 @@ impl App {
                     match load_file_document(&path) {
                         Ok(doc) => {
                             view.html = doc.html;
+                            view.set_images(doc.images);
                             view.set_sheets(doc.sheets);
                             let name = std::path::Path::new(&path)
                                 .file_name()
@@ -493,6 +510,7 @@ impl App {
             match outcome.result {
                 Ok(doc) => {
                     view.html = doc.html;
+                    view.set_images(doc.images);
                     view.set_sheets(doc.sheets);
                     view.set_title(doc.final_url);
                 }
@@ -695,6 +713,8 @@ mod tests {
             epoch: 1,
             url: "https://example.com".to_string(),
             result: Ok(NavigationDoc {
+                images: HashMap::new(),
+                image_stats: crate::images::ImageLoadStats::default(),
                 final_url: "https://example.com/".to_string(),
                 html: "<html>new</html>".to_string(),
                 sheets: vec![crate::stylesheets::author_sheet("p{color:red}")],
@@ -722,6 +742,8 @@ mod tests {
             epoch: 99,
             url: "https://stale.example".to_string(),
             result: Ok(NavigationDoc {
+                images: HashMap::new(),
+                image_stats: crate::images::ImageLoadStats::default(),
                 final_url: "https://stale.example/".to_string(),
                 html: "<html>stale</html>".to_string(),
                 sheets: Vec::new(),
