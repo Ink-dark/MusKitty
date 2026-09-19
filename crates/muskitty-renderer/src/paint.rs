@@ -12,10 +12,11 @@
 
 use crate::color::Color;
 use crate::command::{RenderCommand, TextAlign};
+use crate::image::ImageBits;
 use crate::render_tree::{
-    apply_text_transform, extract_background_color, extract_border, extract_outline,
-    extract_text_color, resolve_font_family, resolve_font_size, resolve_font_weight,
-    resolve_line_height, resolve_text_align,
+    apply_text_transform, extract_background_color, extract_background_image_url, extract_border,
+    extract_outline, extract_text_color, resolve_font_family, resolve_font_size,
+    resolve_font_weight, resolve_line_height, resolve_text_align,
 };
 use muskitty_cascade::ComputedStyle;
 use muskitty_dom::{Node, NodeKind};
@@ -38,6 +39,22 @@ pub struct PaintInput<'a> {
     /// 完全在内的保留。剔除只影响本节点指令，不影响子节点递归（后代
     /// 可能落在视口内）。
     pub viewport: Option<(f32, f32, f32, f32)>,
+    /// 背景图资源表：**绝对 URL** → 已解码像素（BG-1）。
+    ///
+    /// key 用绝对 URL 是因为相对 URL 的解析基准属于文档/样式表加载层
+    /// （chrome 侧在加载期把 `url()` 重写为绝对形式并抓取解码），renderer
+    /// 只管按键取值——不必依赖 URL 解析实现，也不知道 base URL。
+    /// 缺失的 key（抓取/解码失败）→ 该元素不画背景图，页面照常渲染。
+    pub images: &'a HashMap<String, ImageBits>,
+}
+
+/// 空图像表（无背景图场景 / 测试与示例的便捷值）。
+///
+/// `PaintInput.images` 是引用，无法用 `&HashMap::new()` 那样的临时值；
+/// 这里给进程级的空表，`images: no_images()` 即可。
+pub fn no_images() -> &'static HashMap<String, ImageBits> {
+    static EMPTY: std::sync::OnceLock<HashMap<String, ImageBits>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(HashMap::new)
 }
 
 /// 执行绘制，生成绘制指令列表。
@@ -56,6 +73,7 @@ pub fn paint(input: &PaintInput) -> Vec<RenderCommand> {
         input.dom,
         input.styles,
         input.layout,
+        input.images,
         input.viewport,
         &mut commands,
         &mut children,
@@ -80,6 +98,7 @@ fn paint_recursive(
     node: &Rc<RefCell<Node>>,
     styles: &HashMap<usize, ComputedStyle>,
     layout: &LayoutResult,
+    images: &HashMap<String, ImageBits>,
     viewport: Option<(f32, f32, f32, f32)>,
     commands: &mut Vec<RenderCommand>,
     children_scratch: &mut Vec<Rc<RefCell<Node>>>,
@@ -203,7 +222,7 @@ fn paint_recursive(
                     }
                 }
             }
-            // Element 节点 → Rect 命令（背景 + 四边边框）。
+            // Element 节点 → Rect 命令（背景色 + 背景图 + 四边边框）。
             NodeKind::Element(_) => {
                 // 查询布局结果；display:none / contents / 非渲染标签不在布局
                 // 树中（或无盒），自然跳过。
@@ -214,9 +233,14 @@ fn paint_recursive(
                                 extract_background_color(style).filter(|c| !c.is_transparent());
                             // `currentcolor` 取本元素文字色（M-3 batch 2）
                             let border = extract_border(style, color);
+                            // BG-1：背景图按绝对 URL 查已解码资源表；抓取或
+                            // 解码失败的 key 缺失 → 不画图（页面照常渲染）。
+                            let image = extract_background_image_url(style)
+                                .and_then(|url| images.get(&url))
+                                .cloned();
 
-                            // 有背景或边框时生成绘制指令（绝对坐标）。
-                            if bg.is_some() || border.is_some() {
+                            // 有背景色/背景图/边框时生成绘制指令（绝对坐标）。
+                            if bg.is_some() || border.is_some() || image.is_some() {
                                 commands.push(RenderCommand::Rect {
                                     x: node_layout.abs_x,
                                     y: node_layout.abs_y,
@@ -224,6 +248,7 @@ fn paint_recursive(
                                     height: node_layout.height,
                                     background: bg,
                                     border,
+                                    image,
                                 });
                             }
                         }
@@ -258,6 +283,7 @@ fn paint_recursive(
             child,
             styles,
             layout,
+            images,
             viewport,
             commands,
             children_scratch,

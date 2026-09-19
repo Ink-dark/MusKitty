@@ -34,6 +34,35 @@ pub fn extract_text_color(style: &ComputedStyle) -> Color {
         .unwrap_or(Color::BLACK)
 }
 
+/// 从 ComputedStyle 提取 `background-image` 的 URL（BG-1，M-3 batch 5 前置）。
+///
+/// 支持子集（CSS Backgrounds L3 §3.1）：`url()` 的无引号形式（tokenizer 的
+/// `Token::Url`）与带引号形式（`url("...")` 函数）。返回**原样** URL 字符串
+/// （相对 URL 由调用方——chrome 侧——按文档 base 解析；renderer 不知道
+/// base URL）。`none` / 缺失 / 渐变函数（暂不支持绘制）/ 其他值 → `None`
+/// （跳过背景图，非致命）。
+pub fn extract_background_image_url(style: &ComputedStyle) -> Option<String> {
+    let cv = style.get("background-image")?;
+    for t in cv.tokens() {
+        match t {
+            // 无引号形式：tokenizer §4.3.8 直接产出 Url token。
+            ComponentValue::PreservedToken(Token::Url(u)) => return Some(u.clone()),
+            // 带引号形式：`url(...)` 函数，参数为单个 String token。
+            ComponentValue::Function(f) if f.name.eq_ignore_ascii_case("url") => {
+                for inner in &f.value {
+                    if let ComponentValue::PreservedToken(Token::String(s)) = inner {
+                        return Some(s.clone());
+                    }
+                }
+                return None;
+            }
+            // `none` 关键字与渐变函数等 → 无可绘制 URL。
+            _ => {}
+        }
+    }
+    None
+}
+
 /// 从 ComputedStyle 提取 font-size 的 px 值。
 ///
 /// cascade 已把 font-size 归一化为 px Dimension（`normalize_font_size`），

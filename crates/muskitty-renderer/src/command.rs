@@ -4,6 +4,7 @@
 //! 消费这些指令栅格化为像素。当前仅 `Rect`，文本/裁剪推迟。
 
 use crate::color::Color;
+use crate::image::ImageBits;
 
 /// CSS `text-align` 的水平对齐（T-3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -21,7 +22,7 @@ pub enum TextAlign {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RenderCommand {
-    /// 矩形填充（含可选四边边框）。
+    /// 矩形填充（含可选四边边框与背景图，BG-1）。
     ///
     /// `x` / `y` 为相对画布原点的绝对坐标（已累加父元素偏移），
     /// `width` / `height` 为元素的 border box 尺寸（content + padding +
@@ -39,6 +40,13 @@ pub enum RenderCommand {
         background: Option<Color>,
         /// 四边边框。`None` 表示无边框（四边均为 `None` 亦等价）。
         border: Option<Border>,
+        /// 背景图（RGBA8 + 内在尺寸；BG-1）。`None` = 无背景图。
+        ///
+        /// 绘制语义按 `background` 初始值硬编码：起点 0 0（padding box 近似
+        /// 为整个 border box）、`repeat` 平铺、natural size（1 image px =
+        /// 1 CSS px），且**绘制在背景色之上、边框之下**（CSS Backgrounds
+        /// L3 §2 的绘制顺序：color → image → border）。
+        image: Option<ImageBits>,
     },
     /// 文本绘制（T-2 / T-3）。
     ///
@@ -215,7 +223,7 @@ impl BorderStyle {
 }
 
 impl RenderCommand {
-    /// 构造一个纯背景填充矩形（无边框）。
+    /// 构造一个纯背景填充矩形（无边框、无背景图）。
     pub fn rect(x: f32, y: f32, width: f32, height: f32, background: Color) -> Self {
         RenderCommand::Rect {
             x,
@@ -224,6 +232,7 @@ impl RenderCommand {
             height,
             background: Some(background),
             border: None,
+            image: None,
         }
     }
 }
@@ -243,6 +252,7 @@ mod tests {
                 height,
                 background,
                 border,
+                image,
             } => {
                 assert_eq!(x, 10.0);
                 assert_eq!(y, 20.0);
@@ -250,6 +260,7 @@ mod tests {
                 assert_eq!(height, 50.0);
                 assert_eq!(background, Some(Color::rgb(255, 0, 0)));
                 assert_eq!(border, None);
+                assert_eq!(image, None);
             }
             _ => panic!("expected Rect"),
         }

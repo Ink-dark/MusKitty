@@ -22,11 +22,14 @@
 use cosmic_text::{
     Attrs, Buffer, Command, Family, FontSystem, Metrics, Shaping, SwashCache, Weight,
 };
-use tiny_skia::{FillRule, Mask, Paint, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{
+    FillRule, FilterQuality, Mask, Paint, PathBuilder, Pattern, Pixmap, Rect, SpreadMode, Transform,
+};
 
 use crate::backend::{Backend, RenderOutput};
 use crate::color::Color;
 use crate::command::{Border, BorderStyle, RenderCommand, TextAlign};
+use crate::image::ImageBits;
 
 /// tiny-skia CPU 渲染后端。
 ///
@@ -151,15 +154,16 @@ impl Backend for TinySkiaBackend {
                     height,
                     background,
                     border,
+                    image,
                 } => {
                     // 跳过零尺寸矩形
                     if *width <= 0.0 || *height <= 0.0 {
                         continue;
                     }
-                    // RN-1：无背景且无边框的矩形不产生任何绘制，跳过
-                    // （同时免去 Mask 构建）。
+                    // RN-1：无背景且无边框且无背景图的矩形不产生任何绘制，
+                    // 跳过（同时免去 Mask 构建）。
                     let has_border = border.as_ref().is_some_and(|b| !b.is_empty());
-                    if background.is_none() && !has_border {
+                    if background.is_none() && !has_border && image.is_none() {
                         continue;
                     }
                     // RN-1：实际消费 clip 时才懒构建 Mask。
@@ -171,7 +175,7 @@ impl Backend for TinySkiaBackend {
                         scale_xform,
                     );
 
-                    // 填充背景
+                    // 填充背景色（CSS Backgrounds L3 §2 绘制顺序：color 在最下）
                     if let Some(bg) = background {
                         if let Some(rect) = Rect::from_xywh(*x, *y, *width, *height) {
                             let mut paint = Paint::default();
@@ -181,7 +185,22 @@ impl Backend for TinySkiaBackend {
                         }
                     }
 
-                    // 绘制四边边框
+                    // 背景图：color 之上、border 之下（BG-1）。repeat 平铺到
+                    // 盒范围内；盒外由裁剪保证（无 clip 时按盒边界逐块裁剪）。
+                    if let Some(img) = image {
+                        draw_background_image(
+                            &mut pixmap,
+                            *x,
+                            *y,
+                            *width,
+                            *height,
+                            img,
+                            scale,
+                            clip,
+                        );
+                    }
+
+                    // 绘制四边边框（最上层）
                     if let Some(b) = border {
                         if !b.is_empty() {
                             draw_borders(&mut pixmap, *x, *y, *width, *height, b, scale, clip);
@@ -432,6 +451,62 @@ fn draw_outline(
         if let Some(rect) = Rect::from_xywh(sx, sy, sw, sh) {
             pixmap.fill_rect(rect, &paint, xform, clip_mask);
         }
+    }
+}
+
+/// 绘制背景图（BG-1，CSS Backgrounds L3 §2/§3.1 支持子集）。
+///
+/// 语义按 `background-repeat`/`background-position`/`background-size` 的
+/// **初始值**硬编码（三个属性本轮未注册/未消费）：起点盒左上角（`0 0`）、
+/// natural size（1 image px = 1 CSS px）、`repeat` 平铺到盒范围。
+///
+/// 实现方式：以图像为 pattern shader、`SpreadMode::Repeat`，用一次
+/// `fill_rect` 铺满整个元素盒——平铺与盒边界裁剪都由 rasterizer 一次完成
+/// （比逐块 `draw_pixmap` 更省，且天然处理非整数尺寸）。图像左上角锚定盒
+/// 左上角由 pattern transform 表达（逻辑坐标下 identity 平移 + 统一 scale）。
+///
+/// 绘制顺序由调用方保证（背景色之上、边框之下）。
+#[allow(clippy::too_many_arguments)]
+fn draw_background_image(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    image: &ImageBits,
+    scale: f32,
+    clip_mask: Option<&Mask>,
+) {
+    if image.width == 0 || image.height == 0 || width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    // 图像字节 → tiny-skia Pixmap（本函数内部，类型不外泄）。
+    let Some(mut tile) = Pixmap::new(image.width, image.height) else {
+        return;
+    };
+    if tile.data_mut().len() != image.data.len() {
+        return;
+    }
+    tile.data_mut().copy_from_slice(&image.data);
+
+    // pattern 以图像像素为单位平铺；盒的左上角锚定需要把 pattern 原点移到
+    // 盒位置，并按 HiDPI scale 放大（与其它绘制一致的逻辑→物理映射）。
+    let pattern_xform = Transform::from_row(scale, 0.0, 0.0, scale, scale * x, scale * y);
+    let paint = Paint {
+        shader: Pattern::new(
+            tile.as_ref(),
+            SpreadMode::Repeat,
+            FilterQuality::Nearest,
+            1.0,
+            pattern_xform,
+        ),
+        ..Paint::default()
+    };
+
+    // 用完整盒矩形作为覆盖范围（clip 由 rasterizer 与调用方传入的 mask 共同
+    // 保证），identity transform：pattern 自身已表达全部映射。
+    if let Some(rect) = Rect::from_xywh(x, y, width, height) {
+        pixmap.fill_rect(rect, &paint, Transform::identity(), clip_mask);
     }
 }
 
@@ -977,6 +1052,7 @@ mod tests {
                 height: 10.0,
                 background: Some(Color::rgb(255, 0, 0)),
                 border: None,
+                image: None,
             },
             RenderCommand::Rect {
                 x: 0.0,
@@ -985,6 +1061,7 @@ mod tests {
                 height: 0.0,
                 background: Some(Color::rgb(0, 255, 0)),
                 border: None,
+                image: None,
             },
         ];
         let (width, _, data) = render_pixels(&mut backend, &cmds, 10, 10, 1.0);
@@ -1003,6 +1080,7 @@ mod tests {
             width: 80.0,
             height: 60.0,
             background: None,
+            image: None,
             border: Some(Border::uniform(
                 2.0,
                 Color::rgb(0, 0, 255),
@@ -1037,6 +1115,7 @@ mod tests {
             width: 30.0,
             height: 20.0,
             background: None,
+            image: None,
             border: Some(Border {
                 left: Some(SideBorder {
                     width: 4.0,
@@ -1221,6 +1300,7 @@ mod tests {
             width: 80.0,
             height: 60.0,
             background: None,
+            image: None,
             border: Some(Border::uniform(
                 2.0,
                 Color::rgb(0, 0, 255),

@@ -14,7 +14,7 @@ use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::{Node, NodeKind};
 use muskitty_layout::{build_layout_tree, compute_layout};
-use muskitty_renderer::{paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
+use muskitty_renderer::{no_images, paint, Backend, PaintInput, RenderOutput, TinySkiaBackend};
 use muskitty_selectors::matching::{DomElement, Element as _};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -39,6 +39,7 @@ fn render_to_png(html: &str, css: &str, vw: f32, vh: f32) -> Vec<u8> {
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
 
@@ -222,6 +223,7 @@ fn end_to_end_text_produces_ink_pixels() {
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
     assert!(
@@ -263,6 +265,7 @@ fn end_to_end_overflow_hidden_emits_clip() {
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
     assert!(
@@ -298,6 +301,7 @@ fn end_to_end_text_align_center() {
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
     let align = commands
@@ -338,6 +342,7 @@ fn render_text_case(
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     });
 
     let mut backend = TinySkiaBackend::new();
@@ -441,6 +446,7 @@ fn render_raw_pixels(html: &str, css: &str, vw: u32, vh: u32) -> (u32, Vec<u8>) 
         styles: &styles,
         layout: &layout,
         viewport: None,
+        images: no_images(),
     };
     let commands = paint(&input);
     let mut backend = TinySkiaBackend::new();
@@ -731,5 +737,109 @@ fn end_to_end_nowrap_overflows_without_wrapping() {
     assert!(
         span_nowrap < 40,
         "nowrap ink must stay within one line height, got span={span_nowrap}"
+    );
+}
+
+// —— BG-1: background-image 全链路像素验证 ——
+
+/// 1x1 纯色 PNG（测试内编码）。
+fn one_pixel_png(r: u8, g: u8, b: u8) -> Vec<u8> {
+    let mut pixmap = tiny_skia::Pixmap::new(1, 1).unwrap();
+    let c = tiny_skia::Color::from_rgba8(r, g, b, 255);
+    let u8c = c.premultiply().to_color_u8();
+    pixmap.pixels_mut()[0] =
+        tiny_skia::PremultipliedColorU8::from_rgba(u8c.red(), u8c.green(), u8c.blue(), u8c.alpha())
+            .unwrap();
+    pixmap.encode_png().unwrap()
+}
+
+/// 全链路渲染（含图像资源表）并返回 RGBA。
+fn render_with_images(
+    html: &str,
+    images: &HashMap<String, muskitty_renderer::ImageBits>,
+    vw: u32,
+    vh: u32,
+) -> (u32, Vec<u8>) {
+    let dom = muskitty_html5_parser::parse(html);
+    let styles = compute_styles_tree(&dom, &[], &StyleTreeOptions::default());
+    let mut tree = build_layout_tree(&dom, &styles);
+    let layout = compute_layout(&mut tree, vw as f32, vh as f32).expect("layout ok");
+    let input = PaintInput {
+        dom: &dom,
+        styles: &styles,
+        layout: &layout,
+        viewport: None,
+        images,
+    };
+    let commands = paint(&input);
+    let mut backend = TinySkiaBackend::new();
+    match backend.render(&commands, vw, vh, 1.0) {
+        RenderOutput::Pixels { width, data, .. } => (width, data),
+        other => panic!("expected Pixels, got {other:?}"),
+    }
+}
+
+#[test]
+fn end_to_end_background_image_repeats_across_the_box() {
+    // 1x1 蓝图 + repeat（初始值）→ 整个盒被平铺成蓝色（含右下角，远超
+    // 一个图像像素的范围，证明平铺而非单次贴图）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/tile.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/tile.png')"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(pixel_at(&data, width, 2, 2), (0, 0, 255, 255), "top-left");
+    assert_eq!(
+        pixel_at(&data, width, 50, 30),
+        (0, 0, 255, 255),
+        "bottom-right must be tiled too"
+    );
+    // 盒外仍是白画布。
+    assert_eq!(pixel_at(&data, width, 75, 50), (255, 255, 255, 255));
+}
+
+#[test]
+fn end_to_end_background_image_draws_over_color_and_under_border() {
+    // 绘制顺序（CSS Backgrounds L3 §2）：color 在下、image 在上、border 最上。
+    // 1x1 绿图 + 红底色 + 6px 黑左边框 → 盒内非边框处为绿（图盖住红），
+    // 左边框区为黑（边框盖住图）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 255, 0)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/g.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 40px; height: 20px; background-color: #ff0000; background-image: url('https://example.com/g.png'); border-left: 6px solid black"></div>"#,
+        &images,
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 2, 10),
+        (0, 0, 0, 255),
+        "border paints on top"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (0, 255, 0, 255),
+        "image paints over the background color"
+    );
+}
+
+#[test]
+fn end_to_end_missing_background_image_keeps_page() {
+    // 资源缺失（抓取失败等价）→ 该元素不画背景图，其余声明（背景色）照常。
+    let (width, data) = render_with_images(
+        r#"<div style="width: 40px; height: 20px; background-color: #ff0000; background-image: url('https://example.com/missing.png')"></div>"#,
+        no_images(),
+        60,
+        40,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 20, 10),
+        (255, 0, 0, 255),
+        "background-color must still paint when the image cannot be resolved"
     );
 }
