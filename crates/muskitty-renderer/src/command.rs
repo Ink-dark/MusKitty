@@ -6,6 +6,102 @@
 use crate::color::Color;
 use crate::image::ImageBits;
 
+/// 长度或百分比（background-position / background-size 的组成部分）。
+///
+/// 百分比在绘制时按盒尺寸折算；px 直接使用（1 CSS px 对应 1 逻辑 px）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LengthOrPercent {
+    /// 长度（px，声明即为 px —— cascade 未做单位换算的属性原样透传）。
+    Px(f32),
+    /// 百分比（`0.0` = 0%，`100.0` = 100%）。
+    Percent(f32),
+}
+
+/// CSS `background-repeat` 的平铺样式（Backgrounds L3 §3.2 支持子集）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RepeatStyle {
+    /// `repeat`：双轴平铺（初始值）。
+    #[default]
+    Repeat,
+    /// `repeat-x`：水平平铺，垂直不重复。
+    RepeatX,
+    /// `repeat-y`：垂直平铺，水平不重复。
+    RepeatY,
+    /// `no-repeat`：不重复，仅绘制一块。
+    NoRepeat,
+}
+
+/// CSS `background-position`（Backgrounds L3 §3.6）：起点偏移。
+///
+/// 初始值 `0% 0%`（左上角）。百分比相对盒宽/高，px 直接使用。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackgroundPosition {
+    /// 水平偏移。
+    pub x: LengthOrPercent,
+    /// 垂直偏移。
+    pub y: LengthOrPercent,
+}
+
+impl Default for BackgroundPosition {
+    fn default() -> Self {
+        Self {
+            x: LengthOrPercent::Percent(0.0),
+            y: LengthOrPercent::Percent(0.0),
+        }
+    }
+}
+
+/// CSS `background-size`（Backgrounds L3 §3.9 支持子集）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BackgroundSize {
+    /// `auto`：自然尺寸（1 image px = 1 CSS px；初始值）。
+    #[default]
+    Auto,
+    /// `<length-percentage>{1,2}`：宽度 + 可选高度；`height: None` 表示
+    /// 第二个值为 `auto`（按图像纵横比推导）。`auto 100px` 这类"宽 auto"
+    /// 组合不在支持子集内（解析时回退 [`BackgroundSize::Auto`]）。
+    Length {
+        /// 宽度。
+        width: LengthOrPercent,
+        /// 高度；`None` = `auto`（按纵横比推导）。
+        height: Option<LengthOrPercent>,
+    },
+    /// `contain`：等比缩放至完全放入盒内。
+    Contain,
+    /// `cover`：等比缩放至铺满盒（超出部分裁掉）。
+    Cover,
+}
+
+/// 背景图绘制参数（BG-1 收尾）：承载解码图像位 + `background-repeat` /
+/// `background-position` / `background-size` 三个可配值。
+///
+/// 全默认（repeat 平铺、起点 `0% 0%`、auto 自然尺寸）时绘制语义与 BG-1
+/// 初始值完全一致（逐像素等价）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundImage {
+    /// 解码的图像位。
+    pub bits: ImageBits,
+    /// 平铺样式（`background-repeat`）。
+    pub repeat: RepeatStyle,
+    /// 起点偏移（`background-position`）。
+    pub position: BackgroundPosition,
+    /// 图像尺寸（`background-size`）。
+    pub size: BackgroundSize,
+}
+
+impl BackgroundImage {
+    /// 单块图像 + 全部画法默认（repeat 平铺、起点 `0% 0%`、natural size），
+    /// 等价于 BG-1 硬编码初始值。
+    pub fn new(bits: ImageBits) -> Self {
+        Self {
+            bits,
+            repeat: RepeatStyle::Repeat,
+            position: BackgroundPosition::default(),
+            size: BackgroundSize::Auto,
+        }
+    }
+}
+
 /// CSS `text-align` 的水平对齐（T-3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextAlign {
@@ -40,13 +136,16 @@ pub enum RenderCommand {
         background: Option<Color>,
         /// 四边边框。`None` 表示无边框（四边均为 `None` 亦等价）。
         border: Option<Border>,
-        /// 背景图（RGBA8 + 内在尺寸；BG-1）。`None` = 无背景图。
+        /// 背景图（解码位 + 绘制参数；BG-1 收尾）。`None` = 无背景图。
         ///
-        /// 绘制语义按 `background` 初始值硬编码：起点 0 0（padding box 近似
-        /// 为整个 border box）、`repeat` 平铺、natural size（1 image px =
-        /// 1 CSS px），且**绘制在背景色之上、边框之下**（CSS Backgrounds
-        /// L3 §2 的绘制顺序：color → image → border）。
-        image: Option<ImageBits>,
+        /// 绘制语义按 `background-repeat` / `background-position` /
+        /// `background-size` 解析结果：默认（repeat 平铺、起点 `0% 0%`、
+        /// natural size）与 BG-1 初始值一致。绘制顺序为**背景色之上、边框
+        /// 之下**（CSS Backgrounds L3 §2：color → image → border）。
+        image: Option<BackgroundImage>,
+        /// 四角圆角（M-3 batch 5，Backgrounds L3 §5.1）。全 0 = 直角矩形
+        /// （默认，不影响既有像素）。背景、背景图与边框都按此几何切角。
+        border_radius: BorderRadius,
     },
     /// 文本绘制（T-2 / T-3）。
     ///
@@ -100,6 +199,29 @@ pub enum RenderCommand {
     },
     /// 结束裁剪（L-2）：恢复到最近 [`RenderCommand::Clip`] 之前的状态。
     EndClip,
+    /// 开始不透明度合成组（M-3 batch 4，CSS Color L3 §5.1）。
+    ///
+    /// 该组内（直到配对的 [`RenderCommand::EndOpacity`]）的所有命令——包括
+    /// Rect / Text / 其间的 Clip 对 / 嵌套 Opacity 组——作为一个**整体**先
+    /// 渲染到离屏画布，再用 `opacity` 作为整组内容的全局 alpha，经
+    /// source-over 一次性合成回主画布（子树像素整体半透明）。
+    ///
+    /// 后端要求：
+    /// - `opacity` ∈ `(0,1)`（paint 只在 `0 < opacity < 1` 时发出本命令；
+    ///   `opacity: 1` 不产生组，`opacity: 0` 跳过整棵子树）；
+    /// - 无任何组命令（即全链路 opacity=1）时输出必须与逐命令直接绘制
+    ///   到主画布**逐字节一致**（回归底线）；
+    /// - 组内 Clip/EndClip 仅影响组内绘制；合成回主画布时要受主画布当前
+    ///   外层 clip 约束。
+    Opacity {
+        /// 整组内容的全局不透明度（0<opacity<1）。
+        opacity: f32,
+    },
+    /// 结束不透明度合成组（与 [`RenderCommand::Opacity`] 配对）。
+    ///
+    /// 返回主画布：把该组命令渲染到的离屏结果以 `Opacity.opacity` 的 alpha
+    /// 合成回主画布。
+    EndOpacity,
     /// 轮廓绘制（M-3 batch 2，CSS UI Level 4 §4）。
     ///
     /// 轮廓绘制在元素 **border box 之外**（本命令的 `x`/`y`/`width`/`height`
@@ -222,8 +344,70 @@ impl BorderStyle {
     }
 }
 
+/// 单个角的圆角半径（CSS `border-<corner>-radius` 的 x/y 使用值，M-3 batch 5）。
+///
+/// 两个分量已由 paint 阶段按盒尺寸折算为**绝对值 px**（百分比 → 盒宽/高 ×
+/// 百分比，见 render_tree::extract_border_radius）。`x`/`y` 相等即圆形角。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Radius {
+    /// 水平半径（px；`0` = 直角）。
+    pub x: f32,
+    /// 垂直半径（px；`0` = 直角）。
+    pub y: f32,
+}
+
+impl Default for Radius {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0 }
+    }
+}
+
+impl Radius {
+    /// 是否为 0（直角）。
+    pub fn is_zero(self) -> bool {
+        self.x <= 0.0 && self.y <= 0.0
+    }
+}
+
+/// 四角圆角（CSS Backgrounds & Borders L3 §5.1）。
+///
+/// 独立于 [`Border`] 并行传递的额外信息——圆角**不**改变 border 模型，只给
+/// 后端提供把背景/背景图/边框切角的几何参数。全 0 = 直角矩形（等同无圆角）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BorderRadius {
+    /// 左上角。
+    pub top_left: Radius,
+    /// 右上角。
+    pub top_right: Radius,
+    /// 右下角。
+    pub bottom_right: Radius,
+    /// 左下角。
+    pub bottom_left: Radius,
+}
+
+impl BorderRadius {
+    /// 四角是否都 ≤ 0（直角矩形，等价无圆角）。
+    pub fn is_zero(self) -> bool {
+        self.top_left.is_zero()
+            && self.top_right.is_zero()
+            && self.bottom_right.is_zero()
+            && self.bottom_left.is_zero()
+    }
+
+    /// 四角取相同 `x`/`y` 半径（测试 / 快捷构造）。
+    pub fn uniform(x: f32, y: f32) -> Self {
+        let r = Radius { x, y };
+        Self {
+            top_left: r,
+            top_right: r,
+            bottom_right: r,
+            bottom_left: r,
+        }
+    }
+}
+
 impl RenderCommand {
-    /// 构造一个纯背景填充矩形（无边框、无背景图）。
+    /// 构造一个纯背景填充矩形（无边框、无背景图、直角）。
     pub fn rect(x: f32, y: f32, width: f32, height: f32, background: Color) -> Self {
         RenderCommand::Rect {
             x,
@@ -233,6 +417,7 @@ impl RenderCommand {
             background: Some(background),
             border: None,
             image: None,
+            border_radius: BorderRadius::default(),
         }
     }
 }
@@ -253,6 +438,7 @@ mod tests {
                 background,
                 border,
                 image,
+                border_radius,
             } => {
                 assert_eq!(x, 10.0);
                 assert_eq!(y, 20.0);
@@ -261,9 +447,29 @@ mod tests {
                 assert_eq!(background, Some(Color::rgb(255, 0, 0)));
                 assert_eq!(border, None);
                 assert_eq!(image, None);
+                assert_eq!(border_radius, BorderRadius::default(), "rect() 默认直角");
             }
             _ => panic!("expected Rect"),
         }
+    }
+
+    #[test]
+    fn border_radius_construction() {
+        let br = BorderRadius::uniform(4.0, 4.0);
+        assert!(!br.is_zero());
+        for c in [br.top_left, br.top_right, br.bottom_right, br.bottom_left] {
+            assert_eq!(c.x, 4.0);
+            assert_eq!(c.y, 4.0);
+        }
+        // 单角非零 → 非全直角。
+        let br = BorderRadius {
+            top_left: Radius { x: 2.0, y: 2.0 },
+            ..BorderRadius::default()
+        };
+        assert!(!br.is_zero());
+        assert!(br.top_right.is_zero());
+        // 全 0 → is_zero。
+        assert!(BorderRadius::default().is_zero());
     }
 
     #[test]
@@ -308,5 +514,34 @@ mod tests {
         assert!(BorderStyle::Solid.is_painted());
         assert!(BorderStyle::Double.is_painted());
         assert!(BorderStyle::Groove.is_painted());
+    }
+
+    #[test]
+    fn background_image_defaults_match_initial_values() {
+        let bits = ImageBits {
+            data: vec![255, 0, 0, 255],
+            width: 1,
+            height: 1,
+        };
+        let bg = BackgroundImage::new(bits);
+        assert_eq!(bg.repeat, RepeatStyle::Repeat);
+        assert_eq!(
+            bg.position,
+            BackgroundPosition {
+                x: LengthOrPercent::Percent(0.0),
+                y: LengthOrPercent::Percent(0.0),
+            }
+        );
+        assert_eq!(bg.size, BackgroundSize::Auto);
+        // 显式非默认字段亦可构造。
+        let _custom = BackgroundImage {
+            repeat: RepeatStyle::NoRepeat,
+            position: BackgroundPosition {
+                x: LengthOrPercent::Percent(50.0),
+                y: LengthOrPercent::Percent(50.0),
+            },
+            size: BackgroundSize::Cover,
+            ..bg
+        };
     }
 }

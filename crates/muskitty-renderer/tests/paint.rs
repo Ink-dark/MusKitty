@@ -11,8 +11,8 @@ use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::Node;
 use muskitty_layout::{build_layout_tree, compute_layout, LayoutResult};
 use muskitty_renderer::{
-    no_images, paint, Backend, Border, BorderStyle, Color, MockBackend, PaintInput, RenderCommand,
-    RenderOutput, TinySkiaBackend,
+    no_images, paint, Backend, Border, BorderRadius, BorderStyle, Color, MockBackend, PaintInput,
+    RenderCommand, RenderOutput, TinySkiaBackend,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -872,6 +872,7 @@ fn clip_semantics_unchanged_after_lazy_mask() {
             background: Some(Color::rgb(255, 0, 0)),
             border: None,
             image: None,
+            border_radius: BorderRadius::default(),
         },
         RenderCommand::EndClip,
         // clip 结束后的蓝色小矩形：完整绘制。
@@ -883,6 +884,7 @@ fn clip_semantics_unchanged_after_lazy_mask() {
             background: Some(Color::rgb(0, 0, 255)),
             border: None,
             image: None,
+            border_radius: BorderRadius::default(),
         },
     ];
     let mut backend = TinySkiaBackend::new();
@@ -1114,4 +1116,117 @@ fn background_image_composes_with_background_color() {
         "background-color must survive alongside the image"
     );
     assert!(image.is_some(), "image must be carried in the same Rect");
+}
+
+// —— M-3 batch 4: visibility / opacity 消费 ——
+
+#[test]
+fn visibility_hidden_skips_own_box_but_child_visible_draws() {
+    // `visibility: hidden` 的盒不绘制自身（背景被跳过），但仍占布局；子元素
+    // 显式 `visibility: visible` 照常绘制（叠在隐藏底上）。
+    let cmds = paint_pipeline(
+        r#"<div style="visibility:hidden; background-color:red; width:100px; height:100px">
+             <div style="visibility:visible; background-color:blue; width:20px; height:20px"></div>
+           </div>"#,
+        "",
+        800.0,
+        600.0,
+    );
+    // 只有子元素（蓝）的 Rect，没有父元素（红）的 Rect。
+    let reds = count_rect_color(&cmds, |c| c.g > 200 && c.b < 80);
+    let blues = count_rect_color(&cmds, |c| c.b > 200 && c.r < 80);
+    assert_eq!(
+        reds, 0,
+        "hidden parent's red background must not draw, got {cmds:?}"
+    );
+    assert_eq!(
+        blues, 1,
+        "visible child must still draw its blue background"
+    );
+}
+
+#[test]
+fn visibility_hidden_inherits_to_descendant() {
+    // 子组合 div 无显式 visibility，沿用父 `hidden`；其后代背景随 hidden 跳过。
+    let cmds = paint_pipeline(
+        r#"<div style="visibility:hidden; width:100px; height:100px">
+             <div style="background-color:green; width:20px; height:20px"></div>
+           </div>"#,
+        "",
+        800.0,
+        600.0,
+    );
+    let greens = count_rect_color(&cmds, |c| c.g > 200 && c.r < 80 && c.b < 80);
+    assert_eq!(
+        greens, 0,
+        "child inheriting hidden must not draw its background, got {cmds:?}"
+    );
+}
+
+#[test]
+fn opacity_half_wraps_subtree_in_group() {
+    // `opacity: 0.5` 的元素：命令流 = Opacity → Rect → EndOpacity（整棵子树
+    // 作整体离屏合成）。
+    let cmds = paint_pipeline(
+        r#"<div style="opacity:0.5; background-color:red; width:100px; height:100px"></div>"#,
+        "",
+        800.0,
+        600.0,
+    );
+    match cmds.as_slice() {
+        [RenderCommand::Opacity { opacity }, RenderCommand::Rect { .. }, RenderCommand::EndOpacity] =>
+        {
+            assert_eq!(*opacity, 0.5, "opacity carried into the group");
+        }
+        other => panic!("expected Opacity→Rect→EndOpacity, got {other:?}"),
+    }
+}
+
+#[test]
+fn opacity_one_emits_no_group() {
+    // `opacity: 1` → 不产生组命令（等效无操作，与现状逐字节一致——回归底线）。
+    let cmds = paint_pipeline(
+        r#"<div style="opacity:1; background-color:red; width:100px; height:100px"></div>"#,
+        "",
+        800.0,
+        600.0,
+    );
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| matches!(c, RenderCommand::Opacity { .. })),
+        "opacity:1 must not emit an Opacity group, got {cmds:?}"
+    );
+    assert_eq!(cmds.len(), 1, "only the Rect is emitted");
+}
+
+#[test]
+fn opacity_zero_skips_whole_subtree() {
+    // `opacity: 0` → 整棵子树不可见，父与子的指令全部不产生。
+    let cmds = paint_pipeline(
+        r#"<div style="opacity:0; width:100px; height:100px">
+             <div style="background-color:red; width:20px; height:20px"></div>
+           </div>"#,
+        "",
+        800.0,
+        600.0,
+    );
+    assert!(
+        cmds.is_empty(),
+        "opacity:0 subtree must emit no commands, got {cmds:?}"
+    );
+}
+
+/// 统计满足谓词的 Rect 背景色命令数（M-3 batch 4 测试辅助）。
+fn count_rect_color(
+    cmds: &[RenderCommand],
+    pred: impl Fn(&muskitty_renderer::Color) -> bool,
+) -> usize {
+    cmds.iter()
+        .filter_map(|c| match c {
+            RenderCommand::Rect { background, .. } => background.as_ref(),
+            _ => None,
+        })
+        .filter(|bg| pred(bg))
+        .count()
 }

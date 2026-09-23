@@ -1,6 +1,16 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-09-18 | **M-3 batch 3c + 图像管线 + @media 重写 + inline 收口**（四项，cascade `031c7cd`/`ea3e4c6`/`5882097`，layout `bc78ec5`，主仓库 `f248f36`/`3cb8d00`/`60d19f4`/`a5a929f`）：
+> 最后更新: 2026-09-19 | **高频 CSS 补全第一批（border-radius + opacity/visibility + background-repeat/position/size）**（cascade `58efc45`/`fea6b84`/`7d86720`，主仓库 `415034c`/`767ecb3`/`90d7be9`，三条 batch 全按 goal.md 退出条件落地）：
+>
+> **① `border-radius` 从零到通**——修复前**完全未注册**（声明整条被丢）。落地：cascade 注册 `border-radius` 简写 + `border-<corner>-radius` 四角长属性（各含横/纵半径），`filter` 按 §3.1 的 1–4 值规则展开四角（px/百分比，非法值整条丢弃）；renderer `RenderCommand::Rect.border_radius` 缺省 `0`（无 radius 时与旧矩形逐字节一致，回归底线），后端用 kappa 贝塞尔近似构造圆角路径（`build_rounded_rect_path`），背景、边框与背景图统一按圆角裁剪。验证：cascade 简写 1–4 值展开单测、renderer e2e 像素（圆角矩形角点在外框外无墨迹、中心仍填充；无 radius 与原矩形一致）。
+>
+> **② `background-repeat` / `background-position` / `background-size`**——修复前三属性未注册、绘制按初始值硬编码（repeat 平铺、起点 0 0、natural size）。落地：cascade 注册三属性 + `background` 简写加展开 repeat/position/size 三分量（缺省 repeat / `0% 0%` / auto）；renderer `Rect` 增背景参数（`RepeatStyle`/`BackgroundPosition`/`BackgroundSize`），`draw_background_image` 应用平铺模式（repeat/repeat-x/repeat-y/no-repeat）、起点偏移（关键字/px/百分比）、尺寸缩放（auto/px/百分比/cover/contain 子集）。验证：cascade 注册/简写展开三分量单测、renderer 命令级 + e2e 像素（`no-repeat` 单块、`position: center` 居中、`size: cover` 铺满 vs 原图）。
+>
+> **③ `opacity` + `visibility` 消费**——修复前 `visibility`/`opacity` 已注册但全 crate 零消费方。落地：paint 依 CSS Color L3 §5.1 解析 opacity 并 clamp 到 [0,1]，(0,1) 时对整棵子树发 `Opacity`/`EndOpacity` 组（`opacity:0` 整棵子树早退、`1` 不发组保持逐字节回归）；后端对 opacity 组用**离屏 Pixmap** 递归渲染整组后再按 α source-over 混合回主画布（组内可嵌套 opacity，正确叠加），与裁剪分组句配对；`visibility` 继承语义下 hidden 元素**跳过自身**背景/边框/图绘制但仍占布局（layout 层不读 visibility），后代显式 `visible` 照常绘制叠于隐藏底上。验证：cascade 注册值/继承单测（visibility 继承、opacity 不继承）、renderer 命令级（组流/0 早退/1 无组）+ 后端离屏单测（α 混合、嵌套裁剪）+ 4 条 e2e 像素（hidden 保布局但无墨迹、hidden 父 + visible 子仍绘、opacity 0.5 白底红 → 粉 ~127、opacity 1 与基线逐字节一致）。
+>
+> 全量：workspace **cargo test 全绿**（renderer 63 单测 + 34 端到端 + 51 paint 命令级）、cascade 20 单测；三仓库 `fmt --all --check` 与 `clippy --all-targets -- -D warnings` 干净。
+>
+> 上一轮（2026-09-18）**M-3 batch 3c + 图像管线 + @media 重写 + inline 收口**（四项，cascade `031c7cd`/`ea3e4c6`/`5882097`，layout `bc78ec5`，主仓库 `f248f36`/`3cb8d00`/`60d19f4`/`a5a929f`）：
 >
 > **① `white-space` + 空白折叠（batch 3c）**——修复前测量与绘制都直接吃**原始文本**（源码缩进与换行原样进 cosmic-text，每处源码换行被当真实换行），这是所有真实页面文字排版的系统性偏差。落地：cascade 新增 `WhiteSpace`（`collapse`/`preserve_newlines`/`wrap`，按 CSS Text L3 §4 汇总表逐值派生）与 `apply_white_space`（§4.1.2 Phase I 折叠：space/tab 序列合一；§4.1.3 segment break：CJK 全宽两侧**删除**、拉丁两侧转空格；`pre-line` 保强制换行但仍折空格；`pre`/`pre-wrap`/`break-spaces` 全保留；首尾折叠空白移除），layout 测量与 renderer 绘制**调同一函数**（单一来源，延续 batch 3 的口径）；layout 新增 `InheritedText.white_space` 与 `NodeContext::Text.wrap`（`nowrap`/`pre` 时不换行，测量缓存键随之归一化），纯空白节点仅在"可折叠"时丢弃；renderer `RenderCommand::Text.wrap` 让后端按同一语义决定是否传换行宽度；UA 表补 §15.3.3 的 `listing/plaintext/pre/xmp { white-space: pre }`。验证：cascade 10 条单测（6 关键字三列矩阵 + 折叠矩阵）、layout 5 条（含"折叠后的多行源文本与手写单行**测出完全相同排版**"的等值断言）、renderer 3 条 e2e 像素（折叠等值 / pre 保强制换行 / nowrap 溢出单行）、chrome `<pre>` 像素断言。
 >
