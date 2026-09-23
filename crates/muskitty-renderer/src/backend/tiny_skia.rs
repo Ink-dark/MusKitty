@@ -504,9 +504,11 @@ fn draw_background_image(
     };
 
     // 用完整盒矩形作为覆盖范围（clip 由 rasterizer 与调用方传入的 mask 共同
-    // 保证），identity transform：pattern 自身已表达全部映射。
+    // 保证）。审计 H-9：覆盖矩形是**逻辑坐标**，必须经 scale 变换映射到
+    // 物理画布——此前误传 identity 使 scale≠1 时背景图只画在盒左上角之外
+    // 的物理区域；pattern 变换（上方）已按逻辑→物理正确构造。
     if let Some(rect) = Rect::from_xywh(x, y, width, height) {
-        pixmap.fill_rect(rect, &paint, Transform::identity(), clip_mask);
+        pixmap.fill_rect(rect, &paint, Transform::from_scale(scale, scale), clip_mask);
     }
 }
 
