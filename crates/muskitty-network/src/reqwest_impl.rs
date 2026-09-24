@@ -17,6 +17,14 @@ use crate::response::NetworkResponse;
 /// 敌意无限响应体不再 OOM abort。上限可用 [`Self::with_max_body_bytes`]
 /// 自定义。
 ///
+/// N-1（2026-09-24 审计）：Client 显式 `.no_proxy()`。reqwest 默认继承
+/// `HTTP(S)_PROXY` 环境变量，且不会为 loopback 自动绕行——于是本机
+/// `http://127.0.0.1:1` 这类"连接被拒"的请求会被发往代理、拿到 502
+/// `text/plain` 而**不再是错误**，破坏"拒绝即失败"的契约（导航/抓取测试
+/// 与离线场景均依赖此）。浏览器定位为本地调试/测试优先，关闭全部代理是
+/// 最简单且正确的策略；若日后需要保留外部代理，应改为"保留代理但把
+/// `127.0.0.1`/`localhost`/`[::1]` 列入 no_proxy"，而非当前整体禁用。
+///
 /// # 示例
 ///
 /// ```no_run
@@ -42,6 +50,7 @@ impl ReqwestFetcher {
         Ok(reqwest::Client::builder()
             .timeout(crate::DEFAULT_TIMEOUT)
             .connect_timeout(crate::DEFAULT_CONNECT_TIMEOUT)
+            .no_proxy()
             .build()?)
     }
 
