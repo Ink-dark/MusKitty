@@ -388,19 +388,25 @@ fn paint_recursive(
 
     // 轮廓（M-3 batch 2）：绘制在 border box 之外、元素及其后代之上，故在
     // 子节点递归与本元素裁剪恢复之后发出（CSS UI L4 §4；outline 不影响布局）。
-    if let NodeKind::Element(_) = node.borrow().kind {
-        if let Some(style) = styles.get(&addr) {
-            if let Some(outline) = extract_outline(style, color) {
-                if let Some(node_layout) = layout.get(addr).filter(|l| in_viewport(l, viewport)) {
-                    commands.push(RenderCommand::Outline {
-                        x: node_layout.abs_x,
-                        y: node_layout.abs_y,
-                        width: node_layout.width,
-                        height: node_layout.height,
-                        outline_width: outline.width,
-                        color: outline.color,
-                        style: outline.style,
-                    });
+    // CSS Visibility L3 §1：`visibility: hidden` 使元素**自身**（含其 outline）
+    // 不可见，故与 Rect 同受 `visibility_hidden` 守卫——后代显式 `visible`
+    // 仍会自行发出自己的 outline，不受此处影响。
+    if !visibility_hidden {
+        if let NodeKind::Element(_) = node.borrow().kind {
+            if let Some(style) = styles.get(&addr) {
+                if let Some(outline) = extract_outline(style, color) {
+                    if let Some(node_layout) = layout.get(addr).filter(|l| in_viewport(l, viewport))
+                    {
+                        commands.push(RenderCommand::Outline {
+                            x: node_layout.abs_x,
+                            y: node_layout.abs_y,
+                            width: node_layout.width,
+                            height: node_layout.height,
+                            outline_width: outline.width,
+                            color: outline.color,
+                            style: outline.style,
+                        });
+                    }
                 }
             }
         }

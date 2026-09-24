@@ -916,9 +916,14 @@ fn end_to_end_background_no_repeat_paints_single_tile() {
 
 #[test]
 fn end_to_end_background_position_center_centers_single_tile() {
-    // background-position: center + no-repeat → 1x1 图居中放在 (30,20)，
-    // 四周是非图区域（证明偏移生效）。
-    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    // background-position: center + no-repeat → 图居中，四周是非图区域
+    // （证明偏移生效）。
+    //
+    // 用 2×2 图而非 1×1：单像素图在奇数盒尺寸下落在**半像素边界**上（起点
+    // (60−1)/2 = 29.5），该像素只被覆盖 25%，断言不可能是纯色；更糟的是这种
+    // 粒度下错误的旧语义（盒宽 × 50%，差半像素）同样能通过——鉴别力为零。
+    // 偶数尺寸让图边界与整数像素对齐，断言才有意义。
+    let img = muskitty_renderer::ImageBits::from_png(&solid_png(2, 2, 0, 0, 255)).unwrap();
     let mut images = HashMap::new();
     images.insert("https://example.com/c.png".to_string(), img);
     let (width, data) = render_with_images(
@@ -927,20 +932,31 @@ fn end_to_end_background_position_center_centers_single_tile() {
         80,
         60,
     );
+    // 起点 = ((60−2)/2, (40−2)/2) = (29,19)，图占 x∈[29,31), y∈[19,21)。
+    assert_eq!(
+        pixel_at(&data, width, 29, 19),
+        (0, 0, 255, 255),
+        "centered tile top-left"
+    );
     assert_eq!(
         pixel_at(&data, width, 30, 20),
         (0, 0, 255, 255),
-        "centered tile"
+        "centered tile bottom-right"
     );
     assert_eq!(
-        pixel_at(&data, width, 29, 20),
+        pixel_at(&data, width, 28, 19),
         (255, 255, 255, 255),
         "left blank"
     );
     assert_eq!(
-        pixel_at(&data, width, 30, 19),
+        pixel_at(&data, width, 30, 18),
         (255, 255, 255, 255),
         "top blank"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 31, 20),
+        (255, 255, 255, 255),
+        "right blank"
     );
     assert_eq!(
         pixel_at(&data, width, 0, 0),
@@ -1175,4 +1191,330 @@ fn end_to_end_opacity_one_matches_baseline_pixels() {
         baseline, opaque,
         "opacity:1 must reproduce the baseline buffer byte-for-byte"
     );
+}
+
+/// 构造 w×h 的纯色 PNG（B-2：需要非 1×1 图才能鉴别 position 百分比语义）。
+fn solid_png(w: u32, h: u32, r: u8, g: u8, b: u8) -> Vec<u8> {
+    let mut pixmap = tiny_skia::Pixmap::new(w, h).unwrap();
+    let c = tiny_skia::Color::from_rgba8(r, g, b, 255);
+    let u8c = c.premultiply().to_color_u8();
+    for p in pixmap.pixels_mut() {
+        *p = tiny_skia::PremultipliedColorU8::from_rgba(
+            u8c.red(),
+            u8c.green(),
+            u8c.blue(),
+            u8c.alpha(),
+        )
+        .unwrap();
+    }
+    pixmap.encode_png().unwrap()
+}
+
+fn images_with(key: &str, png: &[u8]) -> HashMap<String, muskitty_renderer::ImageBits> {
+    let mut m = HashMap::new();
+    m.insert(
+        key.to_string(),
+        muskitty_renderer::ImageBits::from_png(png).unwrap(),
+    );
+    m
+}
+
+#[test]
+fn background_position_100_percent_places_image_at_bottom_right() {
+    // CSS Backgrounds L3 §3.6：百分比相对 **(定位区 − 图)**。
+    // `100% 100%` 应让 20×10 图的右下角贴在 60×40 盒的右下角（起点 40,30），
+    // 而不是把图推出盒外（旧实现：起点 = 盒宽高 × 100% = 60,40）。
+    let png = solid_png(20, 10, 0, 0, 255);
+    let images = images_with("https://example.com/br.png", &png);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/br.png'); background-repeat: no-repeat; background-position: 100% 100%"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 59, 39),
+        (0, 0, 255, 255),
+        "100% 100% → 图右下角贴盒右下角"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 50, 35),
+        (0, 0, 255, 255),
+        "图的左侧 fill rect 起点应为 x=40"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 35),
+        (255, 255, 255, 255),
+        "x=30 在图左侧（起点 40）之外"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 55, 20),
+        (255, 255, 255, 255),
+        "y=20 在图上方（起点 30）之外"
+    );
+}
+
+#[test]
+fn background_position_center_centers_non_unit_image() {
+    // center = 50%，应以 `(盒 − 图)/2` 为起点：60×40 盒里的 20×10 图落在
+    // x∈[20,40), y∈[15,25)。若按旧语义（盒 × 50%），图会落在 x∈[30,50)，
+    // 右下溢出。
+    let png = solid_png(20, 10, 0, 0, 255);
+    let images = images_with("https://example.com/ctr.png", &png);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/ctr.png'); background-repeat: no-repeat; background-position: center"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (0, 0, 255, 255),
+        "居中区域中心有图"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 21, 16),
+        (0, 0, 255, 255),
+        "图的左上角应从 (20,15) 起"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 15, 20),
+        (255, 255, 255, 255),
+        "x=15 在起点 20 左侧"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 45, 20),
+        (255, 255, 255, 255),
+        "x=45 在终点 40 右侧（旧语义会在此处有图）"
+    );
+}
+
+#[test]
+fn background_position_px_offset_is_absolute_from_top_left() {
+    // 长度偏移不受图像尺寸影响（仅百分比才减图尺寸）。
+    let png = solid_png(20, 10, 0, 0, 255);
+    let images = images_with("https://example.com/px.png", &png);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/px.png'); background-repeat: no-repeat; background-position: 5px 6px"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(pixel_at(&data, width, 5, 6), (0, 0, 255, 255), "起点 5,6");
+    assert_eq!(
+        pixel_at(&data, width, 4, 6),
+        (255, 255, 255, 255),
+        "起点左侧无图"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 5, 5),
+        (255, 255, 255, 255),
+        "起点上方无图"
+    );
+}
+
+#[test]
+fn end_to_end_border_radius_via_html_clips_background_color() {
+    // border-radius 此前只有后端级（手工构造 BorderRadius）覆盖，HTML→cascade
+    // 链路上 radius 从未被读到过（registry 缺四角长属性 → 声明被丢弃）。
+    // 这条走完整链路：60×40 红盒 + radius 8px → 四角被裁掉，中心仍填充。
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-color: rgb(255, 0, 0); border-radius: 8px"></div>"#,
+        &HashMap::new(),
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 0),
+        (255, 255, 255, 255),
+        "左上角应被圆角裁掉"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 59, 0),
+        (255, 255, 255, 255),
+        "右上角应被圆角裁掉"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 39),
+        (255, 255, 255, 255),
+        "左下角应被圆角裁掉"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 59, 39),
+        (255, 255, 255, 255),
+        "右下角应被圆角裁掉"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (255, 0, 0, 255),
+        "中心仍填充"
+    );
+}
+
+#[test]
+fn end_to_end_square_border_radius_leaves_corners_intact() {
+    // 对照：无 radius 时同尺寸的左上角必须是红的（证明上一条的白来自圆角，
+    // 而不是布局/绘制整体失效）。
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-color: rgb(255, 0, 0)"></div>"#,
+        &HashMap::new(),
+        80,
+        60,
+    );
+    assert_eq!(pixel_at(&data, width, 0, 0), (255, 0, 0, 255));
+    assert_eq!(pixel_at(&data, width, 59, 39), (255, 0, 0, 255));
+}
+
+#[test]
+fn end_to_end_border_radius_shorthand_single_corner_rounding() {
+    // `border-radius: 20px 0 0 0` → 只有左上圆，其余三角保持直角。
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-color: rgb(255, 0, 0); border-radius: 20px 0 0 0"></div>"#,
+        &HashMap::new(),
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 0),
+        (255, 255, 255, 255),
+        "左上角被裁"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 59, 0),
+        (255, 0, 0, 255),
+        "右上角仍是直角"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 39),
+        (255, 0, 0, 255),
+        "左下角仍是直角"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 59, 39),
+        (255, 0, 0, 255),
+        "右下角仍是直角"
+    );
+}
+
+#[test]
+fn end_to_end_background_size_cover_preserves_aspect_on_non_square_image() {
+    // cover：20×10 图放进 60×40 盒 → 等比放大到完全覆盖（scale = max(60/20,
+    // 40/10) = 4）→ 80×40，水平方向溢出被盒裁剪，垂直方向刚好填满。
+    // 用非正方形图才能鉴别"等比"——1×1 图任何 scale 都看不出纵横比被破坏。
+    let png = solid_png(20, 10, 0, 0, 255);
+    let images = images_with("https://example.com/cover.png", &png);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/cover.png'); background-repeat: no-repeat; background-size: cover"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 0),
+        (0, 0, 255, 255),
+        "cover 铺满左上角"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 59, 39),
+        (0, 0, 255, 255),
+        "cover 铺满右下角"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (0, 0, 255, 255),
+        "cover 铺满中心"
+    );
+}
+
+#[test]
+fn end_to_end_background_size_contain_fits_whole_image() {
+    // contain：20×10 图进 60×40 盒 → scale = min(3, 4) = 3 → 60×30，居中放回
+    // （起点 0,0... 实际 position 初始值 0% 0%，且 (60−60)=0、(40−30)=10 →
+    // x=0, y=0）→ 整图落在 y∈[0,30)，第 35 行必须是白的。
+    let png = solid_png(20, 10, 0, 0, 255);
+    let images = images_with("https://example.com/contain.png", &png);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/contain.png'); background-repeat: no-repeat; background-size: contain"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 0),
+        (0, 0, 255, 255),
+        "contain 起点"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 59, 29),
+        (0, 0, 255, 255),
+        "contain 图内右下"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 35),
+        (255, 255, 255, 255),
+        "contain 下方留白"
+    );
+}
+
+#[test]
+fn end_to_end_visibility_hidden_skips_self_outline() {
+    // CSS Visibility L3 §1：`visibility: hidden` 元素自身（含其 outline）
+    // 不可见，但仍占布局。此前 outline 生成块未受 visibility 守卫 → 隐藏元素
+    // 仍描出 outline。margin:10px 让 border box 落在 (10,10)-(50,30)，
+    // 3px outline 四边全在画布内可见（参照 end_to_end_outline_drawn_outside_box）。
+    let (width, data) = render_with_images(
+        r#"<div style="margin: 10px; width: 40px; height: 20px; background-color: rgb(255, 0, 0); outline: 3px solid rgb(0, 128, 0); visibility: hidden"></div>"#,
+        &HashMap::new(),
+        80,
+        60,
+    );
+    // 隐藏自盒无墨迹（背景被跳过）。
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (255, 255, 255, 255),
+        "hidden 自盒无墨迹"
+    );
+    // outline 四边均不得出现（此前 bug：仍描出）。
+    assert_eq!(
+        pixel_at(&data, width, 30, 8),
+        (255, 255, 255, 255),
+        "hidden 元素 outline top 不得出现"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 8, 20),
+        (255, 255, 255, 255),
+        "hidden 元素 outline left 不得出现"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 52, 20),
+        (255, 255, 255, 255),
+        "hidden 元素 outline right 不得出现"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 32),
+        (255, 255, 255, 255),
+        "hidden 元素 outline bottom 不得出现"
+    );
+}
+
+#[test]
+fn end_to_end_visible_outline_still_painted() {
+    // 对照：无 hidden 时 outline 应正常出现在盒外四边。
+    let (width, data) = render_with_images(
+        r#"<div style="margin: 10px; width: 40px; height: 20px; background-color: rgb(255, 0, 0); outline: 3px solid rgb(0, 128, 0)"></div>"#,
+        &HashMap::new(),
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 8),
+        (0, 128, 0, 255),
+        "可见 outline top 正常绘制"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 52, 20),
+        (0, 128, 0, 255),
+        "可见 outline right 正常绘制"
+    );
+    assert_eq!(pixel_at(&data, width, 30, 20), (255, 0, 0, 255), "自盒填充");
 }

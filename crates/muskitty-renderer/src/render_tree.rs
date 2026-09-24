@@ -636,6 +636,7 @@ mod tests {
             resolve_font_size(&style_with_font_size_px(16.0)),
             Some(16.0)
         );
+    }
 
     use muskitty_css::tokenizer::Numeric;
 

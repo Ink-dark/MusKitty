@@ -1,6 +1,17 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-09-19 | **高频 CSS 补全第一批（border-radius + opacity/visibility + background-repeat/position/size）**（cascade `58efc45`/`fea6b84`/`7d86720`，主仓库 `415034c`/`767ecb3`/`90d7be9`，三条 batch 全按 goal.md 退出条件落地）：
+> ⚠️ **更正（2026-09-24）**：2026-09-19 记录的本批 cascade 提交 `58efc45`/`fea6b84`/`7d86720` 与
+> 主仓库 `415034c`/`767ecb3`/`90d7be9` **在仓库中查无此对象**——那一轮工作运行于云端
+> 任务且**从未推送、会话卡死**，全部丢失（见 `docs/audit-2026-09-24-full-scan.md` §3 实证据）。
+> cascade 侧于 2026-09-24 重做：登记四角 `border-<corner>-radius` 长属性 + `border-radius`
+> 简写（1–4 值含 x/y 斜杠）、`background-repeat/position/size` 三属性 + `background` 简写
+> 三分量展开（commit `1c7c322`，已落盘本地 cascade 仓库待 push）；renderer 侧 `98b5005`
+> 修 `background-position` 百分比语义（应为 `(盒−图)×p%`）+ 补 HTML 级圆角/cover/contain 像素
+> 覆盖、`d356488` 加 registry↔消费方一致性闸门、`B-7` 修 `visibility:hidden` 仍描 outline
+> （`e48...` 段）。三条 batch 现已**按 e2e 像素断言重新验证为完成**，下文 ①/②/③ 的"落地"
+> 描述仍准确，仅提交哈希以上述为准。
+>
+> 最后更新: 2026-09-24 | **高频 CSS 补全第一批（border-radius + opacity/visibility + background-repeat/position/size）**（cascade 重做 `1c7c322`，主仓库 `98b5005`/`d356488`，三条 batch 全按 goal.md 退出条件落地，见上方更正）
 >
 > **① `border-radius` 从零到通**——修复前**完全未注册**（声明整条被丢）。落地：cascade 注册 `border-radius` 简写 + `border-<corner>-radius` 四角长属性（各含横/纵半径），`filter` 按 §3.1 的 1–4 值规则展开四角（px/百分比，非法值整条丢弃）；renderer `RenderCommand::Rect.border_radius` 缺省 `0`（无 radius 时与旧矩形逐字节一致，回归底线），后端用 kappa 贝塞尔近似构造圆角路径（`build_rounded_rect_path`），背景、边框与背景图统一按圆角裁剪。验证：cascade 简写 1–4 值展开单测、renderer e2e 像素（圆角矩形角点在外框外无墨迹、中心仍填充；无 radius 与原矩形一致）。
 >
@@ -8,7 +19,7 @@
 >
 > **③ `opacity` + `visibility` 消费**——修复前 `visibility`/`opacity` 已注册但全 crate 零消费方。落地：paint 依 CSS Color L3 §5.1 解析 opacity 并 clamp 到 [0,1]，(0,1) 时对整棵子树发 `Opacity`/`EndOpacity` 组（`opacity:0` 整棵子树早退、`1` 不发组保持逐字节回归）；后端对 opacity 组用**离屏 Pixmap** 递归渲染整组后再按 α source-over 混合回主画布（组内可嵌套 opacity，正确叠加），与裁剪分组句配对；`visibility` 继承语义下 hidden 元素**跳过自身**背景/边框/图绘制但仍占布局（layout 层不读 visibility），后代显式 `visible` 照常绘制叠于隐藏底上。验证：cascade 注册值/继承单测（visibility 继承、opacity 不继承）、renderer 命令级（组流/0 早退/1 无组）+ 后端离屏单测（α 混合、嵌套裁剪）+ 4 条 e2e 像素（hidden 保布局但无墨迹、hidden 父 + visible 子仍绘、opacity 0.5 白底红 → 粉 ~127、opacity 1 与基线逐字节一致）。
 >
-> 全量：workspace **cargo test 全绿**（renderer 63 单测 + 34 端到端 + 51 paint 命令级）、cascade 20 单测；三仓库 `fmt --all --check` 与 `clippy --all-targets -- -D warnings` 干净。
+> 全量（2026-09-24 重验）：workspace **cargo test 全绿**（renderer 66 单测 + 45 端到端 + 51 paint 命令级）、cascade 269 单测；三仓库 `fmt --all -- --check` 与 `clippy --all-targets -- -D warnings` 干净（doctest 因沙箱管道上限无法 spawn rustc，属环境限制非代码缺陷，见审计 §5）。
 >
 > 上一轮（2026-09-18）**M-3 batch 3c + 图像管线 + @media 重写 + inline 收口**（四项，cascade `031c7cd`/`ea3e4c6`/`5882097`，layout `bc78ec5`，主仓库 `f248f36`/`3cb8d00`/`60d19f4`/`a5a929f`）：
 >
