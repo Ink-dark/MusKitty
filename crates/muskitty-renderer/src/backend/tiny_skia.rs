@@ -815,8 +815,12 @@ fn draw_background_image(
         return;
     }
     // 起点偏移（逻辑 CSS px）。
-    let start_x = x + resolve_bg_offset(bg.position.x, width);
-    let start_y = y + resolve_bg_offset(bg.position.y, height);
+    //
+    // Backgrounds L3 §3.6：百分比偏移相对 **（定位区 − 图）**，故必须传入图像的
+    // **目标**尺寸（已按 size 解析后的 fw/fh），而非定位区尺寸——`100% 100%`
+    // 才会把图右下角贴到盒右下角，而不是把图整个推出盒外。
+    let start_x = x + resolve_bg_position_offset(bg.position.x, width, fw);
+    let start_y = y + resolve_bg_position_offset(bg.position.y, height, fh);
 
     // 物理坐标。
     let spx = start_x * scale;
@@ -882,11 +886,26 @@ fn draw_background_image(
     pixmap.fill_rect(rect, &paint, Transform::identity(), clip_mask);
 }
 
-/// `background-position` / 长度分量折算为盒内偏移（px）。
-fn resolve_bg_offset(l: LengthOrPercent, box_len: f32) -> f32 {
+/// `background-size` 的长度/百分比分量折算为 px（Backgrounds L3 §3.9）。
+///
+/// 这里的百分比相对**定位区尺寸**（与 position 的语义不同，两者不共用函数）。
+fn resolve_bg_size_component(l: LengthOrPercent, box_len: f32) -> f32 {
     match l {
         LengthOrPercent::Px(v) => v,
         LengthOrPercent::Percent(p) => box_len * p / 100.0,
+    }
+}
+
+/// `background-position` 分量折算为定位区内的起点偏移（px）。
+///
+/// Backgrounds L3 §3.6：“percentage … refers to the **difference** between the
+/// size of the positioning area and the size of the image”——百分比按
+/// `(box_len − image_len) × p%` 折算，因此 `100%` 让图像的右/下边与定位区的
+/// 右/下边对齐，`50%`(center) 让图像居中。长度分量则直接作为左上偏移。
+fn resolve_bg_position_offset(l: LengthOrPercent, box_len: f32, image_len: f32) -> f32 {
+    match l {
+        LengthOrPercent::Px(v) => v,
+        LengthOrPercent::Percent(p) => (box_len - image_len) * p / 100.0,
     }
 }
 
@@ -895,10 +914,10 @@ fn resolve_bg_size(size: &BackgroundSize, iw: f32, ih: f32, bw: f32, bh: f32) ->
     match size {
         BackgroundSize::Auto => (iw, ih),
         BackgroundSize::Length { width, height } => {
-            let w = resolve_bg_offset(*width, bw);
+            let w = resolve_bg_size_component(*width, bw);
             match height {
                 // 显式高度：直接使用。
-                Some(h) => (w, resolve_bg_offset(*h, bh)),
+                Some(h) => (w, resolve_bg_size_component(*h, bh)),
                 // 高度 auto：按图像纵横比推导。
                 None => (w, w * ih / iw),
             }
