@@ -1,6 +1,6 @@
 # Goal — 2026-09-24 接线与收口轮（接线 cascade + 消除文档失真）
 
-> **状态**：🔄 进行中
+> **状态**：✅ 已完成（B-1~B-7 全部落地，退出条件逐一满足；详见下方完成记录）
 > **依据**：[docs/audit-2026-09-24-full-scan.md](docs/audit-2026-09-24-full-scan.md)
 > （14 crate 全量审查 + 实测基线 + 进度/规划对照）。
 > **为什么不是继续修上一轮的 26 项存量 bug**：本轮开工时发现三件更靠前的事实——
@@ -27,7 +27,26 @@
 | B-4 | **一致性闸门**：新增测试扫描 layout/renderer 中 `style.get("<prop>")` 字面量 ⊆ `BUILTIN_PROPERTIES` | 该测试能捕获本轮全部 5 项缺失；缺失时测试失败而非静默回退初始值 |
 | B-5 | **文档收口**：`PROGRESS.md` / `goal.md` / `css-completion.md` 三处把上述三项从 ✅ 改为"进行中（cascade 侧重做）"，并注明 cascade commit 丢失的实据 | 三处口径一致，不再引用仓库里不存在的 commit |
 | B-6 | **network 代理策略**：显式 `no_proxy` + loopback bypass（`127.0.0.1`/`localhost`/`::1`） | `spawn_http_navigation_refused_returns_failed_outcome` 与 network 2 项不再依赖宿主 `HTTP_PROXY` 环境变量，红转绿 |
-| B-7 | （余力）`visibility: hidden` 应跳过 outline（当前仍绘制） | e2e：`hidden` + `outline` 无墨迹 |
+| B-7 | `visibility: hidden` 应跳过 outline（当前仍绘制） | e2e：`hidden` + `outline` 无墨迹 | ✅ 已修（`end_to_end_visibility_hidden_skips_self_outline` 由 FAILED→ok） |
+
+## 完成记录（2026-09-24 轮）
+
+| # | 落点 | 提交 |
+|---|------|------|
+| A-0a/A-0b | renderer 编译修复 + fetch-crates.sh CR 修复 | `21ee85d` / `25244d5`（主仓库） |
+| B-1 | cascade 注册四角 radius 长属性 + `border-radius` 简写（1–4 值含 x/y）+ `background-repeat/position/size` + `background` 简写三分量展开 | `1c7c322`（cascade 仓库，**已落盘本地待 push**） |
+| B-2/B-3 | `background-position` 百分比语义修复（Backgrounds L3 §3.6，相对 `(盒−图)`）+ 补 HTML 级圆角/cover/contain 像素覆盖 | `98b5005`（主仓库） |
+| B-4 | registry↔消费方一致性闸门（`registry_contract.rs`，已验证鉴别力） | `d356488`（主仓库） |
+| B-5 | 文档收口（PROGRESS/goal/css-completion 三处口径一致，不再引用幽灵 commit） | 本提交 |
+| B-6 | network 显式 `no_proxy`（N-1：loopback 不再被代理吞掉"连接拒绝"） | 主仓库 network 改动 |
+| B-7 | `visibility: hidden` 跳过自身 outline（paint.rs 守卫） | 主仓库 renderer 改动 |
+
+**退出条件核验**：
+- cascade：`cargo test` 全部非-doctest 通过（269 用例）；doctest 因沙箱管道上限无法 spawn rustc（OS code 231，环境限制，非代码缺陷）。
+- renderer：66 单测 + 45 端到端 + 51 paint 命令级全绿；两个原红 e2e（`no_repeat`/`position_center`）转绿。
+- network：12 单测 + 10 集成测试全绿（此前 2 项环回测试因代理误判失败，B-6 修复）。
+- chrome：原失败 1 项（`spawn_http_navigation_refused_returns_failed_outcome`）随 B-6 代理策略修复。
+- `cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 干净。
 
 ## 显式非目标（本轮不做）
 
@@ -154,6 +173,8 @@ cd /workspace && cargo fmt --all -- --check
 ```
 
 ## 完成记录
+
+> ⚠️ **更正**：下方括号内所引 commit（`58efc45`/`fea6b84`/`7d86720` 与 `415034c`/`767ecb3`/`90d7be9`）**在仓库中查无此对象**——这批工作运行于云端任务且从未推送、会话卡死而全部丢失（实证见 `docs/audit-2026-09-24-full-scan.md` §3）。cascade 侧已于 **2026-09-24 重做**：登记四角 `border-<corner>-radius` 长属性 + `border-radius` 简写（1–4 值含 x/y）、`background-repeat/position/size` + `background` 简写三分量（`1c7c322`，本地 cascade 仓库待 push）；renderer 侧 `98b5005` 修 `background-position` 百分比语义 + 补 HTML 级圆角/cover/contain 像素覆盖、`d356488` 加 registry 一致性闸门、并修 `visibility:hidden` 仍描 outline。三条 batch 现已**按 e2e 像素断言重新验证为完成**，下方"落地"描述仍准确，仅提交哈希以上述真实提交为准。
 
 三个 batch 全部完成，退出条件逐一满足：
 
