@@ -1239,7 +1239,7 @@ version = "0.3.0"
 
 [[package]]
 name = "muskitty-cssom"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "muskitty-css",
  "muskitty-dom",
@@ -1247,11 +1247,11 @@ dependencies = [
 
 [[package]]
 name = "muskitty-dom"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "muskitty-html5-parser"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "muskitty-dom",
  "muskitty-html5-tokenizer",

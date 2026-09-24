@@ -101,20 +101,20 @@ fmt/clippy（`-D warnings`）三个仓库全干净。
 
 | 缺口 | 说明 |
 |------|------|
-| `opacity` | 需子树离屏合成（渲染到临时 Pixmap 后按 α 混合）；当前注册但零消费 |
+| ~~`opacity`~~ ✅ **已完成**（2026-09-19）：paint 按 (0,1) 组 `Opacity`/`EndOpacity` 命令；后端离屏合成（临时 Pixmap 渲染整组 → 按 α source-over 混合回主画布），`opacity:1` 与基线逐字节一致、`0` 整棵子树早退；层叠上下文隔离不做（无 RenderTree） | 旧为注册但零消费 |
 | `z-index` + 层叠上下文 | paint 现为 DOM 先序；z-index 需建立层叠上下文与排序（`RenderTree` 中间结构曾因无消费者移除，届时重生） |
-| `visibility: hidden` | 需在 paint 跳过自身绘制但保留布局空间，且允许后代 `visibility: visible` 覆盖（继承语义） |
+| ~~`visibility: hidden`~~ ✅ **已完成**（2026-09-19）：paint 跳过隐藏元素自身绘制（背景/边框/图）但保留布局空间；`visibility` 继承语义下后代显式 `visible` 仍绘制（叠于隐藏底上） | 旧为零消费方 |
 
 ### 批次 5（盒装饰余项；2026-09-18 部分完成：background-image ✅）
 
 | 缺口 | 说明 |
 |------|------|
-| `border-radius` | **未注册**；需路径圆角（tiny-skia 支持路径，但四角半径需裁剪/描边几何） |
+| ~~`border-radius`~~ ✅ **已完成**（2026-09-19）：简写 1-4 值拆分 + 四角长属性；renderer 圆角路径（背景/边框/背景图按圆角裁剪，kappa 贝塞尔近似） | 旧为完全未注册 |
 | `outline-offset` | 未注册；本轮 outline 固定 offset 0 |
 | corner miter 斜接 | 相邻边不同宽时浏览器用梯形斜接，当前方块拼接（已文档化近似） |
 | dashed / dotted / double / 明暗类真实绘制 | 当前全部按 solid 近似；需 dash 模式与多线/明暗合成 |
 | ~~`background-image`~~ ✅ **已完成**（BG-1）：`url()` 两种 token 形态 + 图像解码绘制管线（PNG，走 tiny-skia 内置读取器）；**渐变仍未画**（函数透传待实现）；JPEG/GIF/WebP 不解码 | 见"二之三"#4 |
-| `background-repeat` / `background-position` / `background-size` | 未注册；当前绘制按三属性**初始值**硬编码（repeat 平铺、起点 0 0、natural size） |
+| ~~`background-repeat` / `background-position` / `background-size`~~ ✅ **已完成**（2026-09-19）：寄存器三属性 + `background` 简写展开；`draw_background_image` 应用平铺模式（repeat/repeat-x/repeat-y/no-repeat）、起点偏移（关键字/px/百分比）、尺寸缩放（auto/px/百分比/cover/contain 子集） | 旧为按初始值硬编码（repeat 平铺、起点 0 0、natural size） |
 | `box-shadow` / `text-shadow` | 未注册；需模糊核 |
 
 ### 批次 6（布局消费方缺口）

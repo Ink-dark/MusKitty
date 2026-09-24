@@ -760,6 +760,17 @@ fn render_with_images(
     vw: u32,
     vh: u32,
 ) -> (u32, Vec<u8>) {
+    render_with_images_scaled(html, images, vw, vh, 1.0)
+}
+
+/// 全链路渲染（含图像资源表 + HiDPI scale）并返回 RGBA（物理像素）。
+fn render_with_images_scaled(
+    html: &str,
+    images: &HashMap<String, muskitty_renderer::ImageBits>,
+    vw: u32,
+    vh: u32,
+    scale: f32,
+) -> (u32, Vec<u8>) {
     let dom = muskitty_html5_parser::parse(html);
     let styles = compute_styles_tree(&dom, &[], &StyleTreeOptions::default());
     let mut tree = build_layout_tree(&dom, &styles);
@@ -773,7 +784,7 @@ fn render_with_images(
     };
     let commands = paint(&input);
     let mut backend = TinySkiaBackend::new();
-    match backend.render(&commands, vw, vh, 1.0) {
+    match backend.render(&commands, vw, vh, scale) {
         RenderOutput::Pixels { width, data, .. } => (width, data),
         other => panic!("expected Pixels, got {other:?}"),
     }
@@ -841,6 +852,131 @@ fn end_to_end_missing_background_image_keeps_page() {
         pixel_at(&data, width, 20, 10),
         (255, 0, 0, 255),
         "background-color must still paint when the image cannot be resolved"
+    );
+}
+
+#[test]
+fn end_to_end_background_image_hidpi_covers_full_box() {
+    // 审计 H-9：scale=2 下背景图必须覆盖**整个**盒的物理区域。此前
+    // fill_rect 误传 identity，逻辑坐标被当物理坐标 → 背景图只画在盒
+    // 左上角之外的区域。盒 60×40 逻辑 → 物理 (0,0)-(120,80)；画布
+    // 160×120 物理。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/tile.png".to_string(), img);
+    let (width, data) = render_with_images_scaled(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/tile.png')"></div>"#,
+        &images,
+        160,
+        120,
+        2.0,
+    );
+    // 盒右下角内侧（物理 (110, 70) = 逻辑 (55, 35)）：修复前是白画布。
+    assert_eq!(
+        pixel_at(&data, width, 110, 70),
+        (0, 0, 255, 255),
+        "background image must cover the whole box in physical pixels"
+    );
+    // 盒中心同样被平铺覆盖。
+    assert_eq!(pixel_at(&data, width, 60, 40), (0, 0, 255, 255));
+    // 盒外（物理 (140, 100) = 逻辑 (70, 50)）仍是白画布。
+    assert_eq!(pixel_at(&data, width, 140, 100), (255, 255, 255, 255));
+}
+
+// —— BG-1 收尾：background-repeat / position / size 全链路像素验证 ——
+
+#[test]
+fn end_to_end_background_no_repeat_paints_single_tile() {
+    // background-repeat: no-repeat → 1x1 图只在起点画一块，其余盒内为白画布。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/single.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/single.png'); background-repeat: no-repeat"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 0),
+        (0, 0, 255, 255),
+        "single tile top-left"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 10, 10),
+        (255, 255, 255, 255),
+        "not tiled in the middle"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 50, 30),
+        (255, 255, 255, 255),
+        "not tiled at bottom-right"
+    );
+}
+
+#[test]
+fn end_to_end_background_position_center_centers_single_tile() {
+    // background-position: center + no-repeat → 1x1 图居中放在 (30,20)，
+    // 四周是非图区域（证明偏移生效）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/c.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/c.png'); background-repeat: no-repeat; background-position: center"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (0, 0, 255, 255),
+        "centered tile"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 29, 20),
+        (255, 255, 255, 255),
+        "left blank"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 19),
+        (255, 255, 255, 255),
+        "top blank"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 0, 0),
+        (255, 255, 255, 255),
+        "corner blank"
+    );
+}
+
+#[test]
+fn end_to_end_background_size_cover_scales_to_fill_box() {
+    // background-size: cover → 1x1 图等比缩放到铺满盒（超出部分被盒裁剪），
+    // 整盒均被覆盖；而 no-repeat/初始正值只画右上角单块（回归对照见
+    // end_to_end_background_image_repeats_across_the_box）。
+    let img = muskitty_renderer::ImageBits::from_png(&one_pixel_png(0, 0, 255)).unwrap();
+    let mut images = HashMap::new();
+    images.insert("https://example.com/cover.png".to_string(), img);
+    let (width, data) = render_with_images(
+        r#"<div style="width: 60px; height: 40px; background-image: url('https://example.com/cover.png'); background-size: cover"></div>"#,
+        &images,
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (0, 0, 255, 255),
+        "box center covered"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 59, 39),
+        (0, 0, 255, 255),
+        "bottom-right covered"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 75, 50),
+        (255, 255, 255, 255),
+        "outside the box stays white"
     );
 }
 
@@ -928,5 +1064,115 @@ fn end_to_end_inline_important_beats_stylesheet_important_of_lower_specificity()
         pixel_at(&data, width, 20, 10),
         (0, 0, 255, 255),
         "inline !important must beat author !important (criterion 4)"
+    );
+}
+
+// —— M-3 batch 4: visibility / opacity 全链路像素验证 ——
+
+#[test]
+fn end_to_end_visibility_hidden_reserves_layout_but_paints_nothing() {
+    // `visibility: hidden` 只影响绘制、不影响布局：隐藏的红块不产生任何
+    // 墨迹（保持白），但它仍占据 (0,0)-(40,20) 的布局空间，把其后的蓝块
+    // 推到 (0,20)-(40,40)。两者合证「跳自绘但保布局」。
+    let (width, data) = render_raw_pixels(
+        r#"<div style="visibility:hidden; background-color:red; width:40px; height:20px"></div>
+           <div style="background-color:blue; width:40px; height:20px"></div>"#,
+        "body { margin: 0 }",
+        80,
+        60,
+    );
+    // 隐藏盒所在区域 → 无红墨迹，保持白画布。
+    assert_eq!(
+        pixel_at(&data, width, 5, 5),
+        (255, 255, 255, 255),
+        "hidden box area must stay white"
+    );
+    // 蓝块被隐藏盒的布局尺寸推到其下方（证明隐藏仍占布局空间）。
+    assert_eq!(
+        pixel_at(&data, width, 20, 30),
+        (0, 0, 255, 255),
+        "visible sibling must be pushed below the hidden box"
+    );
+    // 全画布任何位置都不得出现红墨迹。
+    for y in 0..60 {
+        for x in 0..80 {
+            let (r, g, b, _) = pixel_at(&data, width, x, y);
+            assert!(
+                !(r > 200 && g < 80 && b < 80),
+                "hidden box's red must never ink, found at ({x},{y})"
+            );
+        }
+    }
+}
+
+#[test]
+fn end_to_end_visibility_hidden_parent_visible_child_draws() {
+    // 父 `visibility: hidden`（红底被跳过，但布局保留）；子显式
+    // `visibility: visible`（绿）仍正常绘制，叠在父的布局区域内。
+    let (width, data) = render_raw_pixels(
+        r#"<div style="visibility:hidden; background-color:red; width:40px; height:20px">
+             <div style="visibility:visible; background-color:green; width:10px; height:10px"></div>
+           </div>"#,
+        "body { margin: 0 }",
+        60,
+        40,
+    );
+    // 子元素于 (0,0)-(10,10) 绘制为绿（CSS 命名色 `green` = #008000）。
+    assert_eq!(
+        pixel_at(&data, width, 5, 5),
+        (0, 128, 0, 255),
+        "visible child must draw over the hidden parent's area"
+    );
+    // 父的背景红被跳过——同一行、子元素右侧仍是白画布。
+    assert_eq!(
+        pixel_at(&data, width, 20, 5),
+        (255, 255, 255, 255),
+        "hidden parent's red background must not ink"
+    );
+}
+
+#[test]
+fn end_to_end_opacity_half_blends_subtree_on_white() {
+    // `opacity: 0.5` 的红块在白画布上按整组 alpha=0.5 source-over 混合 →
+    // 粉 ~(255,127,127)（与后端单测 opacity_group_blends_whole_subtree_
+    // on_white 同口径，走完整 pipeline）。
+    let (width, data) = render_raw_pixels(
+        r#"<div style="opacity:0.5; background-color:red; width:40px; height:20px"></div>"#,
+        "body { margin: 0 }",
+        60,
+        40,
+    );
+    let (r, g, b, a) = pixel_at(&data, width, 20, 10);
+    assert_eq!(a, 255, "opaque white canvas behind");
+    assert!(r > 200, "red should dominate, got {r}");
+    assert!(
+        (100..160).contains(&g),
+        "green ~127 from the white blend, got {g}"
+    );
+    assert!(
+        (100..160).contains(&b),
+        "blue ~127 from the white blend, got {b}"
+    );
+}
+
+#[test]
+fn end_to_end_opacity_one_matches_baseline_pixels() {
+    // `opacity: 1` 不产生离屏合成组 → 全流程渲染与对照（无 opacity）
+    // 面板逐字节一致（opacity=1 语义无操作，回归底线）。
+    let (_, baseline) = render_raw_pixels(
+        r#"<div style="background-color:red; border:2px solid blue; width:40px; height:20px"></div>"#,
+        "body { margin: 0 }",
+        60,
+        40,
+    );
+    let (_, opaque) = render_raw_pixels(
+        r#"<div style="opacity:1; background-color:red; border:2px solid blue; width:40px; height:20px"></div>"#,
+        "body { margin: 0 }",
+        60,
+        40,
+    );
+    assert_eq!(
+        baseline, opaque,
+        "opacity:1 must reproduce the baseline buffer byte-for-byte"
     );
 }

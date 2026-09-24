@@ -8,10 +8,45 @@
 //! 场景需要中间结构时再引入，当前无消费者。
 
 use crate::color::Color;
-use crate::command::{Border, BorderStyle, SideBorder, TextAlign};
+use crate::command::{
+    BackgroundPosition, BackgroundSize, Border, BorderRadius, BorderStyle, LengthOrPercent, Radius,
+    RepeatStyle, SideBorder, TextAlign,
+};
 use muskitty_cascade::{ComputedStyle, ComputedValue};
 use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
+
+/// 从 ComputedStyle 解析 CSS `opacity`（M-3 batch 4，CSS Color L3 §5.1）。
+///
+/// 读取 `opacity` 的 Number token 并 clamp 到 `0..=1`（§5.1 的数值范围）。
+/// 缺失 / 非法值 / 不可解析 → 返回 `1.0`（不透明，等效无操作）。
+pub fn resolve_opacity(style: &ComputedStyle) -> f32 {
+    let Some(cv) = style.get("opacity") else {
+        return 1.0;
+    };
+    for v in cv.tokens() {
+        if let ComponentValue::PreservedToken(Token::Number(n)) = v {
+            // `n.value` 是 f64（CSS number token）；`opacity` 值域
+            // clamp 到 [0,1] 后转 f32。
+            return n.value.clamp(0.0, 1.0) as f32;
+        }
+    }
+    1.0
+}
+
+/// 该元素自身 `visibility` 是否 `hidden`（CSS Visibility L3 §1）。
+///
+/// 缺失 / 非 hidden（`visible`/`collapse` 之外）→ `false`。继承语义由调用方
+/// （paint）用参数传递：读取本元素 style 的关键字，若没有属性键则沿用
+/// 继承值（ISO 上 cascade 已把 `visibility`（inherited）填充进每个元素的
+/// computed style，故常见情形此处直接反映继承结果）。
+pub fn is_visibility_hidden(style: &ComputedStyle) -> bool {
+    style
+        .get("visibility")
+        .and_then(|cv| cv.keyword())
+        .map(|k| k.eq_ignore_ascii_case("hidden"))
+        .unwrap_or(false)
+}
 
 /// 从 ComputedStyle 提取 background-color。
 ///
@@ -63,21 +98,214 @@ pub fn extract_background_image_url(style: &ComputedStyle) -> Option<String> {
     None
 }
 
+/// 从 ComputedStyle 提取 `background-repeat` 平铺样式（BG-1 收尾）。
+///
+/// 支持子集（Backgrounds L3 §3.2）：`repeat`/`repeat-x`/`repeat-y`/
+/// `no-repeat`。未知关键字 / 缺失 / 不可解析 → 回退 [`RepeatStyle::Repeat`]
+/// （初始值），不致命。
+pub fn extract_background_repeat(style: &ComputedStyle) -> RepeatStyle {
+    let Some(cv) = style.get("background-repeat") else {
+        return RepeatStyle::Repeat;
+    };
+    for t in cv.tokens() {
+        if let ComponentValue::PreservedToken(Token::Ident(s)) = t {
+            return match s.to_ascii_lowercase().as_str() {
+                "repeat-x" => RepeatStyle::RepeatX,
+                "repeat-y" => RepeatStyle::RepeatY,
+                "no-repeat" => RepeatStyle::NoRepeat,
+                // "repeat" 及任何未知 → Repeat（初始值）。
+                _ => RepeatStyle::Repeat,
+            };
+        }
+    }
+    RepeatStyle::Repeat
+}
+
+/// 从 ComputedStyle 提取 `background-position` 起点偏移（BG-1 收尾）。
+///
+/// 支持子集（Backgrounds L3 §3.6）：`left`/`right`/`center`/`top`/
+/// `bottom` 关键字或 `<length-percentage>`，至多两个分量（x y）。未提供 /
+/// 无法解析 → 回退 `0% 0%`（初始值）。
+pub fn extract_background_position(style: &ComputedStyle) -> BackgroundPosition {
+    let default = BackgroundPosition::default();
+    let Some(cv) = style.get("background-position") else {
+        return default;
+    };
+    // 收集 position 数值分量（跳过非数值 token，如 whitespace）。
+    let vals: Vec<&Token> = cv
+        .tokens()
+        .iter()
+        .filter_map(|t| match t {
+            ComponentValue::PreservedToken(tok) => Some(tok),
+            _ => None,
+        })
+        .filter(|tok| {
+            matches!(
+                tok,
+                Token::Ident(_) | Token::Dimension(..) | Token::Percentage(..)
+            )
+        })
+        .take(2)
+        .collect();
+    match vals.as_slice() {
+        [] => default,
+        [single] => single_value_position(single),
+        [x, y] => {
+            // 双值：前者水平，后者垂直；任一轴归属不符 → 回退默认。
+            let (Some(px), Some(py)) = (bg_axis_value(x), bg_axis_value(y)) else {
+                return default;
+            };
+            BackgroundPosition { x: px, y: py }
+        }
+        _ => default,
+    }
+}
+
+/// 单值 position：垂直关键字（top/bottom）作 y（x=center），其余作 x（y=center）。
+fn single_value_position(tok: &Token) -> BackgroundPosition {
+    if let Token::Ident(s) = tok {
+        match s.to_ascii_lowercase().as_str() {
+            "top" => {
+                return BackgroundPosition {
+                    x: LengthOrPercent::Percent(50.0),
+                    y: LengthOrPercent::Percent(0.0),
+                };
+            }
+            "bottom" => {
+                return BackgroundPosition {
+                    x: LengthOrPercent::Percent(50.0),
+                    y: LengthOrPercent::Percent(100.0),
+                };
+            }
+            _ => {}
+        }
+    }
+    // 其余（left/right/center/长度/百分比）作水平值，垂直取 center。
+    match bg_axis_value(tok) {
+        Some(x) => BackgroundPosition {
+            x,
+            y: LengthOrPercent::Percent(50.0),
+        },
+        // 无法归属（如 registry 初始值整串 "0% 0%" 被合成为一个 Ident）→
+        // 回退初始值 0% 0%（Backgrounds L3 §3.6）。
+        None => BackgroundPosition::default(),
+    }
+}
+
+/// 把单个 position 分量 token 解析为水平/垂直偏移；无法归属返回 `None`。
+fn bg_axis_value(tok: &Token) -> Option<LengthOrPercent> {
+    match tok {
+        Token::Ident(s) => match s.to_ascii_lowercase().as_str() {
+            "left" | "top" => Some(LengthOrPercent::Percent(0.0)),
+            "right" | "bottom" => Some(LengthOrPercent::Percent(100.0)),
+            "center" => Some(LengthOrPercent::Percent(50.0)),
+            _ => None,
+        },
+        Token::Dimension(n, u) if u.eq_ignore_ascii_case("px") => {
+            Some(LengthOrPercent::Px(n.value as f32))
+        }
+        Token::Percentage(p) => Some(LengthOrPercent::Percent(p.value as f32)),
+        _ => None,
+    }
+}
+
+/// 从 ComputedStyle 提取 `background-size` 尺寸（BG-1 收尾）。
+///
+/// 支持子集（Backgrounds L3 §3.9）：`auto` / `cover` / `contain` 或
+/// `<length-percentage>{1,2}`（第二值 `auto` = [`BackgroundSize::Length`]
+/// 的 `height: None`）。未知 / 无法解析 → 回退 [`BackgroundSize::Auto`]。
+pub fn extract_background_size(style: &ComputedStyle) -> BackgroundSize {
+    let Some(cv) = style.get("background-size") else {
+        return BackgroundSize::Auto;
+    };
+    let vals: Vec<&Token> = cv
+        .tokens()
+        .iter()
+        .filter_map(|t| match t {
+            ComponentValue::PreservedToken(tok) => Some(tok),
+            _ => None,
+        })
+        .filter(|tok| {
+            matches!(
+                tok,
+                Token::Ident(..) | Token::Dimension(..) | Token::Percentage(..)
+            )
+        })
+        .take(2)
+        .collect();
+    match vals.as_slice() {
+        [] => BackgroundSize::Auto,
+        [t] => match t {
+            Token::Ident(s) if s.eq_ignore_ascii_case("cover") => BackgroundSize::Cover,
+            Token::Ident(s) if s.eq_ignore_ascii_case("contain") => BackgroundSize::Contain,
+            // "auto" 及任何长度/百分比 → Length（高度 auto）。
+            Token::Ident(s) if s.eq_ignore_ascii_case("auto") => BackgroundSize::Auto,
+            // 单个长度/百分比 → width 固定、height auto。
+            _ => bg_size_len(t)
+                .map(|width| BackgroundSize::Length {
+                    width,
+                    height: None,
+                })
+                .unwrap_or(BackgroundSize::Auto),
+        },
+        [w, h] => {
+            // 双值：width + height；任一为 auto → 该轴按纵横比推导。
+            match (bg_size_len(w), bg_size_len(h)) {
+                // 两 auto → Auto（自然尺寸）。
+                (None, None) => BackgroundSize::Auto,
+                (Some(width), height) => BackgroundSize::Length { width, height },
+                // width=auto 组合（height 给定了值）不在支持子集内 → 回退 Auto。
+                (None, Some(_)) => BackgroundSize::Auto,
+            }
+        }
+        _ => BackgroundSize::Auto,
+    }
+}
+
+/// 把单个 size 分量解析为 [`LengthOrPercent`]；`auto` 或不可解析返回 `None`。
+fn bg_size_len(tok: &Token) -> Option<LengthOrPercent> {
+    match tok {
+        Token::Dimension(n, u) if u.eq_ignore_ascii_case("px") => {
+            Some(LengthOrPercent::Px(n.value as f32))
+        }
+        Token::Percentage(p) => Some(LengthOrPercent::Percent(p.value as f32)),
+        _ => None,
+    }
+}
+
 /// 从 ComputedStyle 提取 font-size 的 px 值。
 ///
 /// cascade 已把 font-size 归一化为 px Dimension（`normalize_font_size`），
 /// 此处直接解析 `Token::Dimension(_, "px")`。无法解析时返回 `None`
 /// （调用方回退到继承的 font-size 或默认 16px）。
+///
+/// 审计 H-11：出口钳制，与 layout `style_map::clamp_length`（F-1）同语义
+/// ——NaN → 0、±inf/超界 → `±MAX_FONT_SIZE_PX`。cascade 只归一化关键字、
+/// 显式长度原样通过（tokenizer 对 `1e39px` 产出 inf），若不钳制则布局
+/// 测量（有钳制）与绘制字号分叉，inf 还会进入 cosmic-text 的缩放路径。
 pub fn resolve_font_size(style: &ComputedStyle) -> Option<f32> {
     let cv = style.get("font-size")?;
     for v in cv.tokens() {
         if let ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) = v {
             if unit.eq_ignore_ascii_case("px") {
-                return Some(numeric.value as f32);
+                return Some(clamp_font_size(numeric.value));
             }
         }
     }
     None
+}
+
+/// 长度上限（f32，与 layout `MAX_LENGTH_PX` = 2^25 一致）。
+pub const MAX_FONT_SIZE_PX: f32 = 33_554_432.0;
+
+/// F-1 同语义钳制：NaN → 0；±inf / 超界 → `±MAX_FONT_SIZE_PX`。
+fn clamp_font_size(v: f64) -> f32 {
+    let v = v as f32;
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(-MAX_FONT_SIZE_PX, MAX_FONT_SIZE_PX)
+    }
 }
 
 /// 从 ComputedStyle 提取 font-family（取首个字体族名，T-3）。
@@ -219,6 +447,60 @@ fn extract_side(
     })
 }
 
+/// 从 ComputedStyle 提取四角圆角（M-3 batch 5，Backgrounds L3 §5.1）。
+///
+/// 四个 `border-<corner>-radius` 长属性由 cascade 的 `border-radius` 简写
+/// 展开或长属性直接声明。每个属性值是 x 半径（及可选的 y 半径，来自 `/`
+/// 简写）的 token 序列：
+/// - px `Dimension` → 直接用；
+/// - `Percentage` → 首值（x）按盒**宽**折算、次值（y）按盒**高**折算（`width`
+///   /`height` 参数即调用方传入的盒子尺寸）；
+/// - 裸 `0` → 0；
+/// - 缺失 → 0，且 y 缺省时 = x（圆角）。
+///
+/// 只认 px 与百分比；其他单位（em 等）本次忽略（该分量视为缺失），并把半径
+/// 钳制在盒半宽/半高内（§5.1 的 corner 重叠时收敛为半圆）。
+pub fn extract_border_radius(style: &ComputedStyle, width: f32, height: f32) -> BorderRadius {
+    let corner = |prop: &str, box_w: f32, box_h: f32| {
+        let mut vals: Vec<f32> = Vec::with_capacity(2);
+        if let Some(cv) = style.get(prop) {
+            for t in cv.tokens() {
+                if vals.len() >= 2 {
+                    break;
+                }
+                match t {
+                    ComponentValue::PreservedToken(Token::Dimension(n, unit))
+                        if unit.eq_ignore_ascii_case("px") =>
+                    {
+                        vals.push(n.value as f32);
+                    }
+                    ComponentValue::PreservedToken(Token::Percentage(p)) => {
+                        // 首值（x）相对宽，次值（y）相对高。
+                        let basis = if vals.is_empty() { box_w } else { box_h };
+                        vals.push(basis * (p.value as f32) / 100.0);
+                    }
+                    ComponentValue::PreservedToken(Token::Number(n)) if n.value == 0.0 => {
+                        vals.push(0.0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let x = vals.first().copied().unwrap_or(0.0);
+        let y = vals.get(1).copied().unwrap_or(x);
+        Radius {
+            x: x.clamp(0.0, box_w / 2.0),
+            y: y.clamp(0.0, box_h / 2.0),
+        }
+    };
+    BorderRadius {
+        top_left: corner("border-top-left-radius", width, height),
+        top_right: corner("border-top-right-radius", width, height),
+        bottom_right: corner("border-bottom-right-radius", width, height),
+        bottom_left: corner("border-bottom-left-radius", width, height),
+    }
+}
+
 /// 从 ComputedStyle 提取轮廓（CSS UI Level 4 §4）。
 ///
 /// 轮廓不参与布局，绘制在 border box 之外（由 backend 展开到盒子外侧）。
@@ -305,4 +587,117 @@ fn parse_border_width(cv: &ComputedValue) -> Option<f32> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 构造 `font-size: <value>px` 的 ComputedStyle。
+    fn style_with_font_size_px(value: f64) -> ComputedStyle {
+        let mut cs = ComputedStyle::new();
+        cs.set(
+            "font-size",
+            ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Dimension(
+                muskitty_css::tokenizer::Numeric {
+                    value,
+                    is_integer: false,
+                    has_sign: false,
+                },
+                "px".to_string(),
+            ))]),
+        );
+        cs
+    }
+
+    #[test]
+    fn resolve_font_size_clamps_non_finite_and_huge_values() {
+        // 审计 H-11：`font-size: 1e39px`（tokenizer 产出 inf）此前原样进入
+        // 绘制（cosmic-text Metrics 的 scale_factor=inf），而 layout 测量侧
+        // 经 F-1 钳制——两侧字号分叉。现与 layout clamp_length 同语义。
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(f64::INFINITY)),
+            Some(MAX_FONT_SIZE_PX)
+        );
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(f64::NEG_INFINITY)),
+            Some(-MAX_FONT_SIZE_PX)
+        );
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(f64::NAN)),
+            Some(0.0)
+        );
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(1e300)),
+            Some(MAX_FONT_SIZE_PX)
+        );
+        // 正常值不受影响。
+        assert_eq!(
+            resolve_font_size(&style_with_font_size_px(16.0)),
+            Some(16.0)
+        );
+
+    use muskitty_css::tokenizer::Numeric;
+
+    /// 构造一个含单个 `opacity` Number token 的 computed value。
+    fn opacity_style(op: f64) -> ComputedStyle {
+        let mut s = ComputedStyle::new();
+        s.set(
+            "opacity",
+            ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Number(
+                Numeric::new(op, false),
+            ))]),
+        );
+        s
+    }
+
+    #[test]
+    fn resolve_opacity_parses_number_and_clamps() {
+        // 0.5 → 0.5（值域内直接透传）。
+        assert_eq!(resolve_opacity(&opacity_style(0.5)), 0.5);
+        // 0 → 0（整棵子树不可见）。
+        assert_eq!(resolve_opacity(&opacity_style(0.0)), 0.0);
+        // 1 → 1（不透明，等效无操作）。
+        assert_eq!(resolve_opacity(&opacity_style(1.0)), 1.0);
+        // 超范围 clamp 到 [0,1]。
+        assert_eq!(resolve_opacity(&opacity_style(1.7)), 1.0);
+        assert_eq!(resolve_opacity(&opacity_style(-0.3)), 0.0);
+    }
+
+    #[test]
+    fn resolve_opacity_missing_or_illegal_falls_back_to_1() {
+        // 缺失 `opacity` 键 → 1.0。
+        assert_eq!(resolve_opacity(&ComputedStyle::new()), 1.0);
+        // 非法值（非 Number token，如关键字）→ 1.0。
+        let mut s = ComputedStyle::new();
+        s.set("opacity", ComputedValue::from_keyword("hidden"));
+        assert_eq!(resolve_opacity(&s), 1.0);
+    }
+
+    #[test]
+    fn is_visibility_hidden_matches_only_hidden_keyword() {
+        let hidden = {
+            let mut s = ComputedStyle::new();
+            s.set("visibility", ComputedValue::from_keyword("hidden"));
+            s
+        };
+        assert!(is_visibility_hidden(&hidden), "hidden → true");
+
+        let visible = {
+            let mut s = ComputedStyle::new();
+            s.set("visibility", ComputedValue::from_keyword("visible"));
+            s
+        };
+        assert!(!is_visibility_hidden(&visible), "visible → false");
+
+        let collapse = {
+            let mut s = ComputedStyle::new();
+            s.set("visibility", ComputedValue::from_keyword("collapse"));
+            s
+        };
+        assert!(!is_visibility_hidden(&collapse), "collapse → false");
+
+        // 缺失键 → false（继承语义由 paint 侧参数传递处理）。
+        assert!(!is_visibility_hidden(&ComputedStyle::new()));
+    }
 }
