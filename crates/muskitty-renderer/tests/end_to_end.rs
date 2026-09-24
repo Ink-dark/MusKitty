@@ -1455,3 +1455,66 @@ fn end_to_end_background_size_contain_fits_whole_image() {
         "contain 下方留白"
     );
 }
+
+#[test]
+fn end_to_end_visibility_hidden_skips_self_outline() {
+    // CSS Visibility L3 §1：`visibility: hidden` 元素自身（含其 outline）
+    // 不可见，但仍占布局。此前 outline 生成块未受 visibility 守卫 → 隐藏元素
+    // 仍描出 outline。margin:10px 让 border box 落在 (10,10)-(50,30)，
+    // 3px outline 四边全在画布内可见（参照 end_to_end_outline_drawn_outside_box）。
+    let (width, data) = render_with_images(
+        r#"<div style="margin: 10px; width: 40px; height: 20px; background-color: rgb(255, 0, 0); outline: 3px solid rgb(0, 128, 0); visibility: hidden"></div>"#,
+        &HashMap::new(),
+        80,
+        60,
+    );
+    // 隐藏自盒无墨迹（背景被跳过）。
+    assert_eq!(
+        pixel_at(&data, width, 30, 20),
+        (255, 255, 255, 255),
+        "hidden 自盒无墨迹"
+    );
+    // outline 四边均不得出现（此前 bug：仍描出）。
+    assert_eq!(
+        pixel_at(&data, width, 30, 8),
+        (255, 255, 255, 255),
+        "hidden 元素 outline top 不得出现"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 8, 20),
+        (255, 255, 255, 255),
+        "hidden 元素 outline left 不得出现"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 52, 20),
+        (255, 255, 255, 255),
+        "hidden 元素 outline right 不得出现"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 32),
+        (255, 255, 255, 255),
+        "hidden 元素 outline bottom 不得出现"
+    );
+}
+
+#[test]
+fn end_to_end_visible_outline_still_painted() {
+    // 对照：无 hidden 时 outline 应正常出现在盒外四边。
+    let (width, data) = render_with_images(
+        r#"<div style="margin: 10px; width: 40px; height: 20px; background-color: rgb(255, 0, 0); outline: 3px solid rgb(0, 128, 0)"></div>"#,
+        &HashMap::new(),
+        80,
+        60,
+    );
+    assert_eq!(
+        pixel_at(&data, width, 30, 8),
+        (0, 128, 0, 255),
+        "可见 outline top 正常绘制"
+    );
+    assert_eq!(
+        pixel_at(&data, width, 52, 20),
+        (0, 128, 0, 255),
+        "可见 outline right 正常绘制"
+    );
+    assert_eq!(pixel_at(&data, width, 30, 20), (255, 0, 0, 255), "自盒填充");
+}
