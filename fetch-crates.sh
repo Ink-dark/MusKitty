@@ -72,8 +72,10 @@ fi
 json_array() {
     local key="$1" out=""
     if command -v python3 >/dev/null 2>&1; then
+        # `tr -d '\r'`：Windows 的 python3 写管道时把 \n 转成 \r\n，残留的 CR
+        # 会让下游的名称白名单校验（以及 URL 拼接）全部失败。
         out="$(python3 -c "import json,sys; print('\n'.join(json.load(sys.stdin)[sys.argv[1]]))" \
-            "$key" < "$CONFIG_FILE" 2>/dev/null || true)"
+            "$key" < "$CONFIG_FILE" 2>/dev/null | tr -d '\r' || true)"
     fi
     if [[ -z "$out" ]]; then
         out="$(awk -v key="\"$key\"" '
