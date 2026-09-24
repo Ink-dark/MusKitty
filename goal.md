@@ -1,9 +1,59 @@
-# Goal — 2026-09-19 全量审计修复轮（bug / critical issues）
+# Goal — 2026-09-24 接线与收口轮（接线 cascade + 消除文档失真）
 
 > **状态**：🔄 进行中
-> **依据**：2026-09-19 全量代码分析（拉取 11 个独立 crate 后 4 组并行深度审查 +
-> 人工复核），问题清单见下表。按严重度排序修复，每项走 Verification Flow
-> （先写 failing test → 修 → 全绿 → commit），全部完成后统一 push。
+> **依据**：[docs/audit-2026-09-24-full-scan.md](docs/audit-2026-09-24-full-scan.md)
+> （14 crate 全量审查 + 实测基线 + 进度/规划对照）。
+> **为什么不是继续修上一轮的 26 项存量 bug**：本轮开工时发现三件更靠前的事实——
+> ① HEAD 不可编译；② `fetch-crates.sh` 在 Windows 上拉取 0 个 crate；③ 上一轮被记为
+> "已完成"的 CSS 补全第一批（border-radius + background-repeat/position/size）在 cascade
+> 侧**根本不存在**（所引 commit `58efc45`/`fea6b84`/`7d86720` 在 cascade 仓库中查无此对象，
+> HEAD 停在 `5882097`），renderer 侧的三条特成因缺注册而全是死代码，**2 个 e2e 正在红**。
+> 先接线、先收口，再谈存量修缮。
+
+## P0（已修）
+
+| # | 问题 | 位置 | 退出条件 | 状态 |
+|---|---|---|---|---|
+| A-0a | tests 模块缺收尾 `}` → workspace 无法编译 | `renderer/src/render_tree.rs:614` | `cargo check/test/clippy/fmt` 全通过 | ✅ |
+| A-0b | python3 管道 CR 残留 → 名称校验拒第一个 crate → 拉取 0 个 | `fetch-crates.sh:75` | Windows 上成功拉取 11 个仓库 | ✅ |
+
+## 本轮任务与退出条件
+
+| # | 任务 | 退出条件 |
+|---|------|---------|
+| B-1 | **cascade 补注册与展开**：`border-radius` 简写（1–4 值，含 x/y）+ 四角长属性；`background-repeat`/`background-position`/`background-size` + `background` 简写展开三分量 | registry 命中；renderer `extract_border_radius` / 三个 background 提取函数读到真实声明；cascade 单测覆盖简写 1–4 值、百分比、非法值整条丢弃 |
+| B-2 | **修 `background-position` 百分比语义**（应为 `(盒 − 图) × p%`，CSS Backgrounds L3 §3.6） | `100% 100%` 图像贴右下角而非被推出盒外；`center` 在大图上（非 1×1）居中可测 |
+| B-3 | **端点验证**：两个红测转绿 + 补 `border-radius` 的 HTML 级像素用例（此前零覆盖）+ `size: cover` 用例改用非 1×1 图 | `end_to_end_background_no_repeat_paints_single_tile`、`end_to_end_background_position_center_centers_single_tile` 由 FAILED → ok；新增圆角像素断言（角外无墨迹、中心有填充、无 radius 与旧矩形一致） |
+| B-4 | **一致性闸门**：新增测试扫描 layout/renderer 中 `style.get("<prop>")` 字面量 ⊆ `BUILTIN_PROPERTIES` | 该测试能捕获本轮全部 5 项缺失；缺失时测试失败而非静默回退初始值 |
+| B-5 | **文档收口**：`PROGRESS.md` / `goal.md` / `css-completion.md` 三处把上述三项从 ✅ 改为"进行中（cascade 侧重做）"，并注明 cascade commit 丢失的实据 | 三处口径一致，不再引用仓库里不存在的 commit |
+| B-6 | **network 代理策略**：显式 `no_proxy` + loopback bypass（`127.0.0.1`/`localhost`/`::1`） | `spawn_http_navigation_refused_returns_failed_outcome` 与 network 2 项不再依赖宿主 `HTTP_PROXY` 环境变量，红转绿 |
+| B-7 | （余力）`visibility: hidden` 应跳过 outline（当前仍绘制） | e2e：`hidden` + `outline` 无墨迹 |
+
+## 显式非目标（本轮不做）
+
+- 上一轮遗留的 26 项存量修复（H-1~H-8、M-1~M-17 等）：分散在 6 个独立仓库，整批排下一轮。
+- 其他"已注册但零消费方"的属性（`letter-spacing`/`font-style`/`text-indent`/`cursor`/`grid-auto-*`/`order`/`z-index` 等）：保持 registry 存在（CSSOM `getComputedStyle` 语义需要），不在本轮接线。
+- `outline-offset`、`box-shadow`/`text-shadow`、渐变绘制：`outline-offset` 已诚实标注"尚未注册"，本轮不救。
+- 层叠上下文 / `z-index` 排序架构变更。
+
+## 验收纪律（本轮新增约定）
+
+跨 crate 的功能，**退出条件必须是 `registry 命中 + 端到端像素/值断言`**；
+不接受"renderer 单测手工构造 `ComputedStyle` 通过"当作完成——这正是本次失真的成因
+（renderer 单测绿，而整条 HTML→cascade→paint 链路是死的）。
+
+## 复跑命令
+
+```bash
+cd crates/muskitty-cascade && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --all -- --check
+cd /workspace && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check
+```
+
+---
+
+# Goal — 2026-09-19 全量审计修复轮（bug / critical issues）
+
+> **状态**：⏸ 暂停（26 项遗留，绝大部分未修；排在本轮之后）
 
 ## 任务与退出条件
 
