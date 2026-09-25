@@ -1,5 +1,5 @@
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.04s
-[1m[92m     Running[0m tests/html5lib_tokenizer.rs (target/debug/deps/html5lib_tokenizer-6c1cd3933ec58808)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+[1m[92m     Running[0m tests\html5lib_tokenizer.rs (target\debug\deps\html5lib_tokenizer-757a5d7991d53393.exe)
 
 running 1 test
 
@@ -143,5 +143,5 @@ running 1 test
 PASS RATE: 99.8% (7022/7036) — harness ran to completion; not asserting a hard threshold yet.
 test html5lib_tokenizer_suite ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
 

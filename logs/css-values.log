@@ -1,9 +1,5 @@
-[1m[92m   Compiling[0m muskitty-css-tokenizer v0.2.1 (/workspace/crates/muskitty-css-tokenizer)
-[1m[92m   Compiling[0m muskitty-css-parser v0.3.1 (/workspace/crates/muskitty-css-parser)
-[1m[92m   Compiling[0m muskitty-css v0.6.0 (/workspace/crates/muskitty-css)
-[1m[92m   Compiling[0m muskitty-css-values v0.1.1 (/workspace/crates/muskitty-css-values)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1.12s
-[1m[92m     Running[0m tests/wpt_css_syntax.rs (target/debug/deps/wpt_css_syntax-babafc3420d0c583)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+[1m[92m     Running[0m tests\wpt_css_syntax.rs (target\debug\deps\wpt_css_syntax-7c9714a602c8bc98.exe)
 
 running 2 tests
 test wpt_inclusive_integer_ranges ... ok

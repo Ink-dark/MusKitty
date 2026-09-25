@@ -1,6 +1,6 @@
-[1m[92m   Compiling[0m muskitty-html5-parser v0.2.1 (/workspace/crates/muskitty-html5-parser)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.95s
-[1m[92m     Running[0m tests/html5lib_tree_construction.rs (target/debug/deps/html5lib_tree_construction-f4def951867b1bac)
+[1m[92m   Compiling[0m muskitty-html5-parser v0.2.2 (D:\MusKitty\crates\muskitty-html5-parser)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 4.59s
+[1m[92m     Running[0m tests\html5lib_tree_construction.rs (target\debug\deps\html5lib_tree_construction-150cea7da32e12f9.exe)
 
 running 1 test
 
@@ -66,50 +66,32 @@ running 1 test
  tests7.dat                                 34        0        0       34
  tests8.dat                                 10        0        0       10
  tests9.dat                                 27        0        0       27
- tests_innerHTML_1.dat                      79        2        0       81
+ tests_innerHTML_1.dat                      80        1        0       81
  tricky01.dat                                9        0        0        9
  void-in-phrasing.dat                       13        0        0       13
  webkit01.dat                               52        0        0       52
- webkit02.dat                               47        1        1       49
+ webkit02.dat                               48        0        1       49
  ─────────────────────────────────────────────────────────────────
- TOTAL                                    1921        3       14     1938   (pass rate of non-skipped: 99.8%)
+ TOTAL                                    1923        1       14     1938   (pass rate of non-skipped: 99.9%)
 
 ── failure samples (up to 3 per file) ──
 
-[tests_innerHTML_1.dat #77] input: <keygen><option>
+[tests_innerHTML_1.dat #76] input: <input><option>
   diff:
-      input:    "<keygen><option>"
-      expected:
-        | <keygen>
-        | <option>
-      actual:
-        | <option>
-
-[tests_innerHTML_1.dat #78] input: <textarea><option>
-  diff:
-      input:    "<textarea><option>"
-      expected:
-        | <textarea>
-        |   "<option>"
-      actual:
-        | <option>
-
-[webkit02.dat #19] input: <option><XH<optgroup></optgroup>
-  diff:
-      input:    "<option><XH<optgroup></optgroup>"
+      input:    "<input><option>"
       expected:
         | <option>
-        |   <xh<optgroup>
       actual:
+        | <input>
         | <option>
 
 ── skip reasons ──
       14  script-on (scripting flag not implemented)
 ═══════════════════════════════════════════════════════════════
 
-Gap report written to /workspace/crates/muskitty-html5-parser/tests/tree_construction_gap_report.md
-PASS RATE: 99.8% (1921/1924) — 14 skipped — harness ran to completion; not asserting a hard threshold yet.
+Gap report written to d:\MusKitty\crates\muskitty-html5-parser\tests\tree_construction_gap_report.md
+PASS RATE: 99.9% (1923/1924) — 14 skipped — harness ran to completion; not asserting a hard threshold yet.
 test html5lib_tree_construction_suite ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
 

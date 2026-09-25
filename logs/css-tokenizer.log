@@ -1,5 +1,5 @@
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.04s
-[1m[92m     Running[0m tests/wpt_css_syntax.rs (target/debug/deps/wpt_css_syntax-e104bcb14c15a41f)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+[1m[92m     Running[0m tests\wpt_css_syntax.rs (target\debug\deps\wpt_css_syntax-ee4d9d4d9a0cee42.exe)
 
 running 1 test
 

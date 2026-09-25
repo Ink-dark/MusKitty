@@ -1,6 +1,5 @@
-[1m[92m   Compiling[0m muskitty-selectors v0.2.1 (/workspace/crates/muskitty-selectors)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.61s
-[1m[92m     Running[0m tests/wpt_parsing.rs (target/debug/deps/wpt_parsing-da3f98a0a4b6998a)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+[1m[92m     Running[0m tests\wpt_parsing.rs (target\debug\deps\wpt_parsing-b85fd29823e0a2ce.exe)
 
 running 1 test
 
@@ -46,5 +45,5 @@ running 1 test
 PASS RATE: 99.8% (507/508) — informational for non-guarded fixtures; HARD_ASSERT_100 fixtures are hard-asserted.
 test wpt_selector_parsing_suite ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
 

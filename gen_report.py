@@ -10,8 +10,9 @@ import datetime
 import json
 import os
 
-LOGS_DIR = "/workspace/.wpt-report/logs"
-OUT_DIR = "/workspace/.wpt-report/report"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+LOGS_DIR = os.path.join(_HERE, "logs")
+OUT_DIR = os.path.join(_HERE, "report")
 
 # Suite definitions: (key, wpt suite label, crate, harness description)
 SUITES = [
@@ -68,7 +69,7 @@ def extract_failures(path):
         lines = fh.readlines()
     start = None
     for i, ln in enumerate(lines):
-        if re.search(r"failures", ln, re.I) and ln.strip().startswith("──"):
+        if re.search(r"failures?", ln, re.I) and ln.strip().startswith("──"):
             start = i + 1
             break
     if start is None:
