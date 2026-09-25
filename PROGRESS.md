@@ -47,7 +47,8 @@
 > 即上下文元素）改用 `adjusted_current_node()`。先写 failing 单测 3 条（`<g>` 入 SVG、`<font>`
 > 无 breakout 属性留 SVG、`<font color>` 转 HTML 作对照），确认红后再改。`foreign-fragment.dat`
 > **48/66 → 66/66**，套件 **1905/1924 → 1923/1924 = 99.9%**，仅余 `tests_innerHTML_1.dat` #76
-> （规范>夹具保留偏差）。该 crate 全量 40 lib 单测全绿，`clippy -D warnings` / `fmt --check` 干净。
+> （规范>夹具保留偏差）**（⚠️ 2026-09-26 勘误：该例并非保留偏差，而是本侧漏了 §13.2.6.4.7 的
+> `select` fragment 分支，已在本文件顶部①②轮补齐并转 pass，套件 1924/1924）**。该 crate 全量 40 lib 单测全绿，`clippy -D warnings` / `fmt --check` 干净。
 >
 > **③ 报告重生成并重发**——`.wpt-report/gen_report.py` 的 logs/输出路径改为**脚本相对**（原硬编码
 > `/workspace/...`，在 Windows 上根本跑不起来，正是上次数字失真的温床），并修掉失败明细块正则只
@@ -187,7 +188,7 @@
 
 - **Events**（DOM §4.4/4.5/4.6）→ muskitty-dom `src/event.rs`：`add/remove_event_listener` + `dispatch_event`（捕获/目标/冒泡三阶段，`Event` 状态机，零依赖纯 leaf）。
 - **element.style**（CSSOM §4）→ muskitty-cssom `src/element_style.rs`：扩展 trait（dom 为 source of truth，parse→mutate→serialize→写回 attribute，无缓存对象）。
-- **innerHTML/outerHTML**（HTML §13.4.2 / §13.6.4-5）→ muskitty-html5-parser `src/serialize.rs` + `parse_fragment`：fragment parsing（context 重建、reset 替换、tokenizer 初态、unwrap）+ 序列化（Normal/RawText/EscapableRawText 转义、void、template content）；harness 解锁 document-fragment 用例，WPT 99.0% (1889/1908)，12 script-on 跳过。已知遗留：18 个 foreign-context fragment + tests_innerHTML_1 #76（select-context，WPT 夹具早于 2016 reset 删除 select 分支，现行 WHATWG reset 无 select 分支 → InBody 按规范插入 input）。
+- **innerHTML/outerHTML**（HTML §13.4.2 / §13.6.4-5）→ muskitty-html5-parser `src/serialize.rs` + `parse_fragment`：fragment parsing（context 重建、reset 替换、tokenizer 初态、unwrap）+ 序列化（Normal/RawText/EscapableRawText 转义、void、template content）；harness 解锁 document-fragment 用例，WPT 99.0% (1889/1908)，12 script-on 跳过。已知遗留：18 个 foreign-context fragment + tests_innerHTML_1 #76（select-context，WPT 夹具早于 2016 reset 删除 select 分支，现行 WHATWG reset 无 select 分支 → InBody 按规范插入 input）。**（⚠️ 2026-09-26 勘误：此处结论与条款均错——现行 §13.2.6.4.7 的 `input` start tag 在 `fragment_context` 为 HTML 命名空间 `select` 时应 parse error 并忽略 token；该 fragment 分支已于 2026-09-25 补齐，#76 转 pass，见本文件顶部①②。）**
 
 三个子任务各自独立 commit + push（dom/cssom/html5-parser 独立仓库）。
 

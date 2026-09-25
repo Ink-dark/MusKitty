@@ -285,6 +285,15 @@ cd /workspace && cargo fmt --all -- --check
   （#77 `<keygen><option>`、#78 `<textarea><option>` 与 `webkit02.dat` #19 `xh<optgroup`
   于 2026-09-25 复跑时已通过，不再是保留偏差。）
 
+> ⚠️ **勘误（2026-09-26）**：上一段所引的规范条款号有误——现行 WHATWG 文本中
+> **"in select" 插入模式已被删除**（`reset_insertion_mode` 亦无 select 分支），
+> 该行为改由 **§13.2.6.4.7 "in body" 的 `input` start tag** 承载：当
+> `fragment_context` 是 HTML 命名空间的 `select` 时 parse error、忽略 token 并返回。
+> 因此 #76 不是"保留偏差"，而是本侧实现漏了 fragment 分支；已在 2026-09-25
+> （parser 0.2.2 → 0.2.3）按该条款补齐并转为 **pass**，tree-construction 套件
+> **1924/1924 = 100.0%**，parser 侧保留偏差清零。详见本文件顶部的本轮记录与
+> [PROGRESS.md](PROGRESS.md) crate 表。
+
 ## 部署
 
 - 报告重新生成：`.wpt-report/report/index.html`；部署目录 `.wpt-report/deploy/` 同步。
