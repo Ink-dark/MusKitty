@@ -1251,7 +1251,7 @@ version = "0.2.1"
 
 [[package]]
 name = "muskitty-html5-parser"
-version = "0.2.1"
+version = "0.2.3"
 dependencies = [
  "muskitty-dom",
  "muskitty-html5-tokenizer",
