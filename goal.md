@@ -242,6 +242,12 @@ cd /workspace && cargo fmt --all -- --check
 > **状态**：✅ 已完成（W-3b + html5-parser 补齐，报告已重生成并重发布）。
 > **实测（重跑基线各 crate harness）**：整体 **9592/9610 = 99.83%**。
 >
+> ⚠️ **现值勘误（2026-09-26）**：下表为本轮历史快照，数字已被后续两轮取代。现行口径见
+> [PROGRESS.md](PROGRESS.md) crate 表与 `.wpt-report/report/index.html`：html5-tokenizer
+> **7051/7051 = 100.0%**（PI 态测试补齐）、html5-parser **1924/1924 = 100.0%**（§13.2.6.4.7
+> input fragment+select 早退），整体 **9624/9625 = 99.99%**（1 例 css-selectors 保留偏差、
+> 14 例 `#script-on` 跳过）。
+>
 > ⚠️ **勘误（2026-09-25 复跑 + 修复）**：上行的 99.83% 及本表 `muskitty-html5-parser`
 > 的 1921/1924 当时**不可复现**。2026-09-25 在检出（本地 `crates/muskitty-html5-parser`
 > 与远端 `muskitty-dev/muskitty-html5-parser` main 同为 `ba065b8` / tag `v0.2.1`）

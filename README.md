@@ -11,8 +11,8 @@ is the workspace coordinator and project-level documentation hub.
 
 | Crate | Spec coverage | crates.io | Repo |
 |-------|---------------|-----------|------|
-| `muskitty-html5-tokenizer` | WHATWG HTML §13.2.5.1–§13.2.5.80 (80/80 states) | v0.1.4 | [muskitty-dev/muskitty-html5-tokenizer](https://github.com/muskitty-dev/muskitty-html5-tokenizer) |
-| `muskitty-html5-parser` | WHATWG HTML §13.2.6 (all insertion modes + AAA / foster parenting / foreign content) | v0.2.1 | [muskitty-dev/muskitty-html5-parser](https://github.com/muskitty-dev/muskitty-html5-parser) |
+| `muskitty-html5-tokenizer` | WHATWG HTML §13.2.5.1–§13.2.5.85 (85/85 states) | v0.1.4 | [muskitty-dev/muskitty-html5-tokenizer](https://github.com/muskitty-dev/muskitty-html5-tokenizer) |
+| `muskitty-html5-parser` | WHATWG HTML §13.2.6 (all insertion modes + AAA / foster parenting / foreign content) | v0.2.3 | [muskitty-dev/muskitty-html5-parser](https://github.com/muskitty-dev/muskitty-html5-parser) |
 | `muskitty-dom` | DOM Living Standard §4–§7 (incl. Events) | v0.2.1 | [muskitty-dev/muskitty-dom](https://github.com/muskitty-dev/muskitty-dom) |
 | `muskitty-css-tokenizer` | CSS Syntax §4.3.1–§4.3.13 (+ span tracking, `Numeric::has_sign` in 0.3.0) | v0.2.1 | [muskitty-dev/muskitty-css-tokenizer](https://github.com/muskitty-dev/muskitty-css-tokenizer) |
 | `muskitty-css-parser` | CSS Syntax §5.2–§5.5 + §5.4.1/§5.4.2 grammar hooks | v0.3.1 | [muskitty-dev/muskitty-css-parser](https://github.com/muskitty-dev/muskitty-css-parser) |
