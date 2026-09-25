@@ -1,6 +1,37 @@
 # MusKitty — Progress Dashboard
 
-> 最后更新: 2026-09-25 | **全工作空间 WPT 复跑 + H-3 修复 + 报告重发**
+> 最后更新: 2026-09-25 | **规范向测试补全轮（规范已有、夹具陈旧）**
+>
+> 请求：给"现行 WHATWG 规范已有normative文本、但 WPT/html5lib 夹具仍是老口径"的部分补规范向
+> 测试，**不联网**、只用本地 `docs/spec/` 规范文本，且**不为迁就夹具改动实现**。
+>
+> **① html5lib tokenizer 套件 7022/7036 → 7051/7051 = 100.0%**——`<?…` 处理指令此前在 harness
+> 里走的是一个**静默丢弃** PI token 的转换分支，而旧夹具把 `<?` 一律期望成 `Comment`
+> （`unexpected-question-mark-instead-of-tag-name`，是 tokenizer 尚未有 PI 状态时的历史口径）。
+> 落地：新增 `tests/data/tokenizer/processing-instruction.test`，29 例覆盖 §13.2.5.72–76 五态
+> （PI open/target/after-target/data/questionable）——含歧义目标 `xml`/`xml-stylesheet` 按规范
+> 降级为 bogus comment、各态 EOF 报错且不发 token、非法首目标字符、可选尾 `?`；harness 的 PI
+> 分支改为断言 `["ProcessingInstruction", target, data]`。与现行规范冲突的 14 例（test2 ×2、
+> test3 ×9、test4/6/7/8 `xmlViolationTests`）登记进 `STALE_FIXTURES`，每例附规范引用说明为何
+> 陈旧，**显式列名并排除出失败**——延续"规范 > 夹具"的口径，而非把红数藏起来。
+>
+> **② html5lib tree-construction 套件 1923/1924 → 1924/1924 = 100.0%**——`tests_innerHTML_1.dat`
+> #76（`<input><option>`，fragment 上下文 `select`）的根因是 InBody `input` 起标签**只查了
+> "select 在栈上"**，而 §13.4.2 的 fragment 解析只压入合成的 `<html>` 根，**上下文元素根本不在
+> 开放元素栈上**，该检查永远不触发。按 §13.2.6.4.7 补上 fragment-case 早退（直读
+> `fragment_context`：是 HTML 命名空间 `select` → parse error、忽略 token、返回），并补 4 条规范
+> 引用单测（select fragment 忽略 / `type=hidden` 不改变结果 / div fragment 正常插入 / select 在
+> 栈上的 pop 路径）。顺带把 tree-construction harness 从"只断言 `total > 0`"收紧为
+> **`total_fail == 0` 硬门禁**，与 tokenizer 一致：失败即红，不再静默通过。
+>
+> **③ 口径**——本项目"规范 > 夹具"的保留偏差现在**全部显式登记**（tokenizer 14 例 + parser 0 例；
+> parser 侧 14 例跳过均为 `#script-on` 未实现，非偏差），各自带规范条款引用，可审计、可复现。
+> 两 crate `clippy --all-targets -- -D warnings` 与 `fmt --all -- --check` 干净；主仓库
+> `cargo check --workspace` 干净。commit：tokenizer `4efb610`、parser `fb3bde9`（0.2.2 → 0.2.3）、
+> 主仓库 `922c5fe`。
+>
+
+> 上一轮: 2026-09-25 | **全工作空间 WPT 复跑 + H-3 修复 + 报告重发**
 >
 > **① 复跑暴露发布页数据失真**——重跑 6 个 harness（html5-parser / html5-tokenizer / selectors /
 > css-tokenizer / css-parser / css-values），实测整体 **9576/9610 = 99.65%**，而线上发布页写着
@@ -76,8 +107,8 @@
 
 | 模块 | 状态 | 规范覆盖 | 测试通过率 | crates.io | 独立仓库 |
 |------|------|---------|-----------|-----------|---------|
-| **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | v0.1.4 | muskitty-dev/muskitty-html5-tokenizer |
-| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) + §13.2.4 adjusted current node（foreign fragment 命名空间，H-3） | WPT tree-construction **99.9% (1923/1924**, 14 script-on skipped) | v0.2.2 | muskitty-dev/muskitty-html5-parser |
+| **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80)，含 §13.2.5.72–76 处理指令五态 | **100.0% (7051/7051**，14 例陈旧夹具显式登记并排除) | v0.1.4 | muskitty-dev/muskitty-html5-tokenizer |
+| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) + §13.2.4 adjusted current node（foreign fragment 命名空间，H-3）+ §13.2.6.4.7 input fragment+select 早退 | WPT tree-construction **100.0% (1924/1924**, 14 script-on skipped；`total_fail == 0` 硬门禁) | v0.2.3 | muskitty-dev/muskitty-html5-parser |
 | **muskitty-dom** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | v0.2.1 | muskitty-dev/muskitty-dom |
 | **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking + `Numeric::has_sign`（§4.3.13 第 7 步的 sign，供 An+B 区分 signed/signless） | 单元全绿 + WPT css/css-syntax tokenizer 层 100% (99/99) | v0.2.1 已发布（含 `--`/`--0` ident 修复）/ 本地 0.3.0 待发布（has_sign，破坏性） | muskitty-dev/muskitty-css-tokenizer |
 | **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 单元全绿 + WPT css/css-syntax parser 层 100% (27/27) | v0.3.1 | muskitty-dev/muskitty-css-parser |
@@ -92,7 +123,14 @@
 | DOM 完整 API (Events/Style/innerHTML) | ✅ 完成 (2026-08-09) | Events → dom `event.rs` · element.style → cssom `element_style.rs` · innerHTML/outerHTML → html5-parser `serialize.rs`+`parse_fragment` | dom/cssom 全绿 + html5-parser WPT 99.0% (1889/1908) | — | — |
 | **muskitty-network** | 🚧 Phase 5 接驳 | NetworkFetcher trait 抽象 + reqwest 后端 + `fetch_blocking` 同步入口 + `url` 模块（WHATWG URL 解析/相对化/file↔路径/子资源 scheme 策略/data: 解码）；chrome 地址栏导航 + 子资源（样式表）抓取已接驳（远期自研 HTTP/1.1+2+3 栈，见 [plan](docs/plans/2026-08-09-phase5-network.md)） | 12 + 10 + 4 doc-tests 全绿 (wiremock 离线)；chrome navigation/stylesheets 离线 e2e 全绿 | 本地 v0.1.0 (未发布) | 主仓库内 (未剥离) |
 
-**14 个 html5lib tokenizer 失败说明**：3 个 xmlViolation（infoset 强制转换，规范范围外）+ 11 个 `<?...>` PI 边界（test2/test3，html5lib 测试套件过时，期望 `Comment` 但现行 WHATWG §13.2.5.72-76 规定产生 `ProcessingInstruction`）。代码遵循现行 WHATWG 规范，测试套件过时。对浏览器级应用无影响（真实网页几乎不会触发这些边界）。
+**14 例 html5lib tokenizer 陈旧夹具说明**（2026-09-25 起口径）：
+- 11 例来自 test2/test3 的 `<?...>` PI 边界：夹具期望 `Comment` + `unexpected-question-mark-instead-of-tag-name`，
+  那是 tokenizer 尚无处理指令状态时的历史口径；现行 WHATWG §13.2.5.72–76 规定产生 `ProcessingInstruction`
+  节点，且 EOF 在各状态报 `eof-in-processing-instruction` 而**不发 token**。
+- 本 crate 已新增 29 例规范向夹具（`processing-instruction.test`）全覆盖该五态；冲突的 14 例在 harness 的
+  `STALE_FIXTURES` 中**显式列名 + 附规范引用**，以"跳过并说明"处理，不计入失败（规范 > 夹具）。
+- 另 3 例来自 `xmlViolationTests`（infoset 强制转换）：属 XML 解析器侧要求，HTML 解析器不承担，同样登记为跳过。
+- 因此在 100.0% (7051/7051) 之外另有 14 例被排除，均可在 harness 输出的 "known stale fixtures" 段逐条审阅。
 
 ## Phase 1 (HTML 解析层) — 已收尾
 

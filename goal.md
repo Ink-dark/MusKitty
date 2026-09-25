@@ -1,3 +1,52 @@
+# Goal — 2026-09-25 规范向测试补全轮（规范已有、夹具陈旧）
+
+> **状态**：✅ 已完成（T-1/T-2/T-3 全部落地，退出条件逐一满足；详见下方完成记录）
+> **请求**：给"规范已有但 WPT 夹具仍旧"的部分补全规范向测试（符合 WHATWG 期望，不迁就夹具），
+> **不联网**，只用本地 `docs/spec/` 下的规范文本。
+> **判据来源**：`docs/spec/WHATWG/html/15-13the-html-syntax.md`
+> （§13.2.5.72–76 处理指令五态；§13.2.6.4.7 input start tag 的 fragment+select 分支）。
+
+## P0（已修）
+
+| # | 问题 | 位置 | 退出条件 | 状态 |
+|---|---|---|---|---|
+| T-1 | PI token 被 harness 静默丢弃；旧夹具把 `<?…` 期望成 `Comment` | `html5-tokenizer/tests/html5lib_tokenizer.rs` | PI token 显式断言；陈旧夹具入 `STALE_FIXTURES` 并附规范引用；非陈旧用例硬门禁 | ✅ |
+| T-2 | `<input>` 起标签缺 fragment-case + `select` 上下文早退 | `html5-parser/src/parser/dispatch.rs` `handle_in_body_start_tag` | 上下文元素不在开放元素栈上，故须直读 `fragment_context`；`tests_innerHTML_1.dat` #76 由 FAILED → pass | ✅ |
+| T-3 | tree-construction harness 只断言 `total > 0`，失败不阻断 | `html5-parser/tests/html5lib_tree_construction.rs` | 收紧为 `total_fail == 0` 硬门禁，与 tokenizer 口径一致 | ✅ |
+
+## 完成记录（2026-09-25 轮）
+
+| # | 落点 | 提交 |
+|---|------|------|
+| T-1 | 新增 `tests/data/tokenizer/processing-instruction.test`（29 例，覆盖 §13.2.5.72–76 五态：歧义目标 `xml`/`xml-stylesheet` 降级为 bogus comment、各态 EOF、非法首字符、可选尾 `?`）；harness 的 PI 分支由静默丢弃改为断言 `["ProcessingInstruction", target, data]` | tokenizer 仓库 `4efb610` |
+| T-2 | `input` 起标签按 §13.2.6.4.7 增加 fragment-case + `select` 上下文早退；补 4 条规范引用单测（select fragment 忽略 / `type=hidden` 不改变结果 / div fragment 正常插入 / select 在栈上的 pop 路径） | parser 仓库 `fb3bde9`（0.2.2 → 0.2.3） |
+| T-3 | tree-construction harness 软断言 → `total_fail == 0` 硬门禁；gap report 同步 | parser 仓库 `fb3bde9` |
+| — | `Cargo.lock` 随版本号同步 | 主仓库 `922c5fe` |
+
+**退出条件核验**：
+- tokenizer：`cargo test` 全绿（149 lib + 1 suite）；html5lib 套件 **7051/7051 = 100.0%**，
+  14 例陈旧夹具已显式列名并附规范引用（规范 > 夹具），不再计入失败。
+- parser：`cargo test` 全绿（44 lib + 1 suite + 3 + 72）；html5lib tree-construction
+  **1924/1924 = 100.0%**（14 例 `#script-on` 跳过；本轮起失败即硬失败）。
+- 两 crate `cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 干净；
+  主仓库 `cargo check --workspace` 干净。
+
+## 显式非目标（本轮不做）
+
+- 不修改任何夹具的既有期望值以迁就实现；与现行规范冲突者一律登记为陈旧并保留实现。
+- `xmlViolationTests`（infoset 强制转换）不实现——属 XML 解析器侧要求，HTML 解析器不承担。
+- 其余存量 P1/P2/P3（见 [docs/audit-2026-09-06-vuln-arch-perf.md](docs/audit-2026-09-06-vuln-arch-perf.md)）不在本轮。
+
+## 复跑命令
+
+```bash
+cd crates/muskitty-html5-tokenizer && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --all -- --check
+cd crates/muskitty-html5-parser   && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --all -- --check
+cd /workspace && cargo check --workspace
+```
+
+---
+
 # Goal — 2026-09-24 接线与收口轮（接线 cascade + 消除文档失真）
 
 > **状态**：✅ 已完成（B-1~B-7 全部落地，退出条件逐一满足；详见下方完成记录）
