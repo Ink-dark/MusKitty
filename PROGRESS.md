@@ -1,5 +1,30 @@
 # MusKitty — Progress Dashboard
 
+> 最后更新: 2026-09-25 | **全工作空间 WPT 复跑 + H-3 修复 + 报告重发**
+>
+> **① 复跑暴露发布页数据失真**——重跑 6 个 harness（html5-parser / html5-tokenizer / selectors /
+> css-tokenizer / css-parser / css-values），实测整体 **9576/9610 = 99.65%**，而线上发布页写着
+> 99.83%（9592/9610）。差额全部来自 `muskitty-html5-parser`：实测 **1905/1924**，发布页写 1921/1924。
+> 核实：本地与远端 `muskitty-dev/muskitty-html5-parser` main 同为 `ba065b8`（= tag `v0.2.1`），
+> `git log --all` 与 `git ls-remote` 均查无当轮所称的 `adjusted_current_node` 修复提交——与
+> 2026-09-24 审计查出的 cascade 幽灵 commit 同一失真模式（工作区改动从未提交、随会话丢失）。
+>
+> **② H-3 真正修复（html5-parser 0.2.1 → 0.2.2）**——`foreign.rs::process_start_tag_in_foreign`
+> 取命名空间用的是 `parser.current_node()`；fragment 解析下栈里只有合成的 `<html>` 根，于是
+> `svg`/`math` 上下文里插入的元素（`<g>`、无 color/face/size 的 `<font>` 等）全部误落 HTML
+> 命名空间。按 §13.2.6.5 第 5 步（命名空间取 §13.2.4 的 **adjusted current node**，fragment 场景
+> 即上下文元素）改用 `adjusted_current_node()`。先写 failing 单测 3 条（`<g>` 入 SVG、`<font>`
+> 无 breakout 属性留 SVG、`<font color>` 转 HTML 作对照），确认红后再改。`foreign-fragment.dat`
+> **48/66 → 66/66**，套件 **1905/1924 → 1923/1924 = 99.9%**，仅余 `tests_innerHTML_1.dat` #76
+> （规范>夹具保留偏差）。该 crate 全量 40 lib 单测全绿，`clippy -D warnings` / `fmt --check` 干净。
+>
+> **③ 报告重生成并重发**——`.wpt-report/gen_report.py` 的 logs/输出路径改为**脚本相对**（原硬编码
+> `/workspace/...`，在 Windows 上根本跑不起来，正是上次数字失真的温床），并修掉失败明细块正则只
+> 匹配 `failures` 复数、导致 html5-parser 的失败明细一直不渲染的旧 bug。重发后实测整体
+> **9594/9610 = 99.83%**，16 例失败全部为"规范 > 夹具"保留偏差（html5-parser 1 + html5-tokenizer
+> 14 + selectors 1），发布页 https://ink-dark.github.io/MusKitty/ 已同步。
+>
+
 > ⚠️ **更正（2026-09-24）**：2026-09-19 记录的本批 cascade 提交 `58efc45`/`fea6b84`/`7d86720` 与
 > 主仓库 `415034c`/`767ecb3`/`90d7be9` **在仓库中查无此对象**——那一轮工作运行于云端
 > 任务且**从未推送、会话卡死**，全部丢失（见 `docs/audit-2026-09-24-full-scan.md` §3 实证据）。
@@ -52,7 +77,7 @@
 | 模块 | 状态 | 规范覆盖 | 测试通过率 | crates.io | 独立仓库 |
 |------|------|---------|-----------|-----------|---------|
 | **muskitty-html5-tokenizer** | ✅ 完成 | §13.2.5.1–§13.2.5.80 (80/80) | 99.8% (7022/7036) | v0.1.4 | muskitty-dev/muskitty-html5-tokenizer |
-| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) | WPT tree-construction 99.0% (1905/1924, 14 script-on skipped) | v0.2.1 | muskitty-dev/muskitty-html5-parser |
+| **muskitty-html5-parser** | ✅ 完成 | §13.2.6 (全 insertion mode + 关键算法) + §13.2.4 adjusted current node（foreign fragment 命名空间，H-3） | WPT tree-construction **99.9% (1923/1924**, 14 script-on skipped) | v0.2.2 | muskitty-dev/muskitty-html5-parser |
 | **muskitty-dom** | ✅ 完成 | DOM Living Standard §4–§7 | 单元测试全绿 | v0.2.1 | muskitty-dev/muskitty-dom |
 | **muskitty-css-tokenizer** | ✅ 完成 | CSS Syntax §4.3 (§4.3.1–§4.3.13) + span tracking + `Numeric::has_sign`（§4.3.13 第 7 步的 sign，供 An+B 区分 signed/signless） | 单元全绿 + WPT css/css-syntax tokenizer 层 100% (99/99) | v0.2.1 已发布（含 `--`/`--0` ident 修复）/ 本地 0.3.0 待发布（has_sign，破坏性） | muskitty-dev/muskitty-css-tokenizer |
 | **muskitty-css-parser** | ✅ 完成 | CSS Syntax §5 (§5.2-§5.5 + §5.4.1/§5.4.2 grammar hooks + §5.5.6 original_text) | 单元全绿 + WPT css/css-syntax parser 层 100% (27/27) | v0.3.1 | muskitty-dev/muskitty-css-parser |
